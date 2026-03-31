@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "Cosmix",
+    "slug": "cosmix",
+    "entryPoint": "./index.js",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#020617"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#020617"
+      },
+      "package": "com.cosmix.app",
+      "permissions": ["RECEIVE_BOOT_COMPLETED", "VIBRATE"]
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "color": "#3b82f6",
+          "sounds": []
+        }
+      ]
+    ]
+  }
+}

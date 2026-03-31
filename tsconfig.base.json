@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "es2020",
+    "module": "commonjs",
+    "lib": ["es2020", "dom"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "baseUrl": ".",
+    "paths": {
+      "@common/*": ["packages/common/src/*"],
+      "@db/*": ["packages/db/src/*"],
+      "@ui/*": ["packages/ui/src/*"],
+      "@types/*": ["packages/types/*"]
+    }
+  },
+  "include": [
+    "apps/**/*",
+    "services/**/*",
+    "packages/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}

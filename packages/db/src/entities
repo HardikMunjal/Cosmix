@@ -1,0 +1,39 @@
+// This file contains database entity definitions for PostgreSQL. 
+
+import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
+
+@Entity()
+export class User {
+    @PrimaryGeneratedColumn()
+    id: number;
+
+    @Column({ unique: true })
+    email: string;
+
+    @Column()
+    password: string;
+
+    @Column()
+    username: string;
+
+    @Column({ default: true })
+    isActive: boolean;
+}
+
+@Entity()
+export class Message {
+    @PrimaryGeneratedColumn()
+    id: number;
+
+    @Column()
+    senderId: number;
+
+    @Column()
+    receiverId: number;
+
+    @Column('text')
+    content: string;
+
+    @Column()
+    timestamp: Date;
+}

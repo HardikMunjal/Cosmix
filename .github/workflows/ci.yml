@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:13
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: cosmix
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: '16'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Docker Build
+        run: docker build -t cosmix .
+
+      - name: Docker Push
+        run: docker push cosmix
+
+      - name: Deploy to Kubernetes
+        run: |
+          kubectl apply -f infra/kubernetes/gateway-deployment.yaml
+          kubectl apply -f infra/kubernetes/auth-deployment.yaml
+          kubectl apply -f infra/kubernetes/chat-deployment.yaml
+          kubectl apply -f infra/kubernetes/postgres-deployment.yaml

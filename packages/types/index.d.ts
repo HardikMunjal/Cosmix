@@ -1,0 +1,1 @@
+// This file contains TypeScript type definitions shared across the project.

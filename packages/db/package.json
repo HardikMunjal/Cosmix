@@ -1,0 +1,23 @@
+{
+  "name": "db",
+  "version": "1.0.0",
+  "description": "Database package for Cosmix project",
+  "main": "src/index.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest"
+  },
+  "dependencies": {
+    "pg": "^8.7.1",
+    "typeorm": "^0.2.41"
+  },
+  "devDependencies": {
+    "typescript": "^4.5.4",
+    "jest": "^27.0.6",
+    "@types/jest": "^27.0.2",
+    "ts-jest": "^27.0.3"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT"
+}

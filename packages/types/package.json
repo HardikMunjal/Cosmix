@@ -1,0 +1,14 @@
+{
+  "name": "types",
+  "version": "1.0.0",
+  "main": "index.d.ts",
+  "types": "index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "echo \"No tests specified\" && exit 0"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^4.0.0"
+  }
+}

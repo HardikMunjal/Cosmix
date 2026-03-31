@@ -1,0 +1,36 @@
+{
+  "name": "common",
+  "version": "1.0.0",
+  "description": "Common utilities and shared functions for the Cosmix project.",
+  "main": "src/index.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest"
+  },
+  "dependencies": {
+    "lodash": "^4.17.21"
+  },
+  "devDependencies": {
+    "typescript": "^4.5.4",
+    "jest": "^27.0.6",
+    "@types/jest": "^27.0.2",
+    "@typescript-eslint/eslint-plugin": "^5.0.0",
+    "@typescript-eslint/parser": "^5.0.0",
+    "eslint": "^7.32.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourusername/cosmix.git"
+  },
+  "keywords": [
+    "cosmix",
+    "common",
+    "utilities"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/yourusername/cosmix/issues"
+  },
+  "homepage": "https://github.com/yourusername/cosmix#readme"
+}
