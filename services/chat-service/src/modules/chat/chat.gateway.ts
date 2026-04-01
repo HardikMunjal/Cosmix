@@ -7,6 +7,7 @@ import {
   OnGatewayConnection,
   OnGatewayDisconnect,
 } from '@nestjs/websockets';
+import { Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 
 @WebSocketGateway({
@@ -17,6 +18,8 @@ import { Server, Socket } from 'socket.io';
 export class ChatGateway
   implements OnGatewayConnection, OnGatewayDisconnect
 {
+  private readonly logger = new Logger(ChatGateway.name);
+
   @WebSocketServer()
   server!: Server;
 
@@ -26,7 +29,7 @@ export class ChatGateway
 
   /* 🟢 CONNECT */
   handleConnection(socket: Socket) {
-    console.log('User connected:', socket.id);
+    this.logger.debug(`User connected: ${socket.id}`);
   }
 
   /* 🔴 DISCONNECT */
@@ -39,7 +42,7 @@ export class ChatGateway
 
       this.server.emit('online_users', this.getOnlineUsers());
 
-      console.log(`${username} disconnected`);
+      this.logger.debug(`${username} disconnected`);
     }
   }
 
@@ -61,7 +64,7 @@ export class ChatGateway
 
     this.server.emit('online_users', this.getOnlineUsers());
 
-    console.log(`${username} joined`);
+    this.logger.debug(`${username} joined`);
   }
 
   /* 🏠 JOIN ROOM */
@@ -71,7 +74,7 @@ export class ChatGateway
     @ConnectedSocket() socket: Socket,
   ) {
     socket.join(data.room);
-    console.log(`${socket.data.username} joined room ${data.room}`);
+    this.logger.debug(`${socket.data.username} joined room ${data.room}`);
   }
 
   /* 💬 MESSAGE HANDLER */
@@ -144,7 +147,7 @@ export class ChatGateway
       }
     }
 
-    console.log('Message:', payload);
+    this.logger.debug(`Message from ${sender}: ${JSON.stringify(payload)}`);
   }
 
   @SubscribeMessage('typing')

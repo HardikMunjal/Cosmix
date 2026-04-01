@@ -1,5 +1,5 @@
 import { useRouter } from 'next/router';
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import io from 'socket.io-client';
 
 let socket = null;
@@ -56,6 +56,17 @@ export default function Chat() {
   const inputRef = useRef(null);
   const quickTemplates = ['On it', 'Sounds good', 'Can you share more?', 'Nice!'];
 
+  /* 🗂️ FILTERED MESSAGES - recomputed only when messages or activeChat changes */
+  const filteredMessages = useMemo(
+    () =>
+      messages.filter(
+        (msg) =>
+          msg.chat?.name === activeChat.name &&
+          msg.chat?.type === activeChat.type,
+      ),
+    [messages, activeChat],
+  );
+
   /* 🔌 SOCKET INIT */
   useEffect(() => {
     const storedUser = localStorage.getItem('user');
@@ -73,7 +84,7 @@ export default function Chat() {
     socket = io(socketUrl, { transports: ['websocket', 'polling'] });
 
     socket.on('connect', () => {
-      console.log('Connected to chat server', socket.id, 'at', socketUrl);
+      // Connection established; no logging needed here since connect_error handles failures
       socket.emit('join', { username: userData.username });
     });
 
@@ -82,7 +93,6 @@ export default function Chat() {
     });
 
     socket.on('message', (data) => {
-      console.log('Incoming message', data);
       setMessages((prev) => [...prev, data]);
 
       // Generate quick smart replies based on incoming message
@@ -242,12 +252,7 @@ export default function Chat() {
 
           {/* MESSAGES */}
           <div style={styles.messages}>
-            {messages
-              .filter(
-                (msg) =>
-                  msg.chat?.name === activeChat.name &&
-                  msg.chat?.type === activeChat.type
-              )
+            {filteredMessages
               .map((msg, i) => {
                 const isMe = msg.user === user.username;
                 const userColor = getUserColor(msg.user);
@@ -307,9 +312,7 @@ export default function Chat() {
                   key={idx}
                   onClick={() => {
                     // handle special suggestions
-                    const last = messages
-                      .filter(m => m.chat?.name === activeChat.name && m.chat?.type === activeChat.type)
-                      .slice(-1)[0];
+                    const last = filteredMessages[filteredMessages.length - 1];
 
                     const lastText = last?.text || '';
 
@@ -348,9 +351,7 @@ export default function Chat() {
             <button
               onClick={() => {
                 // Ask AI for a suggestion about the last message
-                const last = messages
-                  .filter(m => m.chat?.name === activeChat.name && m.chat?.type === activeChat.type)
-                  .slice(-1)[0];
+                const last = filteredMessages[filteredMessages.length - 1];
 
                 const lastText = last?.text || '';
                 if (lastText) sendMessage('text', '', `@ai Suggest a reply for: ${lastText}`);
