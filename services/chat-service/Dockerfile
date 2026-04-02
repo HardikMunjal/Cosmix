@@ -1,19 +1,23 @@
-FROM node:14
+FROM node:20-slim AS builder
 
-# Set the working directory
 WORKDIR /usr/src/app
 
-# Copy package.json and package-lock.json
-COPY package*.json ./
-
-# Install dependencies
+COPY services/chat-service/package*.json ./
 RUN npm install
 
-# Copy the rest of the application code
-COPY . .
+COPY services/chat-service/ ./
+RUN npm run build
 
-# Expose the port the app runs on
-EXPOSE 3000
+FROM node:20-slim AS runner
 
-# Command to run the application
-CMD ["npm", "run", "start:prod"]
+WORKDIR /usr/src/app
+ENV NODE_ENV=production
+
+COPY services/chat-service/package*.json ./
+RUN npm install --omit=dev
+
+COPY --from=builder /usr/src/app/dist ./dist
+
+EXPOSE 3002
+
+CMD ["npm", "run", "start"]

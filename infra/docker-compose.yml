@@ -1,10 +1,8 @@
-version: '3.8'
-
 services:
   api-gateway:
     build:
-      context: ./apps/api-gateway
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: apps/api-gateway/Dockerfile
     ports:
       - "3000:3000"
     depends_on:
@@ -14,24 +12,34 @@ services:
 
   auth-service:
     build:
-      context: ./services/auth-service
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: services/auth-service/Dockerfile
     ports:
-      - "3001:3000"
+      - "3001:3001"
 
   chat-service:
     build:
-      context: ./services/chat-service
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: services/chat-service/Dockerfile
     ports:
-      - "3002:3000"
+      - "3002:3002"
 
   user-service:
     build:
-      context: ./services/user-service
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: services/user-service/Dockerfile
     ports:
-      - "3003:3000"
+      - "3003:3003"
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - "3005:3005"
+    depends_on:
+      - api-gateway
+      - chat-service
 
   postgres:
     image: postgres:13

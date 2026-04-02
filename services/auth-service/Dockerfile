@@ -1,22 +1,23 @@
-FROM node:14
+FROM node:20-slim AS builder
 
-# Set the working directory
 WORKDIR /usr/src/app
 
-# Copy package.json and package-lock.json
-COPY package*.json ./
-
-# Install dependencies
+COPY services/auth-service/package*.json ./
 RUN npm install
 
-# Copy the rest of the application code
-COPY . .
-
-# Build the application
+COPY services/auth-service/ ./
 RUN npm run build
 
-# Expose the application port
-EXPOSE 3000
+FROM node:20-slim AS runner
 
-# Command to run the application
-CMD ["npm", "run", "start:prod"]
+WORKDIR /usr/src/app
+ENV NODE_ENV=production
+
+COPY services/auth-service/package*.json ./
+RUN npm install --omit=dev
+
+COPY --from=builder /usr/src/app/dist ./dist
+
+EXPOSE 3001
+
+CMD ["npm", "run", "start"]

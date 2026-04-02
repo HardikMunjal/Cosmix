@@ -59,6 +59,50 @@ To get started with the Cosmix project, follow these steps:
 
 4. Access the web application at `http://localhost:3000` and the API at `http://localhost:3001`.
 
+## Docker
+
+The local Docker stack is defined in [infra/docker-compose.yml](infra/docker-compose.yml).
+
+1. Build the images:
+  ```
+  cd infra
+  docker compose build
+  ```
+
+2. Start the stack:
+  ```
+  docker compose up -d
+  ```
+
+3. Open the applications:
+  ```
+  Web: http://localhost:3005
+  API Gateway: http://localhost:3000
+  Auth Service: http://localhost:3001
+  Chat Service: http://localhost:3002
+  User Service: http://localhost:3003
+  Postgres: localhost:5432
+  ```
+
+4. Stop the stack:
+  ```
+  docker compose down
+  ```
+
+### Login
+
+The current web login is a lightweight client-side flow. Open `http://localhost:3005`, enter any non-empty username, and continue.
+
+For API-based login, send a `POST` request to `http://localhost:3000/login` or `http://localhost:3001/login` with:
+
+```json
+{
+  "username": "demo"
+}
+```
+
+The auth service currently returns a mock JWT token for any username.
+
 ## Contributing
 
 Contributions are welcome! Please submit a pull request or open an issue for any enhancements or bug fixes.
