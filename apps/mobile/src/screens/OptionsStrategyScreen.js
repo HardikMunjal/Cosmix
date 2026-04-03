@@ -21,9 +21,63 @@ const SIDES = ['BUY', 'SELL'];
 const OPTION_TYPES = ['CE', 'PE'];
 const CHART_W = Dimensions.get('window').width - 32;
 const CHART_H = 220;
+const STRIKE_STEP = 50;
+const WING_DISTANCE = 500;
 
-function makeLeg() {
-  return { id: Date.now() + Math.random(), side: 'BUY', type: 'CE', strike: null, premium: '' };
+function normalizePremium(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed.toFixed(2) : '0.00';
+}
+
+function resolveStrategyStrike(spot, strikes = [], offset = 0) {
+  const target = Math.max(0, (Number(spot) || 0) + offset);
+  if (strikes.length) {
+    return strikes.reduce((closest, strike) => {
+      if (closest == null) return strike;
+      return Math.abs(strike - target) < Math.abs(closest - target) ? strike : closest;
+    }, null);
+  }
+  return Math.max(0, Math.round(target / STRIKE_STEP) * STRIKE_STEP);
+}
+
+function makeLeg(overrides = {}) {
+  return {
+    id: Date.now() + Math.random(),
+    side: 'SELL',
+    type: 'CE',
+    strike: null,
+    premium: '0.00',
+    marketPremium: '0.00',
+    locked: false,
+    ...overrides,
+  };
+}
+
+function buildDefaultLegs(spot, strikes, chainMap) {
+  const shortStrike = resolveStrategyStrike(spot, strikes, 0);
+  const upperHedgeStrike = resolveStrategyStrike(spot, strikes, WING_DISTANCE);
+  const lowerHedgeStrike = resolveStrategyStrike(spot, strikes, -WING_DISTANCE);
+
+  return [
+    makeLeg({ side: 'SELL', type: 'CE', strike: shortStrike, premium: normalizePremium(chainMap?.CE?.[shortStrike]), marketPremium: normalizePremium(chainMap?.CE?.[shortStrike]) }),
+    makeLeg({ side: 'SELL', type: 'PE', strike: shortStrike, premium: normalizePremium(chainMap?.PE?.[shortStrike]), marketPremium: normalizePremium(chainMap?.PE?.[shortStrike]) }),
+    makeLeg({ side: 'BUY', type: 'CE', strike: upperHedgeStrike, premium: normalizePremium(chainMap?.CE?.[upperHedgeStrike]), marketPremium: normalizePremium(chainMap?.CE?.[upperHedgeStrike]) }),
+    makeLeg({ side: 'BUY', type: 'PE', strike: lowerHedgeStrike, premium: normalizePremium(chainMap?.PE?.[lowerHedgeStrike]), marketPremium: normalizePremium(chainMap?.PE?.[lowerHedgeStrike]) }),
+  ];
+}
+
+function syncLegsWithMarket(legs, chainMap) {
+  return legs.map((leg) => {
+    if (!leg.strike) return leg;
+    const latest = chainMap?.[leg.type]?.[Number(leg.strike)];
+    if (latest == null) return leg;
+    const marketPremium = normalizePremium(latest);
+    return {
+      ...leg,
+      marketPremium,
+      premium: leg.locked ? leg.premium : marketPremium,
+    };
+  });
 }
 
 function optionIntrinsic(type, strike, spot) {
@@ -44,9 +98,10 @@ export default function OptionsStrategyScreen() {
   const [expiryUnix, setExpiryUnix] = useState([]);
   const [allStrikes, setAllStrikes] = useState([]);
   const [selectedExpiry, setSelectedExpiry] = useState(null);
-  const [legs, setLegs] = useState([makeLeg()]);
+  const [legs, setLegs] = useState([]);
   const legsRef = useRef(legs);
   legsRef.current = legs;
+  const initializedDefaultsRef = useRef(false);
   const [chainData, setChainData] = useState({});
   const [ivData, setIvData] = useState({ CE: {}, PE: {} });
   const [lastUpdated, setLastUpdated] = useState(null);
@@ -81,6 +136,16 @@ export default function OptionsStrategyScreen() {
   }, [lastUpdated]);
 
   useEffect(() => { fetchChain(); }, []);
+
+  const applyMarketData = useCallback((nextChainData, nextSpot, nextStrikes) => {
+    setLegs((current) => {
+      if (!current.length && !initializedDefaultsRef.current) {
+        initializedDefaultsRef.current = true;
+        return buildDefaultLegs(nextSpot, nextStrikes, nextChainData);
+      }
+      return syncLegsWithMarket(current, nextChainData);
+    });
+  }, []);
 
   const fetchChain = async () => {
     setLoading(true);
@@ -122,6 +187,7 @@ export default function OptionsStrategyScreen() {
       });
       setChainData(map);
       setIvData(nextIvData);
+      applyMarketData(map, src.spot || data.spot, uniqueStrikes);
       setPricingModel(src.pricingModel || null);
       setSourceWarning(src.warning || '');
       if (!pricingHydratedRef.current && src.pricingModel) {
@@ -162,13 +228,7 @@ export default function OptionsStrategyScreen() {
           .filter((s) => Math.abs(s - curSpot) <= 1500)
           .sort((a, b) => a - b);
         setAllStrikes(uniqueStrikes);
-        setLegs((prev) =>
-          prev.map((leg) => {
-            if (!leg.strike) return leg;
-            const p = map[leg.type]?.[Number(leg.strike)];
-            return p != null ? { ...leg, premium: String(p) } : leg;
-          }),
-        );
+        applyMarketData(map, curSpot, uniqueStrikes);
       }
       setPricingModel(data.pricingModel || null);
       setSourceWarning(data.warning || '');
@@ -218,14 +278,7 @@ export default function OptionsStrategyScreen() {
             .filter((s) => Math.abs(s - (data.spot || spot)) <= 1500)
             .sort((a, b) => a - b);
           setAllStrikes(uniqueStrikes);
-          // Update leg premiums using fresh map (not stale chainData closure)
-          setLegs((prev) =>
-            prev.map((leg) => {
-              if (!leg.strike) return leg;
-              const p = map[leg.type]?.[Number(leg.strike)];
-              return p != null ? { ...leg, premium: String(p) } : leg;
-            }),
-          );
+          applyMarketData(map, data.spot || spot, uniqueStrikes);
         }
         setPricingModel(data.pricingModel || null);
         setSourceWarning(data.warning || '');
@@ -240,8 +293,12 @@ export default function OptionsStrategyScreen() {
         const next = { ...leg, [field]: value };
         if ((field === 'strike' || field === 'type') && next.strike) {
           const p = getPremium(next.type, next.strike);
-          if (p !== '') next.premium = String(p);
+          if (p !== '') {
+            next.marketPremium = normalizePremium(p);
+            if (!leg.locked) next.premium = normalizePremium(p);
+          }
         }
+        if (field === 'premium') next.premium = normalizePremium(value);
         return next;
       });
       setLegs(updated);
@@ -249,7 +306,22 @@ export default function OptionsStrategyScreen() {
     [getPremium, selectedExpiry],
   );
 
-  const addLeg = () => setLegs((prev) => [...prev, makeLeg()]);
+  const toggleLock = (id) => {
+    setLegs((prev) => prev.map((leg) => {
+      if (leg.id !== id) return leg;
+      if (leg.locked) {
+        return { ...leg, locked: false, premium: leg.marketPremium ?? leg.premium };
+      }
+      return { ...leg, locked: true, premium: leg.marketPremium ?? leg.premium };
+    }));
+  };
+
+  const addLeg = () => {
+    const strike = resolveStrategyStrike(spot, allStrikes, 0);
+    const premium = normalizePremium(chainData?.CE?.[strike]);
+    setLegs((prev) => [...prev, makeLeg({ side: 'SELL', type: 'CE', strike, premium, marketPremium: premium })]);
+  };
+  const addStrategySet = () => setLegs((prev) => [...prev, ...buildDefaultLegs(spot, allStrikes, chainData)]);
   const removeLeg = (id) => setLegs((prev) => prev.length > 1 ? prev.filter((l) => l.id !== id) : prev);
 
   const applyModelInputs = useCallback(async () => {
@@ -275,13 +347,7 @@ export default function OptionsStrategyScreen() {
           .filter((s) => Math.abs(s - curSpot) <= 1500)
           .sort((a, b) => a - b);
         setAllStrikes(uniqueStrikes);
-        setLegs((prev) =>
-          prev.map((leg) => {
-            if (!leg.strike) return leg;
-            const p = map[leg.type]?.[Number(leg.strike)];
-            return p != null ? { ...leg, premium: String(p) } : leg;
-          }),
-        );
+        applyMarketData(map, curSpot, uniqueStrikes);
       }
       setPricingModel(data.pricingModel || null);
       setSourceWarning(data.warning || '');
@@ -320,8 +386,58 @@ export default function OptionsStrategyScreen() {
       (sum, l) => sum + (l.side === 'BUY' ? Number(l.premium) : -Number(l.premium)),
       0,
     );
+    const entryNetPremium = validLegs.reduce(
+      (sum, leg) => sum + (leg.side === 'SELL' ? Number(leg.premium) : -Number(leg.premium)),
+      0,
+    );
+    const liveCloseValue = validLegs.reduce(
+      (sum, leg) => sum + (leg.side === 'BUY' ? Number(leg.marketPremium ?? leg.premium) : -Number(leg.marketPremium ?? leg.premium)),
+      0,
+    );
+    const premiumSoldAtEntry = validLegs.reduce(
+      (sum, leg) => sum + (leg.side === 'SELL' ? Number(leg.premium) : 0),
+      0,
+    );
+    const premiumRemaining = validLegs.reduce(
+      (sum, leg) => sum + (leg.side === 'SELL' ? Number(leg.marketPremium ?? leg.premium) : 0),
+      0,
+    );
+    const capturedPremium = premiumSoldAtEntry - premiumRemaining;
+    const capturePct = premiumSoldAtEntry > 0 ? (capturedPremium / premiumSoldAtEntry) * 100 : 0;
+    const markToMarket = validLegs.reduce(
+      (sum, leg) => sum + (leg.side === 'SELL'
+        ? Number(leg.premium) - Number(leg.marketPremium ?? leg.premium)
+        : Number(leg.marketPremium ?? leg.premium) - Number(leg.premium)),
+      0,
+    );
 
-    return { points, maxPnl, minPnl, breakevens, totalDebit };
+    let holdAdvice = 'Lock legs once you like the entry premium to track premium decay from that point.';
+    if (validLegs.some((leg) => leg.locked)) {
+      if (capturePct >= 70) {
+        holdAdvice = 'Most of the sold premium is already captured. The remaining reward is relatively small.';
+      } else if (premiumRemaining <= Math.abs(minPnl) * 0.15) {
+        holdAdvice = 'Very little short premium is left relative to downside risk. Exiting is efficient here.';
+      } else if (markToMarket < 0) {
+        holdAdvice = 'Live premium is moving against the position. Hold only if your view is unchanged.';
+      } else {
+        holdAdvice = 'There is still meaningful short premium left, so staying can make sense while spot stays near the short strike.';
+      }
+    }
+
+    return {
+      points,
+      maxPnl,
+      minPnl,
+      breakevens,
+      totalDebit,
+      entryNetPremium,
+      liveCloseValue,
+      premiumRemaining,
+      capturedPremium,
+      capturePct,
+      markToMarket,
+      holdAdvice,
+    };
   }, [legs, spot]);
 
   const chartPoints = useMemo(() => {
@@ -415,11 +531,16 @@ export default function OptionsStrategyScreen() {
         <View key={leg.id} style={styles.legCard}>
           <View style={styles.legHeader}>
             <Text style={styles.legTitle}>Leg {idx + 1}</Text>
-            {legs.length > 1 && (
-              <TouchableOpacity onPress={() => removeLeg(leg.id)}>
-                <Text style={styles.removeText}>✕ Remove</Text>
+            <View style={styles.legHeaderActions}>
+              <TouchableOpacity onPress={() => toggleLock(leg.id)} style={leg.locked ? styles.lockBtnActive : styles.lockBtn}>
+                <Text style={styles.lockBtnText}>{leg.locked ? 'Unlock' : 'Lock'}</Text>
               </TouchableOpacity>
-            )}
+              {legs.length > 1 && (
+                <TouchableOpacity onPress={() => removeLeg(leg.id)}>
+                  <Text style={styles.removeText}>✕ Remove</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
 
           <View style={styles.legRow}>
@@ -428,6 +549,7 @@ export default function OptionsStrategyScreen() {
               <View style={styles.pickerWrap}>
                 <Picker
                   selectedValue={leg.side}
+                  enabled={!leg.locked}
                   onValueChange={(v) => updateLeg(leg.id, 'side', v)}
                   style={styles.picker}
                   dropdownIconColor="#64748b"
@@ -441,6 +563,7 @@ export default function OptionsStrategyScreen() {
               <View style={styles.pickerWrap}>
                 <Picker
                   selectedValue={leg.type}
+                  enabled={!leg.locked}
                   onValueChange={(v) => updateLeg(leg.id, 'type', v)}
                   style={styles.picker}
                   dropdownIconColor="#64748b"
@@ -455,6 +578,7 @@ export default function OptionsStrategyScreen() {
           <View style={styles.pickerWrap}>
             <Picker
               selectedValue={leg.strike}
+              enabled={!leg.locked}
               onValueChange={(v) => updateLeg(leg.id, 'strike', v)}
               style={styles.picker}
               dropdownIconColor="#64748b"
@@ -470,6 +594,7 @@ export default function OptionsStrategyScreen() {
           <TextInput
             style={styles.premiumInput}
             value={leg.premium}
+            editable={!leg.locked}
             onChangeText={(v) => updateLeg(leg.id, 'premium', v)}
             keyboardType="numeric"
             placeholder="Auto-filled or enter manually"
@@ -478,16 +603,52 @@ export default function OptionsStrategyScreen() {
           <Text style={styles.ivText}>
             {ivData?.[leg.type]?.[Number(leg.strike)] != null ? `IV ${Number(ivData[leg.type][Number(leg.strike)]).toFixed(2)}%` : 'IV —'}
           </Text>
+          <Text style={styles.ivText}>Live {Number(leg.marketPremium ?? leg.premium).toFixed(2)} · {leg.locked ? 'entry locked' : 'tracks live premium'}</Text>
         </View>
       ))}
 
-      <TouchableOpacity style={styles.addBtn} onPress={addLeg}>
-        <Text style={styles.addBtnText}>+ Add Leg</Text>
-      </TouchableOpacity>
+      <View style={styles.addButtonsRow}>
+        <TouchableOpacity style={styles.addBtn} onPress={addStrategySet}>
+          <Text style={styles.addBtnText}>+ Add Default Set</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.addBtn} onPress={addLeg}>
+          <Text style={styles.addBtnText}>+ Add Leg</Text>
+        </TouchableOpacity>
+      </View>
 
       {/* Metrics */}
       {metrics && (
         <>
+          <View style={styles.metricsRow}>
+            <View style={styles.metricBox}>
+              <Text style={styles.metricLabel}>Entry Credit / Debit</Text>
+              <Text style={[styles.metricValue, { color: metrics.entryNetPremium >= 0 ? '#22c55e' : '#f87171' }]}>
+                {metrics.entryNetPremium.toFixed(2)}
+              </Text>
+            </View>
+            <View style={styles.metricBox}>
+              <Text style={styles.metricLabel}>Close Value</Text>
+              <Text style={[styles.metricValue, { color: metrics.liveCloseValue >= 0 ? '#22c55e' : '#f87171' }]}>
+                {metrics.liveCloseValue.toFixed(2)}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.metricsRow}>
+            <View style={styles.metricBox}>
+              <Text style={styles.metricLabel}>Premium Left</Text>
+              <Text style={styles.metricValue}>{metrics.premiumRemaining.toFixed(2)}</Text>
+            </View>
+            <View style={styles.metricBox}>
+              <Text style={styles.metricLabel}>Captured %</Text>
+              <Text style={styles.metricValue}>{metrics.capturePct.toFixed(1)}%</Text>
+            </View>
+            <View style={styles.metricBox}>
+              <Text style={styles.metricLabel}>Live MTM</Text>
+              <Text style={[styles.metricValue, { color: metrics.markToMarket >= 0 ? '#22c55e' : '#f87171' }]}>
+                {metrics.markToMarket.toFixed(2)}
+              </Text>
+            </View>
+          </View>
           <View style={styles.metricsRow}>
             <View style={styles.metricBox}>
               <Text style={styles.metricLabel}>Max Profit</Text>
@@ -508,6 +669,7 @@ export default function OptionsStrategyScreen() {
               </Text>
             </View>
           </View>
+          <Text style={styles.holdAdviceText}>{metrics.holdAdvice}</Text>
           {metrics.breakevens.length > 0 && (
             <Text style={styles.breakevenText}>
               Breakeven{metrics.breakevens.length > 1 ? 's' : ''}: {metrics.breakevens.join(' / ')}
@@ -549,8 +711,12 @@ const styles = StyleSheet.create({
   picker: { color: '#e2e8f0', height: 48 },
   legCard: { backgroundColor: '#0f172a', borderRadius: 12, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: '#1e293b' },
   legHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  legHeaderActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   legTitle: { color: '#e2e8f0', fontWeight: '700', fontSize: 15 },
   removeText: { color: '#f87171', fontSize: 12 },
+  lockBtn: { backgroundColor: '#1e293b', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6, borderWidth: 1, borderColor: '#334155' },
+  lockBtnActive: { backgroundColor: '#14532d', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6, borderWidth: 1, borderColor: '#166534' },
+  lockBtnText: { color: '#e2e8f0', fontSize: 12, fontWeight: '700' },
   legRow: { flexDirection: 'row', gap: 8 },
   halfPicker: { flex: 1 },
   premiumInput: {
@@ -561,12 +727,14 @@ const styles = StyleSheet.create({
   ivText: { color: '#94a3b8', fontSize: 11 },
   applyBtn: { backgroundColor: '#1d4ed8', borderRadius: 10, paddingVertical: 12, alignItems: 'center', marginBottom: 12 },
   applyBtnText: { color: '#eff6ff', fontWeight: '700', fontSize: 14 },
-  addBtn: { borderWidth: 1, borderColor: '#3b82f6', borderRadius: 10, paddingVertical: 12, alignItems: 'center', marginTop: 4 },
+  addButtonsRow: { flexDirection: 'row', gap: 10, marginTop: 4 },
+  addBtn: { flex: 1, borderWidth: 1, borderColor: '#3b82f6', borderRadius: 10, paddingVertical: 12, alignItems: 'center', marginTop: 4 },
   addBtnText: { color: '#3b82f6', fontWeight: '700', fontSize: 15 },
   metricsRow: { flexDirection: 'row', gap: 8, marginTop: 20 },
   metricBox: { flex: 1, backgroundColor: '#0f172a', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#1e293b', alignItems: 'center' },
   metricLabel: { color: '#64748b', fontSize: 11, marginBottom: 4 },
   metricValue: { fontSize: 18, fontWeight: '700' },
+  holdAdviceText: { color: '#cbd5e1', fontSize: 13, lineHeight: 19, marginTop: 12, textAlign: 'center' },
   breakevenText: { color: '#94a3b8', fontSize: 13, marginTop: 10, textAlign: 'center' },
   chartWrap: { marginTop: 8, backgroundColor: '#0f172a', borderRadius: 12, padding: 8, borderWidth: 1, borderColor: '#1e293b' },
 });

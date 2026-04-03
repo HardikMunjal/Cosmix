@@ -91,6 +91,11 @@ export default function DashboardScreen({ navigation }) {
           <Text style={styles.navLabel}>Options Strategy</Text>
           <Text style={styles.navSub}>Live chain + payoff</Text>
         </TouchableOpacity>
+        <TouchableOpacity style={styles.navCard} onPress={() => navigation.navigate('ExpectedOptionPrices')}>
+          <Text style={styles.navIcon}>🧮</Text>
+          <Text style={styles.navLabel}>Expected Prices</Text>
+          <Text style={styles.navSub}>CE/PE via multiple formulas</Text>
+        </TouchableOpacity>
       </View>
     </ScrollView>
   );
@@ -108,8 +113,8 @@ const styles = StyleSheet.create({
   indexLabel: { color: '#64748b', fontSize: 10, marginBottom: 6, textAlign: 'center' },
   indexValue: { color: '#e2e8f0', fontSize: 16, fontWeight: '700' },
   indexChange: { fontSize: 13, fontWeight: '600', marginTop: 4 },
-  navGrid: { flexDirection: 'row', gap: 12 },
-  navCard: { flex: 1, backgroundColor: '#0f172a', borderRadius: 14, padding: 18, borderWidth: 1, borderColor: '#1e293b' },
+  navGrid: { flexDirection: 'row', gap: 12, flexWrap: 'wrap' },
+  navCard: { flexBasis: '48%', flexGrow: 1, backgroundColor: '#0f172a', borderRadius: 14, padding: 18, borderWidth: 1, borderColor: '#1e293b' },
   navIcon: { fontSize: 28, marginBottom: 8 },
   navLabel: { color: '#e2e8f0', fontWeight: '700', fontSize: 15 },
   navSub: { color: '#475569', fontSize: 12, marginTop: 3 },

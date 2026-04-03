@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 
 const DEFAULT_STRIKES = '';
-const DEFAULT_EXPIRIES = '2026-04-07,2026-04-14';
+const DEFAULT_STRIKE_GAP = '100';
+const DEFAULT_STRIKE_LEVELS = '3';
+const DEFAULT_EXPIRY_COUNT = '1';
 const FORMULA_DETAILS = {
   intrinsic: 'Intrinsic Value: max(S - K, 0) for CE, max(K - S, 0) for PE',
   blackScholes: 'Black-Scholes: C = S*N(d1) - K*e^(-rT)*N(d2), P = K*e^(-rT)*N(-d2) - S*N(-d1)',
@@ -11,11 +13,14 @@ const FORMULA_DETAILS = {
   monteCarlo: 'Monte Carlo GBM: discounted average payoff from simulated terminal spots under geometric Brownian motion',
 };
 
-function buildUrl({ spot, strikes, expiries, rate }) {
-  const params = new URLSearchParams({ symbol: 'NIFTY', expiries });
+function buildUrl({ spot, strikes, rate, strikeGap, strikeLevels, expiryCount }) {
+  const params = new URLSearchParams({ symbol: 'NIFTY' });
   if (String(spot || '').trim()) params.set('spot', spot);
   if (String(strikes || '').trim()) params.set('strikes', strikes);
   if (rate) params.set('rate', rate);
+  if (strikeGap) params.set('strikeGap', strikeGap);
+  if (strikeLevels) params.set('strikeLevels', strikeLevels);
+  if (expiryCount) params.set('expiryCount', expiryCount);
   return `/api/options-expected-price?${params.toString()}`;
 }
 
@@ -24,18 +29,96 @@ function currency(value) {
   return `Rs. ${Number(value).toFixed(2)}`;
 }
 
+function buildContractMap(contracts = []) {
+  const map = new Map();
+  contracts.forEach((contract) => {
+    const baseKey = `${contract.expiryUnix}-${contract.strike}-${contract.type}`;
+    map.set(`${baseKey}-livePremium`, contract.livePremium);
+    map.set(`${baseKey}-appliedVolatility`, contract.appliedVolatility);
+    (contract.formulaResults || []).forEach((formula) => {
+      map.set(`${baseKey}-${formula.key}`, formula.price);
+    });
+  });
+  return map;
+}
+
+function getValueTone(currentValue, previousValue) {
+  if (currentValue == null || previousValue == null) return null;
+  if (Number(currentValue) > Number(previousValue)) return 'up';
+  if (Number(currentValue) < Number(previousValue)) return 'down';
+  return null;
+}
+
+function getStrikeEmphasis(strike, spotValue, strikeGap = 100) {
+  const distance = Math.abs(Number(strike) - Number(spotValue));
+  const normalizedGap = Math.max(Number(strikeGap) || 100, 1);
+  if (distance <= normalizedGap / 2) return 'atm';
+  if (distance <= normalizedGap) return 'near';
+  if (distance <= normalizedGap * 2) return 'mid';
+  return 'far';
+}
+
+function getRowStyle(optionType) {
+  return optionType === 'CE' ? styles.ceRow : styles.peRow;
+}
+
+function getTypeCellStyle(optionType) {
+  return optionType === 'CE' ? styles.ceTypeCell : styles.peTypeCell;
+}
+
+function getSectionStyle(optionType) {
+  return optionType === 'CE' ? styles.callsSection : styles.putsSection;
+}
+
+function getSectionTitle(optionType) {
+  return optionType === 'CE' ? 'Calls (CE)' : 'Puts (PE)';
+}
+
+function toPascalCase(value) {
+  return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+}
+
+function getStrikeBadge(strikeEmphasis) {
+  if (strikeEmphasis === 'atm') return 'ATM';
+  if (strikeEmphasis === 'near') return 'Near';
+  return null;
+}
+
+function getStickyColumnStyle(left, background, zIndex = 2) {
+  return {
+    position: 'sticky',
+    left,
+    zIndex,
+    background,
+    boxShadow: '1px 0 0 rgba(49, 91, 124, 0.32), 10px 0 18px rgba(2, 6, 23, 0.18)',
+  };
+}
+
+function getStickyHeadStyle(left, zIndex = 4) {
+  return {
+    position: 'sticky',
+    left,
+    zIndex,
+    background: 'rgba(4, 12, 20, 0.99)',
+    boxShadow: '1px 0 0 rgba(49, 91, 124, 0.34), 10px 0 18px rgba(2, 6, 23, 0.2)',
+  };
+}
+
 export default function ExpectedOptionPrices() {
   const router = useRouter();
   const [user, setUser] = useState(null);
-  const [spot, setSpot] = useState('');
-  const [strikes, setStrikes] = useState(DEFAULT_STRIKES);
-  const [expiries, setExpiries] = useState(DEFAULT_EXPIRIES);
   const [rate, setRate] = useState('');
+  const [strikeGap, setStrikeGap] = useState(DEFAULT_STRIKE_GAP);
+  const [strikeLevels, setStrikeLevels] = useState(DEFAULT_STRIKE_LEVELS);
+  const [expiryCount, setExpiryCount] = useState(DEFAULT_EXPIRY_COUNT);
+  const [autoSettingsOpen, setAutoSettingsOpen] = useState(true);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [payload, setPayload] = useState(null);
   const [error, setError] = useState('');
   const [tooltipKey, setTooltipKey] = useState(null);
+  const [flashMap, setFlashMap] = useState({});
+  const flashTimeoutRef = useRef(null);
 
   useEffect(() => {
     const storedUser = localStorage.getItem('user');
@@ -50,9 +133,21 @@ export default function ExpectedOptionPrices() {
     if (isRefresh) setRefreshing(true); else setLoading(true);
     setError('');
     try {
-      const response = await fetch(buildUrl({ spot, strikes, expiries, rate }));
+      const response = await fetch(buildUrl({ spot: '', strikes: '', rate, strikeGap, strikeLevels, expiryCount }));
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Failed to load expected option prices');
+      const previousMap = buildContractMap(payload?.contracts || []);
+      const nextMap = buildContractMap(data?.contracts || []);
+      const nextFlashMap = {};
+      nextMap.forEach((currentValue, key) => {
+        const tone = getValueTone(currentValue, previousMap.get(key));
+        if (tone) nextFlashMap[key] = tone;
+      });
+      if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current);
+      setFlashMap(nextFlashMap);
+      if (Object.keys(nextFlashMap).length) {
+        flashTimeoutRef.current = setTimeout(() => setFlashMap({}), 1800);
+      }
       setPayload(data);
     } catch (err) {
       setError(err.message);
@@ -62,9 +157,21 @@ export default function ExpectedOptionPrices() {
     }
   };
 
+  useEffect(() => () => {
+    if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current);
+  }, []);
+
   useEffect(() => {
     if (user) loadData();
   }, [user]);
+
+  useEffect(() => {
+    if (!user) return undefined;
+    const interval = setInterval(() => {
+      loadData(true);
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [user, rate, strikeGap, strikeLevels, expiryCount]);
 
   const groupedContracts = useMemo(() => {
     const map = new Map();
@@ -75,19 +182,149 @@ export default function ExpectedOptionPrices() {
     return Array.from(map.entries());
   }, [payload]);
 
+  const renderContractsTable = (expiryLabel, contracts, optionType) => {
+    const optionContracts = contracts.filter((contract) => contract.type === optionType);
+    if (!optionContracts.length) return null;
+
+    return (
+      <div key={`${expiryLabel}-${optionType}`} style={{ ...styles.optionTypeSection, ...getSectionStyle(optionType) }}>
+        <div style={styles.optionTypeHeader}>
+          <div style={styles.optionTypeTitle}>{getSectionTitle(optionType)}</div>
+          <div style={styles.optionTypeHint}>Same row height, clearer side separation, near-spot strikes tagged.</div>
+        </div>
+
+        <div style={styles.tableWrap} className="expected-prices-table-wrap">
+          <table style={styles.table} className="expected-prices-table">
+            <thead>
+              <tr>
+                <th style={{ ...styles.tableHead, ...getStickyHeadStyle(0, 7), ...styles.strikeHead }}>Strike</th>
+                <th style={{ ...styles.tableHead, ...getStickyHeadStyle(116, 7), ...styles.typeHead }}>Type</th>
+                <th style={{ ...styles.tableHead, ...getStickyHeadStyle(188, 7), ...styles.liveHead }}>Live</th>
+                <th style={{ ...styles.tableHead, ...getStickyHeadStyle(304, 7), ...styles.ivHead }}>IV</th>
+                {payload.formulas.map((formula) => (
+                  <th key={`${expiryLabel}-${optionType}-${formula.key}`} style={styles.tableHead}>
+                    <div
+                      style={styles.formulaNameWrap}
+                      onMouseEnter={() => setTooltipKey(`${expiryLabel}-${optionType}-${formula.key}`)}
+                      onMouseLeave={() => setTooltipKey(null)}
+                    >
+                      <span style={styles.formulaHeadLabel}>{formula.name}</span>
+                      {tooltipKey === `${expiryLabel}-${optionType}-${formula.key}` ? (
+                        <div style={styles.tooltipBox}>
+                          <div style={styles.tooltipTitle}>{formula.name}</div>
+                          <div style={styles.tooltipText}>{FORMULA_DETAILS[formula.key] || formula.name}</div>
+                        </div>
+                      ) : null}
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {optionContracts.map((contract) => {
+                const rowStyle = getRowStyle(contract.type);
+                const baseKey = `${contract.expiryUnix}-${contract.strike}-${contract.type}`;
+                const liveTone = flashMap[`${baseKey}-livePremium`] || null;
+                const ivTone = flashMap[`${baseKey}-appliedVolatility`] || null;
+                const strikeEmphasis = getStrikeEmphasis(contract.strike, payload.referenceSpot, payload.inputs?.strikeGap || strikeGap);
+                const strikeBand = toPascalCase(strikeEmphasis);
+                const bandRowStyle = styles[`row${strikeBand}`] || null;
+                const stickyBandStyle = styles[`sticky${strikeBand}`] || null;
+                const stickyBackground = stickyBandStyle?.background || 'rgba(6, 14, 22, 0.97)';
+                const strikeBadge = getStrikeBadge(strikeEmphasis);
+
+                return (
+                  <tr key={`${contract.expiryUnix}-${contract.strike}-${contract.type}`} style={{ ...rowStyle, ...bandRowStyle }}>
+                    <td style={{ ...styles.tableCellStrong, ...styles.strikeCell, ...styles[`strike${strikeBand}`], ...getStickyColumnStyle(0, stickyBackground, 6) }}>
+                      <div style={styles.strikeCellContent}>
+                        <span>{contract.strike}</span>
+                        {strikeBadge ? <span style={strikeBadge === 'ATM' ? styles.strikeBadgeAtm : styles.strikeBadgeNear}>{strikeBadge}</span> : null}
+                      </div>
+                    </td>
+                    <td style={{ ...getTypeCellStyle(contract.type), ...styles.typeCell, ...getStickyColumnStyle(116, stickyBackground, 6) }}>{contract.type}</td>
+                    <td style={{ ...styles.tableCell, ...styles.liveCell, ...styles[`tone${liveTone ? liveTone.charAt(0).toUpperCase() + liveTone.slice(1) : 'Flat'}`], ...getStickyColumnStyle(188, stickyBackground, 6) }}>{currency(contract.livePremium)}</td>
+                    <td style={{ ...styles.tableCell, ...styles.ivCell, ...styles[`tone${ivTone ? ivTone.charAt(0).toUpperCase() + ivTone.slice(1) : 'Flat'}`], ...getStickyColumnStyle(304, stickyBackground, 6) }}>{contract.appliedVolatility}%</td>
+                    {payload.formulas.map((formula) => {
+                      const result = contract.formulaResults.find((entry) => entry.key === formula.key);
+                      const tone = flashMap[`${baseKey}-${formula.key}`] || null;
+                      return (
+                        <td key={`${contract.expiryUnix}-${contract.strike}-${contract.type}-${formula.key}`} style={{ ...styles.tableCell, ...styles[`tone${tone ? tone.charAt(0).toUpperCase() + tone.slice(1) : 'Flat'}`] }}>
+                          {currency(result?.price)}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  };
+
   if (!user) {
     return <div style={styles.loading}>Loading...</div>;
   }
 
   return (
-    <div style={styles.page}>
-      <div style={styles.header}>
+    <>
+      <style>{`
+        @media (max-width: 900px) {
+          .expected-prices-page {
+            padding: 16px !important;
+          }
+          .expected-prices-layout {
+            grid-template-columns: 1fr !important;
+          }
+          .expected-prices-header {
+            flex-direction: column !important;
+            align-items: stretch !important;
+          }
+          .expected-prices-actions {
+            width: 100%;
+          }
+          .expected-prices-actions button {
+            flex: 1;
+          }
+          .expected-prices-summary {
+            grid-template-columns: 1fr !important;
+          }
+          .expected-prices-option-grid {
+            grid-template-columns: 1fr !important;
+          }
+        }
+
+        @media (max-width: 640px) {
+          .expected-prices-page {
+            padding: 12px !important;
+          }
+          .expected-prices-title {
+            font-size: 26px !important;
+          }
+          .expected-prices-panel {
+            padding: 14px !important;
+            border-radius: 16px !important;
+          }
+          .expected-prices-table-wrap {
+            border-radius: 12px !important;
+          }
+          .expected-prices-table {
+            min-width: 920px !important;
+          }
+          .expected-prices-expiry {
+            padding: 12px !important;
+          }
+        }
+      `}</style>
+      <div style={styles.page} className="expected-prices-page">
+      <div style={styles.header} className="expected-prices-header">
         <div>
           <div style={styles.eyebrow}>Open-data pricing workspace</div>
-          <h1 style={styles.title}>Expected NIFTY Option Prices</h1>
+          <h1 style={styles.title} className="expected-prices-title">Expected NIFTY Option Prices</h1>
           <div style={styles.subtitle}>Formula-wise CE and PE estimates for selected strikes and expiries.</div>
         </div>
-        <div style={styles.headerActions}>
+        <div style={styles.headerActions} className="expected-prices-actions">
           <button onClick={() => router.push('/dashboard')} style={styles.secondaryButton}>Back</button>
           <button onClick={() => loadData(true)} style={styles.primaryButton} disabled={refreshing}>
             {refreshing ? 'Refreshing…' : 'Refresh'}
@@ -95,23 +332,73 @@ export default function ExpectedOptionPrices() {
         </div>
       </div>
 
-      <div style={styles.layout}>
-        <div style={styles.panel}>
+      <div style={styles.layout} className="expected-prices-layout">
+        <div style={styles.panel} className="expected-prices-panel">
           <div style={styles.panelTitle}>Scenario</div>
-          <label style={styles.label}>Reference spot</label>
-          <input value={spot} onChange={(event) => setSpot(event.target.value)} style={styles.input} placeholder={payload ? `Live NIFTY ${payload.liveSpot}` : 'Uses current NIFTY automatically'} />
-          <div style={styles.fieldHint}>Leave empty to use the current live NIFTY price automatically.</div>
+          <div style={styles.fieldHint}>Live NIFTY spot and nearby strikes are generated automatically.</div>
 
-          <label style={styles.label}>Strikes</label>
-          <input value={strikes} onChange={(event) => setStrikes(event.target.value)} style={styles.input} placeholder={payload?.strikes?.length ? payload.strikes.join(', ') : 'Auto-center around live NIFTY'} />
-          <div style={styles.fieldHint}>
-            {String(strikes).trim()
-              ? 'Enter comma-separated strikes to override the automatic centered set.'
-              : `Using auto-centered strikes around live NIFTY${payload?.strikes?.length ? `: ${payload.strikes.join(', ')}` : ''}.`}
+          <div style={styles.autoSettingsCard}>
+            <button type="button" onClick={() => setAutoSettingsOpen((current) => !current)} style={styles.autoSettingsToggle}>
+              <span style={styles.autoSettingsTitle}>Auto Settings</span>
+              <span style={styles.autoSettingsChevron}>{autoSettingsOpen ? '−' : '+'}</span>
+            </button>
+            <div style={styles.autoSettingsHint}>These apply only when strikes or expiries are left blank.</div>
+
+            {autoSettingsOpen ? (
+              <>
+                <div style={styles.settingBlock}>
+                  <div style={styles.settingLabel}>Strikes each side</div>
+                  <div style={styles.toggleRow}>
+                    {['2', '3', '4', '5'].map((levelOption) => (
+                      <button
+                        key={levelOption}
+                        type="button"
+                        onClick={() => setStrikeLevels(levelOption)}
+                        style={strikeLevels === levelOption ? styles.toggleButtonActive : styles.toggleButton}
+                      >
+                        {levelOption}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={styles.fieldHint}>Shows {strikeLevels} strikes above and {strikeLevels} below the live spot.</div>
+                </div>
+
+                <div style={styles.settingBlock}>
+                  <div style={styles.settingLabel}>Strike gap</div>
+                  <div style={styles.toggleRow}>
+                    {['50', '100', '150', '200'].map((gapOption) => (
+                      <button
+                        key={gapOption}
+                        type="button"
+                        onClick={() => setStrikeGap(gapOption)}
+                        style={strikeGap === gapOption ? styles.toggleButtonActive : styles.toggleButton}
+                      >
+                        {gapOption}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={styles.fieldHint}>Uses {strikeGap}-point spacing for auto-generated strikes.</div>
+                </div>
+
+                <div style={styles.settingBlock}>
+                  <div style={styles.settingLabel}>Expiry count</div>
+                  <div style={styles.toggleRow}>
+                    {['1', '2', '3', '4'].map((countOption) => (
+                      <button
+                        key={countOption}
+                        type="button"
+                        onClick={() => setExpiryCount(countOption)}
+                        style={expiryCount === countOption ? styles.toggleButtonActive : styles.toggleButton}
+                      >
+                        {countOption}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={styles.fieldHint}>Shows the next {expiryCount} expiry{expiryCount === '1' ? '' : 'ies'} in auto mode.</div>
+                </div>
+              </>
+            ) : null}
           </div>
-
-          <label style={styles.label}>Expiries</label>
-          <input value={expiries} onChange={(event) => setExpiries(event.target.value)} style={styles.input} />
 
           <label style={styles.label}>Risk-free rate override (%)</label>
           <input value={rate} onChange={(event) => setRate(event.target.value)} style={styles.input} placeholder="Optional" />
@@ -131,11 +418,11 @@ export default function ExpectedOptionPrices() {
 
           {payload ? (
             <>
-              <div style={styles.summaryGrid}>
+              <div style={styles.summaryGrid} className="expected-prices-summary">
                 <div style={styles.heroCard}>
                   <div style={styles.heroLabel}>Reference spot used</div>
                   <div style={styles.heroValue}>{currency(payload.referenceSpot)}</div>
-                  <div style={styles.heroMeta}>Live spot {currency(payload.liveSpot)}</div>
+                  <div style={styles.heroMeta}>Live spot {currency(payload.liveSpot)} · refreshes every 10s</div>
                 </div>
                 <div style={styles.heroCard}>
                   <div style={styles.heroLabel}>Volatility index</div>
@@ -161,46 +448,18 @@ export default function ExpectedOptionPrices() {
               </div>
 
               {groupedContracts.map(([expiryLabel, contracts]) => (
-                <div key={expiryLabel} style={styles.expirySection}>
+                <div key={expiryLabel} style={styles.expirySection} className="expected-prices-expiry">
                   <div style={styles.expiryHeader}>
                     <div>
                       <div style={styles.expiryTitle}>{expiryLabel}</div>
-                      <div style={styles.expirySubtitle}>Expected prices for CE and PE at 22500, 22600, 22700</div>
+                      <div style={styles.expirySubtitle}>Calls and puts are separated into different tables for faster scanning.</div>
                     </div>
                   </div>
 
-                  {contracts.map((contract) => (
-                    <div key={`${contract.expiryUnix}-${contract.strike}-${contract.type}`} style={styles.contractCard}>
-                      <div style={styles.contractHeader}>
-                        <div>
-                          <div style={styles.contractTitle}>{contract.strike} {contract.type}</div>
-                          <div style={styles.contractMeta}>Applied IV {contract.appliedVolatility}% via {contract.volatilitySource}</div>
-                        </div>
-                        <div style={styles.contractMeta}>Live premium {currency(contract.livePremium)}</div>
-                      </div>
-
-                      <div style={styles.formulaGrid}>
-                        {contract.formulaResults.map((formula) => (
-                          <div key={formula.key} style={styles.formulaCard}>
-                            <div
-                              style={styles.formulaNameWrap}
-                              onMouseEnter={() => setTooltipKey(`${contract.expiryUnix}-${contract.strike}-${contract.type}-${formula.key}`)}
-                              onMouseLeave={() => setTooltipKey(null)}
-                            >
-                              <div style={styles.formulaName}>{formula.name}</div>
-                              {tooltipKey === `${contract.expiryUnix}-${contract.strike}-${contract.type}-${formula.key}` ? (
-                                <div style={styles.tooltipBox}>
-                                  <div style={styles.tooltipTitle}>{formula.name}</div>
-                                  <div style={styles.tooltipText}>{FORMULA_DETAILS[formula.key] || formula.name}</div>
-                                </div>
-                              ) : null}
-                            </div>
-                            <div style={styles.formulaPrice}>{currency(formula.price)}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
+                  <div style={styles.optionTypeGrid} className="expected-prices-option-grid">
+                    {renderContractsTable(expiryLabel, contracts, 'CE')}
+                    {renderContractsTable(expiryLabel, contracts, 'PE')}
+                  </div>
                 </div>
               ))}
             </>
@@ -209,7 +468,8 @@ export default function ExpectedOptionPrices() {
           {loading && !payload ? <div style={styles.loading}>Calculating expected prices…</div> : null}
         </div>
       </div>
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -296,6 +556,80 @@ const styles = {
     fontSize: '11px',
     marginTop: '6px',
   },
+  autoSettingsCard: {
+    marginTop: '14px',
+    padding: '14px',
+    borderRadius: '16px',
+    background: 'rgba(7, 18, 28, 0.92)',
+    border: '1px solid rgba(49, 91, 124, 0.3)',
+  },
+  autoSettingsToggle: {
+    width: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '10px',
+    background: 'transparent',
+    border: 'none',
+    padding: 0,
+    cursor: 'pointer',
+    textAlign: 'left',
+  },
+  autoSettingsTitle: {
+    color: '#e2e8f0',
+    fontSize: '13px',
+    fontWeight: 800,
+  },
+  autoSettingsChevron: {
+    color: '#7dd3fc',
+    fontSize: '18px',
+    fontWeight: 700,
+    lineHeight: 1,
+  },
+  autoSettingsHint: {
+    color: '#7b92a8',
+    fontSize: '11px',
+    marginTop: '4px',
+    marginBottom: '10px',
+  },
+  settingBlock: {
+    marginTop: '10px',
+  },
+  settingLabel: {
+    color: '#93c5fd',
+    fontSize: '11px',
+    fontWeight: 700,
+    marginBottom: '6px',
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+  },
+  toggleRow: {
+    display: 'flex',
+    gap: '8px',
+    flexWrap: 'wrap',
+    marginTop: '8px',
+  },
+  toggleButton: {
+    border: '1px solid #315b7c',
+    background: '#071019',
+    color: '#cbd5e1',
+    borderRadius: '999px',
+    padding: '8px 12px',
+    cursor: 'pointer',
+    fontSize: '12px',
+    fontWeight: 700,
+  },
+  toggleButtonActive: {
+    border: '1px solid #0ea5e9',
+    background: 'linear-gradient(135deg, rgba(14, 165, 233, 0.22), rgba(34, 197, 94, 0.2))',
+    color: '#e0f2fe',
+    borderRadius: '999px',
+    padding: '8px 12px',
+    cursor: 'pointer',
+    fontSize: '12px',
+    fontWeight: 800,
+    boxShadow: '0 0 0 1px rgba(14, 165, 233, 0.18) inset',
+  },
   primaryButton: {
     background: 'linear-gradient(135deg, #0ea5e9, #22c55e)',
     border: 'none',
@@ -377,6 +711,39 @@ const styles = {
     borderRadius: '18px',
     padding: '16px',
   },
+  optionTypeGrid: {
+    display: 'grid',
+    gridTemplateColumns: '1fr',
+    gap: '14px',
+  },
+  optionTypeSection: {
+    borderRadius: '16px',
+    padding: '12px',
+    border: '1px solid rgba(49, 91, 124, 0.24)',
+  },
+  callsSection: {
+    background: 'linear-gradient(180deg, rgba(12, 32, 22, 0.72), rgba(5, 13, 20, 0.7))',
+  },
+  putsSection: {
+    background: 'linear-gradient(180deg, rgba(38, 14, 14, 0.72), rgba(5, 13, 20, 0.7))',
+  },
+  optionTypeHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    gap: '12px',
+    flexWrap: 'wrap',
+    alignItems: 'baseline',
+    marginBottom: '10px',
+  },
+  optionTypeTitle: {
+    fontSize: '14px',
+    fontWeight: 800,
+    color: '#f8fafc',
+  },
+  optionTypeHint: {
+    fontSize: '11px',
+    color: '#9fb3c8',
+  },
   expiryHeader: {
     display: 'flex',
     justifyContent: 'space-between',
@@ -392,56 +759,169 @@ const styles = {
     color: '#94a3b8',
     fontSize: '12px',
   },
-  contractCard: {
-    borderTop: '1px solid rgba(125, 211, 252, 0.1)',
-    paddingTop: '12px',
-    marginTop: '12px',
+  tableWrap: {
+    overflowX: 'auto',
+    borderRadius: '14px',
+    border: '1px solid rgba(49, 91, 124, 0.45)',
+    background: 'rgba(5, 13, 20, 0.72)',
   },
-  contractHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    gap: '12px',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    marginBottom: '8px',
+  table: {
+    width: '100%',
+    borderCollapse: 'collapse',
+    minWidth: '1040px',
   },
-  contractTitle: {
-    fontSize: '16px',
-    fontWeight: 700,
-  },
-  contractMeta: {
-    color: '#94a3b8',
-    fontSize: '11px',
-  },
-  formulaGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(108px, 1fr))',
-    gap: '6px',
-  },
-  formulaCard: {
-    borderRadius: '10px',
-    background: 'linear-gradient(180deg, rgba(9, 22, 33, 0.95), rgba(6, 14, 20, 0.95))',
-    border: '1px solid rgba(49, 91, 124, 0.55)',
-    padding: '8px 9px',
+  tableHead: {
     position: 'relative',
-    overflow: 'visible',
-    minHeight: '72px',
+    textAlign: 'left',
+    padding: '10px 10px',
+    color: '#93c5fd',
+    fontSize: '10px',
+    letterSpacing: '0.05em',
+    textTransform: 'uppercase',
+    borderBottom: '1px solid rgba(49, 91, 124, 0.45)',
+    background: 'rgba(8, 20, 30, 0.92)',
+    whiteSpace: 'nowrap',
+  },
+  tableCell: {
+    padding: '9px 10px',
+    color: '#dbeafe',
+    fontSize: '12px',
+    borderTop: '1px solid rgba(49, 91, 124, 0.22)',
+    whiteSpace: 'nowrap',
+  },
+  tableCellStrong: {
+    padding: '9px 10px',
+    color: '#f8fafc',
+    fontSize: '12px',
+    fontWeight: 700,
+    borderTop: '1px solid rgba(49, 91, 124, 0.22)',
+    whiteSpace: 'nowrap',
+  },
+  strikeHead: {
+    minWidth: '96px',
+  },
+  typeHead: {
+    minWidth: '72px',
+  },
+  liveHead: {
+    minWidth: '116px',
+  },
+  ivHead: {
+    minWidth: '84px',
+  },
+  strikeCell: {
+    transition: 'background-color 160ms ease, color 160ms ease',
+  },
+  strikeCellContent: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
+  strikeBadgeAtm: {
+    borderRadius: '999px',
+    padding: '2px 8px',
+    fontSize: '10px',
+    fontWeight: 800,
+    background: 'rgba(250, 204, 21, 0.22)',
+    color: '#fde68a',
+    border: '1px solid rgba(250, 204, 21, 0.35)',
+  },
+  strikeBadgeNear: {
+    borderRadius: '999px',
+    padding: '2px 8px',
+    fontSize: '10px',
+    fontWeight: 800,
+    background: 'rgba(56, 189, 248, 0.18)',
+    color: '#bae6fd',
+    border: '1px solid rgba(56, 189, 248, 0.3)',
+  },
+  strikeAtm: {
+    background: 'linear-gradient(90deg, rgba(250, 204, 21, 0.34), rgba(250, 204, 21, 0.16))',
+    color: '#fef08a',
+  },
+  strikeNear: {
+    background: 'linear-gradient(90deg, rgba(56, 189, 248, 0.22), rgba(56, 189, 248, 0.12))',
+    color: '#bae6fd',
+  },
+  strikeMid: {
+    background: 'linear-gradient(90deg, rgba(59, 130, 246, 0.14), rgba(59, 130, 246, 0.08))',
+  },
+  strikeFar: {
+    background: 'rgba(5, 13, 20, 0.45)',
+  },
+  rowAtm: {
+    boxShadow: 'inset 0 0 0 1px rgba(250, 204, 21, 0.18)',
+  },
+  rowNear: {
+    boxShadow: 'inset 0 0 0 1px rgba(56, 189, 248, 0.14)',
+  },
+  rowMid: {
+    opacity: 1,
+  },
+  rowFar: {
+    opacity: 1,
+  },
+  stickyAtm: {
+    background: 'rgba(44, 34, 8, 0.98)',
+  },
+  stickyNear: {
+    background: 'rgba(8, 32, 44, 0.98)',
+  },
+  stickyMid: {
+    background: 'rgba(8, 20, 30, 0.98)',
+  },
+  stickyFar: {
+    background: 'rgba(4, 12, 20, 0.98)',
+  },
+  ceRow: {
+    background: 'rgba(20, 83, 45, 0.16)',
+  },
+  peRow: {
+    background: 'rgba(127, 29, 29, 0.16)',
+  },
+  ceTypeCell: {
+    padding: '9px 10px',
+    color: '#86efac',
+    fontSize: '12px',
+    fontWeight: 700,
+    borderTop: '1px solid rgba(49, 91, 124, 0.22)',
+    whiteSpace: 'nowrap',
+  },
+  peTypeCell: {
+    padding: '9px 10px',
+    color: '#fca5a5',
+    fontSize: '12px',
+    fontWeight: 700,
+    borderTop: '1px solid rgba(49, 91, 124, 0.22)',
+    whiteSpace: 'nowrap',
+  },
+  typeCell: {
+    minWidth: '72px',
+  },
+  liveCell: {
+    minWidth: '116px',
+  },
+  ivCell: {
+    minWidth: '84px',
+  },
+  toneUp: {
+    color: '#86efac',
+  },
+  toneDown: {
+    color: '#fca5a5',
+  },
+  toneFlat: {
+    color: '#dbeafe',
   },
   formulaNameWrap: {
     position: 'relative',
     display: 'inline-block',
   },
-  formulaName: {
+  formulaHeadLabel: {
     color: '#93c5fd',
     fontSize: '10px',
-    minHeight: '24px',
     cursor: 'help',
     lineHeight: 1.25,
-  },
-  formulaPrice: {
-    fontSize: '16px',
-    fontWeight: 800,
-    marginTop: '4px',
   },
   tooltipBox: {
     position: 'absolute',

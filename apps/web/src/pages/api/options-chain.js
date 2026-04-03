@@ -1,8 +1,3 @@
-// ── Zerodha Kite (enctoken from browser) ─────────────────────────────────────
-// FREE — no Kite Connect subscription needed.
-// After logging into kite.zerodha.com, copy the enctoken from browser cookies.
-// Set ZERODHA_ENCTOKEN in apps/web/.env.local
-
 import https from 'https';
 import zlib from 'zlib';
 import fs from 'fs';
@@ -105,116 +100,6 @@ function nodeGet(url, headers = {}) {
     }
     doReq(url, 3);
   });
-}
-
-// In-memory cache for NFO instruments CSV (refreshed every 4 h)
-let _kiteInstrCache = null;
-let _kiteInstrCacheTs = 0;
-
-async function getKiteInstruments() {
-  const now = Date.now();
-  if (_kiteInstrCache && now - _kiteInstrCacheTs < 4 * 3600 * 1000) return _kiteInstrCache;
-  console.log('[Zerodha] Fetching NFO instruments CSV...');
-  const r = await nodeGet('https://api.kite.trade/instruments/NFO', { 'User-Agent': 'Mozilla/5.0', 'X-Kite-Version': '3' });
-  if (!r.ok) throw new Error(`Kite instruments ${r.status}`);
-  const text = r.text();
-  const lines = text.trim().split(/\r?\n/);
-  const cols = lines[0].split(',');
-  _kiteInstrCache = lines.slice(1).map((row) => {
-    const vals = row.split(',');
-    return Object.fromEntries(cols.map((c, i) => [c.trim(), (vals[i] || '').trim().replace(/^"(.*)"$/, '$1')]));
-  });
-  _kiteInstrCacheTs = now;
-  console.log('[Zerodha] NFO instruments loaded:', _kiteInstrCache.length, 'rows');
-  return _kiteInstrCache;
-}
-
-async function fetchFromZerodha(symbol, expiryUnix) {
-  const enctoken = process.env.ZERODHA_ENCTOKEN;
-  if (!enctoken) throw new Error('ZERODHA_ENCTOKEN not set');
-
-  // enctoken is the *browser* session token from kite.zerodha.com cookies.
-  // Authenticated calls go to kite.zerodha.com/oms (NOT api.kite.trade which needs paid KiteConnect).
-  // Instruments CSV is public on api.kite.trade — no auth needed.
-  const OMS = 'https://kite.zerodha.com/oms';
-  const h = {
-    'Authorization': `enctoken ${enctoken}`,
-    'X-Kite-Version': '3',
-    'User-Agent': 'Mozilla/5.0',
-    'Origin': 'https://kite.zerodha.com',
-    'Referer': 'https://kite.zerodha.com/',
-  };
-
-  // 1. Spot price via Yahoo Finance (no auth, reliable for indices)
-  let spot = null;
-  try {
-    const yRes = await nodeGet('https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1m&range=1d', {
-      'User-Agent': 'Mozilla/5.0',
-      'Accept': 'application/json',
-    });
-    const yJson = yRes.json();
-    const meta = yJson?.chart?.result?.[0]?.meta;
-    spot = meta?.regularMarketPrice ?? meta?.previousClose ?? null;
-    console.log('[Zerodha] spot =', spot);
-  } catch (e) {
-    console.warn('[Zerodha] Yahoo spot failed:', e.message, '— will proceed without spot filter');
-  }
-
-  // 2. Instruments list (public CSV — no auth needed)
-  const instruments = await getKiteInstruments();
-  const sym = symbol.toUpperCase();
-  const optionInstr = instruments.filter(
-    (i) => i.name === sym && (i.instrument_type === 'CE' || i.instrument_type === 'PE'),
-  );
-  if (!optionInstr.length) throw new Error('No instruments found for ' + sym);
-
-  // 3. Determine expiry list
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const expiries = [...new Set(optionInstr.map((i) => i.expiry))]
-    .filter((e) => e && new Date(e) >= today)
-    .sort(); // ISO dates sort naturally
-  if (!expiries.length) throw new Error('No upcoming expiries');
-
-  let targetExpiry = expiries[0];
-  if (expiryUnix) {
-    const req = new Date(Number(expiryUnix) * 1000); req.setHours(0, 0, 0, 0);
-    const match = expiries.find((e) => { const d = new Date(e); d.setHours(0, 0, 0, 0); return d.getTime() === req.getTime(); });
-    if (match) targetExpiry = match;
-  }
-
-  // 4. Filter instruments for target expiry, near spot
-  const targetInstr = optionInstr.filter((i) => {
-    if (i.expiry !== targetExpiry) return false;
-    return !spot || Math.abs(Number(i.strike) - spot) <= 1500;
-  });
-  if (!targetInstr.length) throw new Error('No instruments for target expiry');
-
-  // 5. Batch LTP quotes via OMS using instrument tokens (numeric IDs, not trading symbols)
-  // OMS /quote/ltp accepts: i=12345678 (instrument_token from CSV)
-  const allLtp = {}; // keyed by instrument_token string
-  for (let i = 0; i < targetInstr.length; i += 200) {
-    const batch = targetInstr.slice(i, i + 200);
-    const qs = batch.map((t) => `i=${t.instrument_token}`).join('&');
-    const qRes = await nodeGet(`${OMS}/quote/ltp?${qs}`, h);
-    const qText = qRes.text();
-    if (i === 0) console.log(`[Zerodha] batch LTP HTTP ${qRes.status}:`, qText.slice(0, 300));
-    const qJson = JSON.parse(qText);
-    if (qJson.status === 'success') Object.assign(allLtp, qJson.data);
-    else console.warn('[Zerodha] batch LTP error:', qJson.message);
-  }
-  console.log('[Zerodha] allLtp keys:', Object.keys(allLtp).length);
-  if (Object.keys(allLtp).length === 0) {
-    throw new Error('Zerodha LTP batch returned no data (web session token cannot access /oms/quote/ltp)');
-  }
-
-  // 6. Normalise into standard format — key LTP lookup by instrument_token
-  const strikes = targetInstr.map((instr) => {
-    const ltp = allLtp[instr.instrument_token]?.last_price ?? 0;
-    return { strike: Number(instr.strike), type: instr.instrument_type, price: ltp, lastPrice: ltp, bid: 0, ask: 0, oi: 0, iv: 0 };
-  });
-
-  const expirations = expiries.map((e) => Math.floor(new Date(e).getTime() / 1000));
-  return { expirations, expiryDates: expiries, spot, strikes, source: 'zerodha' };
 }
 
 // ── Parse "27-Mar-2025" (NSE date format) → unix seconds
@@ -374,16 +259,6 @@ function mergeCookieStrings(...parts) {
 
 export default async function handler(req, res) {
   const { symbol = 'NIFTY', expiry, iv, rate } = req.query;
-
-  // ── 0. Zerodha Kite (enctoken from browser — free, no subscription) ─────
-  try {
-    const data = await fetchFromZerodha(symbol, expiry);
-    console.log('[options-chain] Zerodha OK — spot:', data.spot, 'strikes:', data.strikes?.length);
-    return res.status(200).json({ ...data, symbol });
-  } catch (zErr) {
-    console.error('[options-chain] Zerodha FAILED:', zErr.message, '| cause:', zErr.cause?.message ?? zErr.cause ?? '(none)');
-    // fall through to NSE
-  }
 
   // ── 1. Try NSE live options chain ────────────────────────────────────────
   try {

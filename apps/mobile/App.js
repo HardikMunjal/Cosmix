@@ -9,6 +9,7 @@ import LoginScreen from './src/screens/LoginScreen';
 import DashboardScreen from './src/screens/DashboardScreen';
 import ChatScreen from './src/screens/ChatScreen';
 import OptionsStrategyScreen from './src/screens/OptionsStrategyScreen';
+import ExpectedOptionPricesScreen from './src/screens/ExpectedOptionPricesScreen';
 
 // Show notifications even while app is foregrounded
 Notifications.setNotificationHandler({
@@ -62,6 +63,7 @@ export default function App() {
         <Stack.Screen name="Dashboard" component={DashboardScreen} options={{ title: 'Cosmix', headerBackVisible: false }} />
         <Stack.Screen name="Chat" component={ChatScreen} options={{ title: 'Team Chat' }} />
         <Stack.Screen name="OptionsStrategy" component={OptionsStrategyScreen} options={{ title: 'Options Strategy' }} />
+        <Stack.Screen name="ExpectedOptionPrices" component={ExpectedOptionPricesScreen} options={{ title: 'Expected Option Prices' }} />
       </Stack.Navigator>
     </NavigationContainer>
   );

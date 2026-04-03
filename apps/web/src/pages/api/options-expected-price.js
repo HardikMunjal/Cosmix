@@ -22,6 +22,18 @@ function parseOptionalNumber(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function parseStrikeGap(value) {
+  const parsed = parseOptionalNumber(value);
+  if (!parsed || parsed <= 0) return 100;
+  return parsed;
+}
+
+function parsePositiveInteger(value, fallback) {
+  const parsed = parseOptionalNumber(value);
+  if (!parsed || parsed <= 0) return fallback;
+  return Math.max(1, Math.floor(parsed));
+}
+
 function loadSyntheticConfig() {
   if (syntheticConfigCache) return syntheticConfigCache;
 
@@ -162,7 +174,7 @@ function formatExpiryLabel(unix) {
   return `${day} ${month} ${date.getFullYear()}`;
 }
 
-function nextTuesdayExpiries(count = 2) {
+function nextTuesdayExpiries(count = 1) {
   const expiries = [];
   const cursor = new Date();
   cursor.setHours(23, 59, 59, 0);
@@ -175,8 +187,8 @@ function nextTuesdayExpiries(count = 2) {
   return expiries;
 }
 
-function parseExpiryList(raw) {
-  if (!raw) return nextTuesdayExpiries(2);
+function parseExpiryList(raw, expiryCount) {
+  if (!raw) return nextTuesdayExpiries(expiryCount);
   return String(raw)
     .split(',')
     .map((value) => value.trim())
@@ -191,20 +203,28 @@ function parseExpiryList(raw) {
     .filter((value) => Number.isFinite(value));
 }
 
-function parseStrikeList(raw, fallbackSpot) {
+function parseStrikeList(raw, fallbackSpot, strikeGap, strikeLevelsEachSide) {
+  const buildCenteredStrikes = (spotValue) => {
+    const centeredSpot = Math.round((Number(spotValue) || 0) / 50) * 50;
+    const strikes = [];
+    for (let offset = strikeLevelsEachSide; offset >= 1; offset -= 1) {
+      strikes.push(centeredSpot - offset * strikeGap);
+    }
+    strikes.push(centeredSpot);
+    for (let offset = 1; offset <= strikeLevelsEachSide; offset += 1) {
+      strikes.push(centeredSpot + offset * strikeGap);
+    }
+    return [...new Set(strikes)].sort((left, right) => left - right);
+  };
+
   if (!raw) {
-    const centeredSpot = Math.round((Number(fallbackSpot) || 0) / 50) * 50;
-    return [centeredSpot - 100, centeredSpot, centeredSpot + 100];
+    return buildCenteredStrikes(fallbackSpot);
   }
   const values = String(raw)
     .split(',')
     .map((value) => Number(value.trim()))
     .filter((value) => Number.isFinite(value));
-  return values.length ? values : [
-    Math.round((fallbackSpot - 100) / 50) * 50,
-    Math.round(fallbackSpot / 50) * 50,
-    Math.round((fallbackSpot + 100) / 50) * 50,
-  ];
+  return values.length ? values : buildCenteredStrikes(fallbackSpot);
 }
 
 function normalPdf(x) {
@@ -441,8 +461,20 @@ function toContractMap(rows) {
 }
 
 export default async function handler(req, res) {
-  const { symbol = 'NIFTY', spot: spotQuery, strikes: strikesQuery, expiries: expiriesQuery, rate } = req.query;
+  const {
+    symbol = 'NIFTY',
+    spot: spotQuery,
+    strikes: strikesQuery,
+    expiries: expiriesQuery,
+    rate,
+    strikeGap: strikeGapQuery,
+    strikeLevels: strikeLevelsQuery,
+    expiryCount: expiryCountQuery,
+  } = req.query;
   const config = resolveSyntheticConfig({ riskFreeRate: rate });
+  const strikeGap = parseStrikeGap(strikeGapQuery);
+  const strikeLevelsEachSide = parsePositiveInteger(strikeLevelsQuery, 3);
+  const expiryCount = parsePositiveInteger(expiryCountQuery, 1);
 
   let liveSpot = null;
   let liveSpotSource = 'manual-input';
@@ -470,8 +502,8 @@ export default async function handler(req, res) {
 
   const requestedSpot = parseOptionalNumber(spotQuery);
   const referenceSpot = requestedSpot ?? liveSpot;
-  const strikes = parseStrikeList(strikesQuery, referenceSpot);
-  const expiries = parseExpiryList(expiriesQuery);
+  const strikes = parseStrikeList(strikesQuery, referenceSpot, strikeGap, strikeLevelsEachSide);
+  const expiries = parseExpiryList(expiriesQuery, expiryCount);
 
   let chainData = null;
   let chainSource = 'unavailable';
@@ -563,6 +595,9 @@ export default async function handler(req, res) {
     inputs: {
       riskFreeRate: config.riskFreeRate,
       baseVolatility: config.baseVolatility,
+      strikeGap,
+      strikeLevelsEachSide,
+      expiryCount,
     },
     sources: {
       spot: {
