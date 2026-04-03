@@ -14,6 +14,50 @@ const FORMULAS = [
   { key: 'monteCarlo', name: 'Monte Carlo GBM' },
 ];
 
+const STRATEGY_FAMILIES = [
+  {
+    key: 'iron-condor-1x',
+    name: 'Strategy 1 · 1x Wing Condor',
+    description: 'Sell one call and one put around spot, then buy one farther call and one farther put to cap both tails.',
+    longQuantity: 1,
+    shortQuantity: 1,
+  },
+  {
+    key: 'iron-condor-2x',
+    name: 'Strategy 2 · 2x Wing Condor',
+    description: 'Sell one call and one put around spot, then buy two farther calls and two farther puts for heavier crash and melt-up protection.',
+    longQuantity: 2,
+    shortQuantity: 1,
+  },
+];
+
+const STRATEGY_PROFILES = [
+  {
+    key: 'balanced',
+    label: 'Balanced Pick',
+    description: 'Best blend of credit received, max-loss containment, and usable profit zone width.',
+    score(candidate) {
+      return ((Math.max(candidate.entryCredit, 0) + 1) * (candidate.profitZoneWidth + 1)) / Math.max(Math.abs(candidate.maxLoss), 1);
+    },
+  },
+  {
+    key: 'range',
+    label: 'Widest Profit Range',
+    description: 'Favors combinations that keep you profitable across the broadest expiry range.',
+    score(candidate) {
+      return candidate.profitZoneWidth * 1000 + (candidate.rewardToRisk || 0) * 10 + Math.max(candidate.entryCredit, 0);
+    },
+  },
+  {
+    key: 'credit',
+    label: 'Highest Credit',
+    description: 'Favors larger entry credit, accepting a tighter or sharper payoff profile.',
+    score(candidate) {
+      return Math.max(candidate.entryCredit, 0) * 1000 + candidate.profitZoneWidth + (candidate.rewardToRisk || 0);
+    },
+  },
+];
+
 function parseOptionalNumber(value) {
   if (value == null) return null;
   const trimmed = String(value).trim();
@@ -248,6 +292,292 @@ function optionIntrinsic(type, strike, spot) {
   return type === 'CE' ? Math.max(spot - strike, 0) : Math.max(strike - spot, 0);
 }
 
+function legPayoffAtExpiry(leg, spot) {
+  const intrinsic = optionIntrinsic(leg.type, leg.strike, spot);
+  const signedPremium = leg.side === 'SELL' ? leg.premium : -leg.premium;
+  const signedIntrinsic = leg.side === 'SELL' ? -intrinsic : intrinsic;
+  return (signedPremium + signedIntrinsic) * leg.quantity;
+}
+
+function findBreakEvens(points) {
+  const breakEvens = [];
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+    if (previous.value === 0) {
+      breakEvens.push(previous.spot);
+      continue;
+    }
+    if ((previous.value < 0 && current.value > 0) || (previous.value > 0 && current.value < 0)) {
+      const ratio = Math.abs(previous.value) / (Math.abs(previous.value) + Math.abs(current.value));
+      breakEvens.push(Number((previous.spot + (current.spot - previous.spot) * ratio).toFixed(2)));
+    }
+  }
+  return [...new Set(breakEvens.map((value) => Number(value.toFixed(2))))];
+}
+
+function buildZones(points, predicate) {
+  const zones = [];
+  let start = null;
+  for (let index = 0; index < points.length; index += 1) {
+    const point = points[index];
+    const matches = predicate(point.value);
+    if (matches && start == null) {
+      start = point.spot;
+    }
+    if (!matches && start != null) {
+      zones.push({ from: start, to: points[index - 1].spot });
+      start = null;
+    }
+  }
+  if (start != null) {
+    zones.push({ from: start, to: points[points.length - 1].spot });
+  }
+  return zones;
+}
+
+function sumZoneWidths(zones) {
+  return Number(zones.reduce((sum, zone) => sum + Math.max(zone.to - zone.from, 0), 0).toFixed(2));
+}
+
+function buildStrikeUniverse({ chainData, expiryNameMap, expiries, referenceSpot, strikes, strikeGap }) {
+  return expiries.map((expiryUnix) => {
+    const expiryLabel = expiryNameMap.get(expiryUnix);
+    const centeredSpot = Math.round((referenceSpot || 0) / strikeGap) * strikeGap;
+    const chainStrikes = expiryLabel && chainData
+      ? chainData.rows
+        .filter((row) => row.expiryDate === expiryLabel)
+        .map((row) => Number(row.strikePrice))
+        .filter((value) => Number.isFinite(value) && Math.abs(value - referenceSpot) <= Math.max(strikeGap * 15, 1500))
+      : [];
+
+    const fallbackCentered = [];
+    for (let step = 1; step <= 10; step += 1) {
+      fallbackCentered.push(centeredSpot - strikeGap * step);
+      fallbackCentered.push(centeredSpot + strikeGap * step);
+    }
+    fallbackCentered.push(centeredSpot);
+
+    return {
+      expiryUnix,
+      strikes: [...new Set((chainStrikes.length ? chainStrikes : [...strikes, ...fallbackCentered]).map((value) => Number(value).toFixed(2)))]
+        .map(Number)
+        .filter((value) => Number.isFinite(value) && value > 0)
+        .sort((left, right) => left - right),
+    };
+  });
+}
+
+function resolveLiveContract(contractMap, expiryLabel, expiryUnix, strike, type) {
+  return contractMap.get(`${expiryLabel.replace(/ /g, '-')}|${strike}|${type}`)
+    || contractMap.get(`${expiryLabel}|${strike}|${type}`)
+    || contractMap.get(`${formatExpiryLabel(expiryUnix)}|${strike}|${type}`)
+    || null;
+}
+
+function resolvePremiumValue(liveContract) {
+  if (!liveContract) return null;
+  if (liveContract.price > 0) return Number(liveContract.price.toFixed(2));
+  if ((liveContract.bid + liveContract.ask) > 0) return Number((((liveContract.bid + liveContract.ask) / 2)).toFixed(2));
+  return null;
+}
+
+function buildStrategyPremiumLookup({ strikeUniverse, expiryNameMap, contractMap, referenceSpot, indiaVix, config }) {
+  const lookup = new Map();
+
+  strikeUniverse.forEach((expiryEntry) => {
+    const expiryUnix = expiryEntry.expiryUnix;
+    const expiryLabel = expiryNameMap.get(expiryUnix) || formatExpiryLabel(expiryUnix);
+    const secondsToExpiry = Math.max(expiryUnix - Math.floor(Date.now() / 1000), 0);
+    const timeYears = secondsToExpiry / (365 * 24 * 60 * 60);
+    const riskFreeRate = config.riskFreeRate / 100;
+
+    expiryEntry.strikes.forEach((strike) => {
+      ['CE', 'PE'].forEach((type) => {
+        const liveContract = resolveLiveContract(contractMap, expiryLabel, expiryUnix, strike, type);
+        const livePremium = resolvePremiumValue(liveContract);
+        const liveIv = liveContract?.iv && liveContract.iv > 0 ? Number(liveContract.iv) : null;
+        const baseVolatility = liveIv ?? indiaVix ?? config.baseVolatility;
+        const derivedVol = getTheoreticalVolatility({
+          spot: referenceSpot,
+          strike,
+          timeYears,
+          type,
+          config: {
+            ...config,
+            baseVolatility,
+          },
+        });
+        const blackScholesPremium = Number(blackScholesPrice({
+          spot: referenceSpot,
+          strike,
+          timeYears,
+          volatility: derivedVol,
+          riskFreeRate,
+          type,
+        }).toFixed(2));
+        const premium = livePremium ?? blackScholesPremium;
+
+        lookup.set(`${expiryUnix}|${strike}|${type}`, {
+          premium,
+          source: livePremium != null ? 'live-premium' : 'black-scholes-fallback',
+          livePremium,
+          blackScholesPremium,
+          appliedVolatility: Number((derivedVol * 100).toFixed(2)),
+        });
+      });
+    });
+  });
+
+  return lookup;
+}
+
+function resolveNearestAtOrAbove(strikes, target) {
+  return strikes.find((strike) => strike >= target) ?? null;
+}
+
+function resolveNearestAtOrBelow(strikes, target) {
+  for (let index = strikes.length - 1; index >= 0; index -= 1) {
+    if (strikes[index] <= target) return strikes[index];
+  }
+  return null;
+}
+
+function buildPayoffPoints(legs, strikeGap) {
+  const orderedStrikes = legs.map((leg) => leg.strike).sort((left, right) => left - right);
+  const start = Math.max(0, orderedStrikes[0] - strikeGap * 6);
+  const end = orderedStrikes[orderedStrikes.length - 1] + strikeGap * 6;
+  const step = Math.max(25, Math.round(strikeGap / 2));
+  const points = [];
+  for (let spot = start; spot <= end; spot += step) {
+    const payoff = legs.reduce((sum, leg) => sum + legPayoffAtExpiry(leg, spot), 0);
+    points.push({ spot, value: Number(payoff.toFixed(2)) });
+  }
+  return points;
+}
+
+function buildStrategyCandidate({ family, shortCallStrike, shortPutStrike, longCallStrike, longPutStrike, premiumLookup, expiryUnix, referenceSpot, strikeGap }) {
+  const legDefs = [
+    { side: 'SELL', type: 'CE', quantity: family.shortQuantity, strike: shortCallStrike },
+    { side: 'SELL', type: 'PE', quantity: family.shortQuantity, strike: shortPutStrike },
+    { side: 'BUY', type: 'CE', quantity: family.longQuantity, strike: longCallStrike },
+    { side: 'BUY', type: 'PE', quantity: family.longQuantity, strike: longPutStrike },
+  ];
+
+  const legs = [];
+  let premiumSources = new Set();
+  for (const leg of legDefs) {
+    const premiumEntry = premiumLookup.get(`${expiryUnix}|${leg.strike}|${leg.type}`);
+    if (!premiumEntry) return null;
+    premiumSources.add(premiumEntry.source);
+    legs.push({
+      ...leg,
+      premium: premiumEntry.premium,
+      premiumSource: premiumEntry.source,
+    });
+  }
+
+  const points = buildPayoffPoints(legs, strikeGap);
+  const pointValues = points.map((point) => point.value);
+  const maxProfit = Number(Math.max(...pointValues).toFixed(2));
+  const maxLoss = Number(Math.min(...pointValues).toFixed(2));
+  const breakEvens = findBreakEvens(points);
+  const profitZones = buildZones(points, (value) => value > 0);
+  const lossZones = buildZones(points, (value) => value < 0);
+  const entryCredit = Number(legs.reduce((sum, leg) => sum + (leg.side === 'SELL' ? leg.premium * leg.quantity : -leg.premium * leg.quantity), 0).toFixed(2));
+  const payoffAtSpot = Number(legs.reduce((sum, leg) => sum + legPayoffAtExpiry(leg, referenceSpot), 0).toFixed(2));
+  const profitZoneWidth = sumZoneWidths(profitZones);
+  const rewardToRisk = maxLoss < 0 ? Number((maxProfit / Math.abs(maxLoss)).toFixed(2)) : null;
+
+  return {
+    strategyKey: family.key,
+    legs,
+    shortDistance: shortCallStrike - referenceSpot,
+    wingWidth: longCallStrike - shortCallStrike,
+    entryCredit,
+    payoffAtSpot,
+    maxProfit,
+    maxLoss,
+    breakEvens,
+    profitZones,
+    lossZones,
+    profitZoneWidth,
+    rewardToRisk,
+    premiumMode: premiumSources.size === 1 ? [...premiumSources][0] : 'mixed',
+  };
+}
+
+function uniqueByLegs(candidates) {
+  const seen = new Set();
+  return candidates.filter((candidate) => {
+    const key = candidate.legs.map((leg) => `${leg.side}-${leg.quantity}-${leg.type}-${leg.strike}`).join('|');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function buildStrategySuggestions({ expiries, strikeUniverse, referenceSpot, strikeGap, premiumLookup }) {
+  return expiries.map((expiryUnix) => {
+    const availableStrikes = strikeUniverse.find((entry) => entry.expiryUnix === expiryUnix)?.strikes || [];
+    const familySuggestions = STRATEGY_FAMILIES.map((family) => {
+      const candidates = [];
+      for (let shortSteps = 1; shortSteps <= 6; shortSteps += 1) {
+        for (let wingSteps = 1; wingSteps <= 8; wingSteps += 1) {
+          const shortCallStrike = resolveNearestAtOrAbove(availableStrikes, referenceSpot + shortSteps * strikeGap);
+          const shortPutStrike = resolveNearestAtOrBelow(availableStrikes, referenceSpot - shortSteps * strikeGap);
+          const longCallStrike = resolveNearestAtOrAbove(availableStrikes, referenceSpot + (shortSteps + wingSteps) * strikeGap);
+          const longPutStrike = resolveNearestAtOrBelow(availableStrikes, referenceSpot - (shortSteps + wingSteps) * strikeGap);
+
+          if (![shortCallStrike, shortPutStrike, longCallStrike, longPutStrike].every(Number.isFinite)) continue;
+          if (!(longCallStrike > shortCallStrike && longPutStrike < shortPutStrike)) continue;
+
+          const candidate = buildStrategyCandidate({
+            family,
+            shortCallStrike,
+            shortPutStrike,
+            longCallStrike,
+            longPutStrike,
+            premiumLookup,
+            expiryUnix,
+            referenceSpot,
+            strikeGap,
+          });
+
+          if (!candidate) continue;
+          if (candidate.maxProfit <= 0 || candidate.profitZoneWidth <= 0) continue;
+          candidates.push(candidate);
+        }
+      }
+
+      const uniqueCandidates = uniqueByLegs(candidates);
+      const profiles = STRATEGY_PROFILES.map((profile) => {
+        const ranked = [...uniqueCandidates].sort((left, right) => profile.score(right) - profile.score(left));
+        const best = ranked[0] || null;
+        if (!best) return null;
+        return {
+          key: profile.key,
+          label: profile.label,
+          description: profile.description,
+          ...best,
+        };
+      }).filter(Boolean);
+
+      return {
+        key: family.key,
+        name: family.name,
+        description: family.description,
+        profiles,
+      };
+    }).filter((family) => family.profiles.length > 0);
+
+    return {
+      expiryUnix,
+      families: familySuggestions,
+    };
+  }).filter((entry) => entry.families.length > 0);
+}
+
 function blackScholesPrice({ spot, strike, timeYears, volatility, riskFreeRate, type }) {
   const intrinsic = optionIntrinsic(type, strike, spot);
   if (!timeYears || timeYears <= 0 || !volatility || volatility <= 0) return intrinsic;
@@ -330,20 +660,37 @@ function getTheoreticalVolatility({ spot, strike, timeYears, type, config }) {
   const daysToExpiry = timeYears * 365;
   const wingDistance = Math.abs(strike - spot) / spot;
   const logMoneyness = Math.abs(Math.log(strike / spot));
+  const upsideDistance = Math.max((strike - spot) / spot, 0);
+  const downsideDistance = Math.max((spot - strike) / spot, 0);
   const weeklyBoost = daysToExpiry <= 2
     ? ((2 - daysToExpiry) / 2) * ((config.nearExpiryBoost + 4) / 100)
     : daysToExpiry <= 7
       ? ((7 - daysToExpiry) / 5) * (config.nearExpiryBoost / 200)
       : 0;
-  const smileBoost = Math.pow(Math.max(wingDistance * 12, logMoneyness * 8), 1.1) * (config.smileFactor / 100);
+  const baseWingBoost = Math.pow(Math.max(wingDistance * 10, logMoneyness * 7), 1.08);
+  const downsidePutBoost = type === 'PE' && strike < spot
+    ? baseWingBoost * ((config.smileFactor * 1.05) / 100)
+    : 0;
+  const upsideCallWingBoost = type === 'CE' && strike > spot
+    ? baseWingBoost * ((config.smileFactor * 0.12) / 100)
+    : 0;
+  const mildOppositeWingBoost = ((type === 'CE' && strike < spot) || (type === 'PE' && strike > spot))
+    ? baseWingBoost * ((config.smileFactor * 0.04) / 100)
+    : 0;
   const downsideSkewBoost = type === 'PE' && strike < spot
     ? Math.pow(((spot - strike) / spot) * 10, 1.15) * (config.putSkewFactor / 100)
     : 0;
-  const upsideCallBoost = type === 'CE' && strike > spot
+  const upsideCallSkewBoost = type === 'CE' && strike > spot
     ? Math.pow(((strike - spot) / spot) * 10, 1.05) * ((config.putSkewFactor * 0.35) / 100)
     : 0;
   const nearExpiryAtmTaper = daysToExpiry <= 2
     ? Math.max(0, 0.018 - wingDistance * 0.12)
+    : 0;
+  const nearExpiryFarCallTaper = type === 'CE' && strike > spot
+    ? Math.pow(upsideDistance * 10, 1.12) * (daysToExpiry <= 7 ? 0.16 : 0.07)
+    : 0;
+  const nearExpiryFarPutTaper = type === 'PE' && strike < spot
+    ? Math.pow(downsideDistance * 10, 1.02) * (daysToExpiry <= 7 ? 0.035 : 0.015)
     : 0;
 
   return Math.min(
@@ -352,10 +699,14 @@ function getTheoreticalVolatility({ spot, strike, timeYears, type, config }) {
       0.05,
       (config.baseVolatility / 100)
         + weeklyBoost
-        + smileBoost
+        + downsidePutBoost
+        + upsideCallWingBoost
+        + mildOppositeWingBoost
         + downsideSkewBoost
-        + upsideCallBoost
-        - nearExpiryAtmTaper,
+        + upsideCallSkewBoost
+        - nearExpiryAtmTaper
+        - nearExpiryFarCallTaper
+        - nearExpiryFarPutTaper,
     ),
   );
 }
@@ -524,13 +875,8 @@ export default async function handler(req, res) {
     const timeYears = secondsToExpiry / (365 * 24 * 60 * 60);
 
     return strikes.flatMap((strike) => ['CE', 'PE'].map((type) => {
-      const liveContract = contractMap.get(`${expiryLabel.replace(/ /g, '-') }|${strike}|${type}`)
-        || contractMap.get(`${expiryLabel}|${strike}|${type}`)
-        || contractMap.get(`${expiryNameMap.get(expiryUnix) || ''}|${strike}|${type}`)
-        || null;
-      const livePremium = liveContract
-        ? (liveContract.price > 0 ? liveContract.price : ((liveContract.bid + liveContract.ask) > 0 ? Number(((liveContract.bid + liveContract.ask) / 2).toFixed(2)) : null))
-        : null;
+      const liveContract = resolveLiveContract(contractMap, expiryLabel, expiryUnix, strike, type);
+      const livePremium = resolvePremiumValue(liveContract);
       const liveIv = liveContract?.iv && liveContract.iv > 0 ? Number(liveContract.iv) : null;
 
       const baseVolatility = liveIv ?? indiaVix ?? config.baseVolatility;
@@ -581,6 +927,30 @@ export default async function handler(req, res) {
     }));
   });
 
+  const strikeUniverse = buildStrikeUniverse({
+    chainData,
+    expiryNameMap,
+    expiries,
+    referenceSpot,
+    strikes,
+    strikeGap,
+  });
+  const premiumLookup = buildStrategyPremiumLookup({
+    strikeUniverse,
+    expiryNameMap,
+    contractMap,
+    referenceSpot,
+    indiaVix,
+    config,
+  });
+  const strategySuggestions = buildStrategySuggestions({
+    expiries,
+    strikeUniverse,
+    referenceSpot,
+    strikeGap,
+    premiumLookup,
+  });
+
   res.status(200).json({
     symbol: String(symbol).toUpperCase(),
     referenceSpot: Number(referenceSpot.toFixed(2)),
@@ -592,6 +962,7 @@ export default async function handler(req, res) {
     })),
     formulas: FORMULAS,
     contracts,
+    strategySuggestions,
     inputs: {
       riskFreeRate: config.riskFreeRate,
       baseVolatility: config.baseVolatility,

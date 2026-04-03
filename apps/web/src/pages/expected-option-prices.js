@@ -104,6 +104,17 @@ function getStickyHeadStyle(left, zIndex = 4) {
   };
 }
 
+function formatZoneList(zones = []) {
+  if (!zones.length) return 'None';
+  return zones
+    .map((zone) => `${currency(zone.from)} to ${currency(zone.to)}`)
+    .join(' · ');
+}
+
+function formatLeg(leg) {
+  return `${leg.side} ${leg.quantity > 1 ? `${leg.quantity}x ` : ''}${leg.strike} ${leg.type}`;
+}
+
 export default function ExpectedOptionPrices() {
   const router = useRouter();
   const [user, setUser] = useState(null);
@@ -180,6 +191,14 @@ export default function ExpectedOptionPrices() {
       map.get(contract.expiryLabel).push(contract);
     });
     return Array.from(map.entries());
+  }, [payload]);
+
+  const strategySuggestionsByExpiry = useMemo(() => {
+    const map = new Map();
+    (payload?.strategySuggestions || []).forEach((entry) => {
+      map.set(entry.expiryUnix, entry);
+    });
+    return map;
   }, [payload]);
 
   const renderContractsTable = (expiryLabel, contracts, optionType) => {
@@ -411,6 +430,15 @@ export default function ExpectedOptionPrices() {
             <div style={styles.noteTitle}>Supported models</div>
             <div style={styles.noteText}>This screen shows open formulas implemented in the app: Intrinsic Value, Black-Scholes, Binomial CRR, Bachelier, and Monte Carlo GBM.</div>
           </div>
+
+          {payload?.sources?.optionsChain?.source !== 'nse-public-options-chain' ? (
+            <div style={styles.modelWarningBox}>
+              <div style={styles.modelWarningTitle}>Live option-chain quotes unavailable</div>
+              <div style={styles.modelWarningText}>
+                Current option premiums on this screen are being estimated from the fallback volatility model, not pulled from the live NSE option chain. That means deep OTM weekly options can differ materially from the actual market premium.
+              </div>
+            </div>
+          ) : null}
         </div>
 
         <div style={styles.content}>
@@ -455,6 +483,84 @@ export default function ExpectedOptionPrices() {
                       <div style={styles.expirySubtitle}>Calls and puts are separated into different tables for faster scanning.</div>
                     </div>
                   </div>
+
+                  {strategySuggestionsByExpiry.get(contracts[0]?.expiryUnix) ? (
+                    <div style={styles.strategyBoard}>
+                      <div style={styles.strategyBoardHeader}>
+                        <div>
+                          <div style={styles.strategyBoardTitle}>Suggested strategy combinations</div>
+                          <div style={styles.strategyBoardHint}>The model scans multiple short-distance and wing-width patterns around spot, then ranks the best combinations for credit, range, and balance.</div>
+                        </div>
+                        <div style={styles.strategySpotChip}>Spot {currency(payload.referenceSpot)}</div>
+                      </div>
+
+                      {strategySuggestionsByExpiry.get(contracts[0]?.expiryUnix).families.map((family) => (
+                        <div key={family.key} style={styles.strategyFamily}>
+                          <div style={styles.strategyFamilyHeader}>
+                            <div>
+                              <div style={styles.strategyFamilyTitle}>{family.name}</div>
+                              <div style={styles.strategyFamilyHint}>{family.description}</div>
+                            </div>
+                          </div>
+
+                          <div style={styles.strategyProfilesGrid}>
+                            {family.profiles.map((profile) => (
+                              <div key={`${family.key}-${profile.key}`} style={styles.strategyProfileCard}>
+                                <div style={styles.strategyProfileTop}>
+                                  <div>
+                                    <div style={styles.strategyProfileLabel}>{profile.label}</div>
+                                    <div style={styles.strategyProfileHint}>{profile.description}</div>
+                                  </div>
+                                  <div style={styles.strategyPremiumBadge}>{profile.premiumMode === 'live-premium' ? 'Live premium' : profile.premiumMode === 'mixed' ? 'Mixed input' : 'Estimated premium'}</div>
+                                </div>
+
+                                <div style={styles.strategyLegList}>
+                                  {profile.legs.map((leg) => (
+                                    <div key={`${family.key}-${profile.key}-${leg.side}-${leg.quantity}-${leg.type}-${leg.strike}`} style={styles.strategyLegRow}>
+                                      <span>{formatLeg(leg)}</span>
+                                      <span>{currency(leg.premium)}</span>
+                                    </div>
+                                  ))}
+                                </div>
+
+                                <div style={styles.strategyMetricsGrid}>
+                                  <div style={styles.strategyMetricBox}>
+                                    <div style={styles.strategyMetricLabel}>Entry credit</div>
+                                    <div style={styles.strategyMetricValue}>{currency(profile.entryCredit)}</div>
+                                  </div>
+                                  <div style={styles.strategyMetricBox}>
+                                    <div style={styles.strategyMetricLabel}>Max profit</div>
+                                    <div style={{ ...styles.strategyMetricValue, color: '#86efac' }}>{currency(profile.maxProfit)}</div>
+                                  </div>
+                                  <div style={styles.strategyMetricBox}>
+                                    <div style={styles.strategyMetricLabel}>Max loss</div>
+                                    <div style={{ ...styles.strategyMetricValue, color: '#fca5a5' }}>{currency(Math.abs(profile.maxLoss))}</div>
+                                  </div>
+                                  <div style={styles.strategyMetricBox}>
+                                    <div style={styles.strategyMetricLabel}>Reward / risk</div>
+                                    <div style={styles.strategyMetricValue}>{profile.rewardToRisk != null ? `${profile.rewardToRisk.toFixed(2)}x` : '—'}</div>
+                                  </div>
+                                  <div style={styles.strategyMetricBox}>
+                                    <div style={styles.strategyMetricLabel}>Profit width</div>
+                                    <div style={styles.strategyMetricValue}>{profile.profitZoneWidth.toFixed(0)} pts</div>
+                                  </div>
+                                  <div style={styles.strategyMetricBox}>
+                                    <div style={styles.strategyMetricLabel}>Payoff at spot</div>
+                                    <div style={{ ...styles.strategyMetricValue, color: profile.payoffAtSpot >= 0 ? '#93c5fd' : '#fca5a5' }}>{currency(profile.payoffAtSpot)}</div>
+                                  </div>
+                                </div>
+
+                                <div style={styles.strategyMetaRow}><strong>Break-even:</strong> {profile.breakEvens.length ? profile.breakEvens.map((value) => currency(value)).join(' · ') : 'None inside sampled range'}</div>
+                                <div style={styles.strategyMetaRow}><strong>Profit zones:</strong> {formatZoneList(profile.profitZones)}</div>
+                                <div style={styles.strategyMetaRow}><strong>Loss zones:</strong> {formatZoneList(profile.lossZones)}</div>
+                                <div style={styles.strategyMetaRow}><strong>Shape:</strong> Short strikes are {profile.shortDistance.toFixed(0)} points away from spot, wings are another {profile.wingWidth.toFixed(0)} points farther out.</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
 
                   <div style={styles.optionTypeGrid} className="expected-prices-option-grid">
                     {renderContractsTable(expiryLabel, contracts, 'CE')}
@@ -663,6 +769,23 @@ const styles = {
     fontSize: '12px',
     lineHeight: 1.45,
   },
+  modelWarningBox: {
+    marginTop: '18px',
+    padding: '14px',
+    borderRadius: '16px',
+    background: 'rgba(245, 158, 11, 0.1)',
+    border: '1px solid rgba(245, 158, 11, 0.24)',
+  },
+  modelWarningTitle: {
+    color: '#fde68a',
+    fontWeight: 800,
+    marginBottom: '6px',
+  },
+  modelWarningText: {
+    color: '#fef3c7',
+    fontSize: '12px',
+    lineHeight: 1.5,
+  },
   content: {
     display: 'flex',
     flexDirection: 'column',
@@ -704,6 +827,147 @@ const styles = {
     color: '#94a3b8',
     fontSize: '13px',
     marginTop: '4px',
+  },
+  strategyBoard: {
+    marginBottom: '18px',
+    borderRadius: '16px',
+    padding: '14px',
+    background: 'linear-gradient(180deg, rgba(5, 16, 24, 0.92), rgba(7, 18, 28, 0.82))',
+    border: '1px solid rgba(125, 211, 252, 0.18)',
+  },
+  strategyBoardHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    gap: '12px',
+    flexWrap: 'wrap',
+    alignItems: 'flex-start',
+    marginBottom: '12px',
+  },
+  strategyBoardTitle: {
+    fontSize: '16px',
+    fontWeight: 800,
+    color: '#f8fafc',
+  },
+  strategyBoardHint: {
+    marginTop: '4px',
+    fontSize: '12px',
+    color: '#94a3b8',
+    maxWidth: '780px',
+    lineHeight: 1.5,
+  },
+  strategySpotChip: {
+    padding: '8px 12px',
+    borderRadius: '999px',
+    background: 'rgba(14, 165, 233, 0.12)',
+    border: '1px solid rgba(125, 211, 252, 0.18)',
+    color: '#bae6fd',
+    fontSize: '12px',
+    fontWeight: 700,
+  },
+  strategyFamily: {
+    marginTop: '14px',
+    paddingTop: '14px',
+    borderTop: '1px solid rgba(49, 91, 124, 0.26)',
+  },
+  strategyFamilyHeader: {
+    marginBottom: '10px',
+  },
+  strategyFamilyTitle: {
+    fontSize: '15px',
+    fontWeight: 800,
+    color: '#e2e8f0',
+  },
+  strategyFamilyHint: {
+    marginTop: '4px',
+    color: '#9fb3c8',
+    fontSize: '12px',
+    lineHeight: 1.45,
+  },
+  strategyProfilesGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+    gap: '12px',
+  },
+  strategyProfileCard: {
+    borderRadius: '16px',
+    padding: '14px',
+    background: 'rgba(7, 18, 28, 0.95)',
+    border: '1px solid rgba(49, 91, 124, 0.34)',
+    boxShadow: '0 12px 28px rgba(0, 0, 0, 0.22)',
+  },
+  strategyProfileTop: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: '10px',
+    marginBottom: '12px',
+  },
+  strategyProfileLabel: {
+    fontSize: '14px',
+    fontWeight: 800,
+    color: '#f8fafc',
+  },
+  strategyProfileHint: {
+    marginTop: '4px',
+    color: '#94a3b8',
+    fontSize: '11px',
+    lineHeight: 1.45,
+  },
+  strategyPremiumBadge: {
+    whiteSpace: 'nowrap',
+    borderRadius: '999px',
+    padding: '6px 10px',
+    background: 'rgba(34, 197, 94, 0.12)',
+    border: '1px solid rgba(34, 197, 94, 0.18)',
+    color: '#bbf7d0',
+    fontSize: '11px',
+    fontWeight: 700,
+  },
+  strategyLegList: {
+    display: 'grid',
+    gap: '6px',
+    marginBottom: '12px',
+  },
+  strategyLegRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    gap: '8px',
+    color: '#dbeafe',
+    fontSize: '12px',
+    padding: '8px 10px',
+    borderRadius: '10px',
+    background: 'rgba(5, 13, 20, 0.78)',
+    border: '1px solid rgba(49, 91, 124, 0.18)',
+  },
+  strategyMetricsGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+    gap: '8px',
+    marginBottom: '12px',
+  },
+  strategyMetricBox: {
+    borderRadius: '12px',
+    padding: '10px',
+    background: 'rgba(11, 24, 34, 0.88)',
+    border: '1px solid rgba(49, 91, 124, 0.24)',
+  },
+  strategyMetricLabel: {
+    fontSize: '10px',
+    color: '#7dd3fc',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+    marginBottom: '6px',
+  },
+  strategyMetricValue: {
+    fontSize: '15px',
+    fontWeight: 800,
+    color: '#f8fafc',
+  },
+  strategyMetaRow: {
+    marginTop: '6px',
+    fontSize: '12px',
+    color: '#cbd5e1',
+    lineHeight: 1.45,
   },
   expirySection: {
     background: 'rgba(4, 10, 16, 0.88)',

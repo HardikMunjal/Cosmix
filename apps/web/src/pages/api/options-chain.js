@@ -147,20 +147,37 @@ function getTheoreticalVolatility({ spot, strike, timeYears, type, config }) {
   const daysToExpiry = timeYears * 365;
   const wingDistance = Math.abs(strike - spot) / spot;
   const logMoneyness = Math.abs(Math.log(strike / spot));
+  const upsideDistance = Math.max((strike - spot) / spot, 0);
+  const downsideDistance = Math.max((spot - strike) / spot, 0);
   const weeklyBoost = daysToExpiry <= 2
     ? ((2 - daysToExpiry) / 2) * ((config.nearExpiryBoost + 4) / 100)
     : daysToExpiry <= 7
       ? ((7 - daysToExpiry) / 5) * (config.nearExpiryBoost / 200)
       : 0;
-  const smileBoost = Math.pow(Math.max(wingDistance * 12, logMoneyness * 8), 1.1) * (config.smileFactor / 100);
+  const baseWingBoost = Math.pow(Math.max(wingDistance * 10, logMoneyness * 7), 1.08);
+  const downsidePutBoost = type === 'PE' && strike < spot
+    ? baseWingBoost * ((config.smileFactor * 1.05) / 100)
+    : 0;
+  const upsideCallWingBoost = type === 'CE' && strike > spot
+    ? baseWingBoost * ((config.smileFactor * 0.12) / 100)
+    : 0;
+  const mildOppositeWingBoost = ((type === 'CE' && strike < spot) || (type === 'PE' && strike > spot))
+    ? baseWingBoost * ((config.smileFactor * 0.04) / 100)
+    : 0;
   const downsideSkewBoost = type === 'PE' && strike < spot
     ? Math.pow(((spot - strike) / spot) * 10, 1.15) * (config.putSkewFactor / 100)
     : 0;
-  const upsideCallBoost = type === 'CE' && strike > spot
+  const upsideCallSkewBoost = type === 'CE' && strike > spot
     ? Math.pow(((strike - spot) / spot) * 10, 1.05) * ((config.putSkewFactor * 0.35) / 100)
     : 0;
   const nearExpiryAtmTaper = daysToExpiry <= 2
     ? Math.max(0, (0.018 - wingDistance * 0.12))
+    : 0;
+  const nearExpiryFarCallTaper = type === 'CE' && strike > spot
+    ? Math.pow(upsideDistance * 10, 1.12) * (daysToExpiry <= 7 ? 0.16 : 0.07)
+    : 0;
+  const nearExpiryFarPutTaper = type === 'PE' && strike < spot
+    ? Math.pow(downsideDistance * 10, 1.02) * (daysToExpiry <= 7 ? 0.035 : 0.015)
     : 0;
 
   return Math.min(
@@ -169,10 +186,14 @@ function getTheoreticalVolatility({ spot, strike, timeYears, type, config }) {
       0.05,
       (config.baseVolatility / 100)
         + weeklyBoost
-        + smileBoost
+        + downsidePutBoost
+        + upsideCallWingBoost
+        + mildOppositeWingBoost
         + downsideSkewBoost
-        + upsideCallBoost
+        + upsideCallSkewBoost
         - nearExpiryAtmTaper,
+        - nearExpiryFarCallTaper
+        - nearExpiryFarPutTaper,
     ),
   );
 }
