@@ -54,10 +54,29 @@ To get started with the Cosmix project, follow these steps:
 
 3. Start the development environment:
    ```
-   ./scripts/dev.sh
+  npm run dev
    ```
 
-4. Access the web application at `http://localhost:3000` and the API at `http://localhost:3001`.
+4. Access the web application at `http://localhost:3005` and the API gateway at `http://localhost:3000`.
+
+### Local Dev
+
+The root `npm run dev` command starts the backend services first, waits for them to bind to their ports, and then starts the web app.
+
+Ports used locally:
+
+- API Gateway: `3000`
+- Auth Service: `3001`
+- Chat Service: `3002`
+- User Service: `3003`
+- Web: `3005`
+
+If any of those ports are already in use, the script exits early and tells you which service is blocking startup. This usually means Docker Compose or an older local run is still active.
+
+Optional helpers:
+
+- `npm run dev -- --dry-run` shows what the launcher would start.
+- `npm run dev -- --no-install` skips the automatic `npm install` fallback when a package has no `node_modules` directory.
 
 ## Docker
 
