@@ -108,6 +108,45 @@ The local Docker stack is defined in [infra/docker-compose.yml](infra/docker-com
   docker compose down
   ```
 
+### EC2 Deployment
+
+For a single-instance AWS deployment, use the dedicated EC2 compose file at [infra/docker-compose.ec2.yml](infra/docker-compose.ec2.yml). This setup exposes:
+
+- Web app on port `80`
+- API gateway on port `3000`
+- Chat websocket service on port `3002`
+
+Provision the instance and network with Terraform from [infra/terraform/ec2](infra/terraform/ec2):
+
+1. Install Terraform and authenticate to AWS.
+2. Copy the example variables file and set at least your key pair name:
+  ```
+  cd infra/terraform/ec2
+  cp terraform.tfvars.example terraform.tfvars
+  ```
+3. For AWS free tier or a small demo budget, keep the deployment on a single `t3.micro` and do not add load balancers, RDS, or multi-node Kubernetes. The EC2 Terraform defaults now reflect that smaller footprint and add a swap file during bootstrap to reduce out-of-memory failures during Docker builds.
+3. Apply the infrastructure:
+  ```
+  terraform init
+  terraform apply
+  ```
+4. Clone the repository onto the EC2 host under `/opt/cosmix`, or set `repo_url` in `terraform.tfvars` so the user-data script clones it on first boot.
+5. Start the stack on the instance:
+  ```
+  cd /opt/cosmix/infra
+  docker compose -f docker-compose.ec2.yml up -d --build
+  ```
+
+After the stack is up:
+
+- Web: `http://<ec2-public-ip>/`
+- API Gateway: `http://<ec2-public-ip>:3000`
+- Chat websocket: `http://<ec2-public-ip>:3002`
+
+This is a pragmatic single-node deployment for development or demos. It intentionally keeps the architecture simple and does not yet add TLS, a reverse proxy, autoscaling, or managed database connectivity.
+
+Note: even with these smaller defaults, building several Node.js images on a micro instance will be slow. The deployment is realistic for demos, not production traffic.
+
 ### Login
 
 The current web login is a lightweight client-side flow. Open `http://localhost:3005`, enter any non-empty username, and continue.

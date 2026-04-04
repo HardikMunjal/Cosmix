@@ -4,6 +4,6 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.enableCors(); // Enable CORS for all routes
-  await app.listen(3000); // Start the application on port 3000
+  await app.listen(3000, '0.0.0.0'); // Start the application on all interfaces for LAN access
 }
 bootstrap();

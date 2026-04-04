@@ -11,7 +11,7 @@ async function bootstrap() {
 
   app.useWebSocketAdapter(new IoAdapter(app));
 
-  await app.listen(3002);
+  await app.listen(3002, '0.0.0.0');
   console.log('🚀 Chat Service running on http://localhost:3002');
 }
 bootstrap();

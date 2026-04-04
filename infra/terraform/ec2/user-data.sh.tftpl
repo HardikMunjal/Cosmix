@@ -1,0 +1,36 @@
+#!/bin/bash
+set -euxo pipefail
+
+dnf update -y
+dnf install -y docker git curl
+
+systemctl enable --now docker
+usermod -aG docker ec2-user
+
+if [ ! -f /swapfile ]; then
+  dd if=/dev/zero of=/swapfile bs=1M count=${swap_size_mb}
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  echo '/swapfile swap swap defaults 0 0' >> /etc/fstab
+fi
+
+mkdir -p /usr/local/lib/docker/cli-plugins
+if ! docker compose version >/dev/null 2>&1; then
+  curl -SL https://github.com/docker/compose/releases/download/v2.27.0/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+  chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+fi
+
+mkdir -p ${app_directory}
+
+if [ -n "${repo_url}" ]; then
+  if [ ! -d "${app_directory}/.git" ]; then
+    git clone --branch ${repo_branch} ${repo_url} ${app_directory}
+  else
+    git -C ${app_directory} fetch origin ${repo_branch}
+    git -C ${app_directory} checkout ${repo_branch}
+    git -C ${app_directory} pull --ff-only origin ${repo_branch}
+  fi
+fi
+
+chown -R ec2-user:ec2-user ${app_directory}
