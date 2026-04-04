@@ -37,6 +37,12 @@ const backendServices = [
     port: 3003,
     command: [npmCommand, ['run', 'start:dev']],
   },
+  {
+    name: 'wellness-service',
+    cwd: path.join(repoRoot, 'services', 'wellness-service'),
+    port: 3004,
+    command: [npmCommand, ['run', 'dev']],
+  },
 ];
 
 const webService = {

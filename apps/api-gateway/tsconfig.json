@@ -28,7 +28,8 @@
     "src/**/*",
     "../../services/auth-service/src/**/*",
     "../../services/chat-service/src/**/*",
-    "../../services/user-service/src/**/*"
+    "../../services/user-service/src/**/*",
+    "../../services/wellness-service/src/**/*"
   ],
   "exclude": ["node_modules", "dist"]
 }

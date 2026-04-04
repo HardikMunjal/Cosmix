@@ -9,6 +9,7 @@ services:
       - auth-service
       - chat-service
       - user-service
+      - wellness-service
 
   auth-service:
     build:
@@ -31,6 +32,13 @@ services:
     ports:
       - "3003:3003"
 
+  wellness-service:
+    build:
+      context: ..
+      dockerfile: services/wellness-service/Dockerfile
+    ports:
+      - "3004:3004"
+
   web:
     build:
       context: ..
@@ -40,6 +48,7 @@ services:
     depends_on:
       - api-gateway
       - chat-service
+      - wellness-service
 
   postgres:
     image: postgres:13

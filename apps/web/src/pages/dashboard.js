@@ -69,6 +69,7 @@ export default function Dashboard() {
         <Card title="📈 Nifty 50" desc="Create live NSE strategies" onClick={() => router.push('/stocks')} />
         <Card title="🧮 Nifty Options" desc="Calculate payoff, max loss and max profit" onClick={() => router.push('/options-strategy')} />
         <Card title="🧠 Expected Option Prices" desc="See CE and PE estimates from multiple pricing formulas" onClick={() => router.push('/expected-option-prices')} />
+        <Card title="🤖 Wellness Robot" desc="Track daily habits, hear guidance, and align activity with travel goals" onClick={() => router.push('/wellness')} />
         <Card title="🖼️ Gallery" desc="View uploaded media" onClick={() => router.push('/gallery')} />
         <Card title="👤 Profile" desc="View your profile" onClick={() => router.push('/profile')} />
       </div>
