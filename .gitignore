@@ -38,7 +38,7 @@ web-build/
 # OS / editor files
 .DS_Store
 Thumbs.db
-.vscode/tasks.json
+.vscode/
 
 # Local runtime data
 *.pid
