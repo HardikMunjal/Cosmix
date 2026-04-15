@@ -271,6 +271,17 @@ function parseStrikeList(raw, fallbackSpot, strikeGap, strikeLevelsEachSide) {
   return values.length ? values : buildCenteredStrikes(fallbackSpot);
 }
 
+function parseScenarioSpotList(raw) {
+  if (!raw) return [];
+  return [...new Set(
+    String(raw)
+      .split(',')
+      .map((value) => parseOptionalNumber(value))
+      .filter((value) => Number.isFinite(value) && value >= 0)
+      .map((value) => Number(value.toFixed(2))),
+  )].sort((left, right) => left - right);
+}
+
 function normalPdf(x) {
   return Math.exp((-0.5) * x * x) / Math.sqrt(2 * Math.PI);
 }
@@ -380,6 +391,77 @@ function resolvePremiumValue(liveContract) {
   if (liveContract.price > 0) return Number(liveContract.price.toFixed(2));
   if ((liveContract.bid + liveContract.ask) > 0) return Number((((liveContract.bid + liveContract.ask) / 2)).toFixed(2));
   return null;
+}
+
+function buildContractSnapshot({
+  referenceSpot,
+  expiryUnix,
+  expiryLabel,
+  strike,
+  type,
+  liveContract,
+  indiaVix,
+  config,
+  includeLivePremium = true,
+}) {
+  const secondsToExpiry = Math.max(expiryUnix - Math.floor(Date.now() / 1000), 0);
+  const timeYears = secondsToExpiry / (365 * 24 * 60 * 60);
+  const livePremium = includeLivePremium ? resolvePremiumValue(liveContract) : null;
+  const liveIv = liveContract?.iv && liveContract.iv > 0 ? Number(liveContract.iv) : null;
+
+  const baseVolatility = liveIv ?? indiaVix ?? config.baseVolatility;
+  const derivedVol = getTheoreticalVolatility({
+    spot: referenceSpot,
+    strike,
+    timeYears,
+    type,
+    config: {
+      ...config,
+      baseVolatility,
+    },
+  });
+  const volatilitySource = liveIv != null
+    ? 'nse-implied-volatility'
+    : indiaVix != null
+      ? 'india-vix-derived-smile'
+      : 'config-fallback-smile';
+  const riskFreeRate = config.riskFreeRate / 100;
+
+  const results = {
+    intrinsic: optionIntrinsic(type, strike, referenceSpot),
+    blackScholes: blackScholesPrice({ spot: referenceSpot, strike, timeYears, volatility: derivedVol, riskFreeRate, type }),
+    binomialCrr: binomialCrrPrice({ spot: referenceSpot, strike, timeYears, volatility: derivedVol, riskFreeRate, type }),
+    bachelier: bachelierPrice({ spot: referenceSpot, strike, timeYears, volatility: derivedVol, riskFreeRate, type }),
+    monteCarlo: monteCarloGbmPrice({
+      spot: referenceSpot,
+      strike,
+      timeYears,
+      volatility: derivedVol,
+      riskFreeRate,
+      type,
+      seed: Math.round(referenceSpot + strike + expiryUnix + (type === 'CE' ? 1 : 7)),
+    }),
+  };
+
+  const formulaResults = FORMULAS.map((formula) => ({
+    key: formula.key,
+    name: formula.name,
+    price: Number(results[formula.key].toFixed(2)),
+  }));
+
+  return {
+    expiryUnix,
+    expiryLabel,
+    strike,
+    type,
+    livePremium: livePremium != null ? Number(livePremium.toFixed(2)) : null,
+    liveIv,
+    appliedVolatility: Number((derivedVol * 100).toFixed(2)),
+    volatilitySource,
+    openInterest: liveContract?.oi ?? null,
+    timeToExpiryDays: Number((timeYears * 365).toFixed(2)),
+    formulaResults,
+  };
 }
 
 function buildStrategyPremiumLookup({ strikeUniverse, expiryNameMap, contractMap, referenceSpot, indiaVix, config }) {
@@ -826,6 +908,7 @@ export default async function handler(req, res) {
   const strikeGap = parseStrikeGap(strikeGapQuery);
   const strikeLevelsEachSide = parsePositiveInteger(strikeLevelsQuery, 3);
   const expiryCount = parsePositiveInteger(expiryCountQuery, 1);
+  const scenarioSpots = parseScenarioSpotList(req.query.scenarioSpots);
 
   let liveSpot = null;
   let liveSpotSource = 'manual-input';
@@ -871,61 +954,43 @@ export default async function handler(req, res) {
 
   const contracts = expiries.flatMap((expiryUnix) => {
     const expiryLabel = expiryNameMap.get(expiryUnix) || formatExpiryLabel(expiryUnix);
-    const secondsToExpiry = Math.max(expiryUnix - Math.floor(Date.now() / 1000), 0);
-    const timeYears = secondsToExpiry / (365 * 24 * 60 * 60);
 
     return strikes.flatMap((strike) => ['CE', 'PE'].map((type) => {
       const liveContract = resolveLiveContract(contractMap, expiryLabel, expiryUnix, strike, type);
-      const livePremium = resolvePremiumValue(liveContract);
-      const liveIv = liveContract?.iv && liveContract.iv > 0 ? Number(liveContract.iv) : null;
-
-      const baseVolatility = liveIv ?? indiaVix ?? config.baseVolatility;
-      const derivedVol = getTheoreticalVolatility({
-        spot: referenceSpot,
-        strike,
-        timeYears,
-        type,
-        config: {
-          ...config,
-          baseVolatility,
-        },
-      });
-      const volatilitySource = liveIv != null
-        ? 'nse-implied-volatility'
-        : indiaVix != null
-          ? 'india-vix-derived-smile'
-          : 'config-fallback-smile';
-      const riskFreeRate = config.riskFreeRate / 100;
-
-      const results = {
-        intrinsic: optionIntrinsic(type, strike, referenceSpot),
-        blackScholes: blackScholesPrice({ spot: referenceSpot, strike, timeYears, volatility: derivedVol, riskFreeRate, type }),
-        binomialCrr: binomialCrrPrice({ spot: referenceSpot, strike, timeYears, volatility: derivedVol, riskFreeRate, type }),
-        bachelier: bachelierPrice({ spot: referenceSpot, strike, timeYears, volatility: derivedVol, riskFreeRate, type }),
-        monteCarlo: monteCarloGbmPrice({ spot: referenceSpot, strike, timeYears, volatility: derivedVol, riskFreeRate, type, seed: Math.round(referenceSpot + strike + expiryUnix + (type === 'CE' ? 1 : 7)) }),
-      };
-
-      const formulaResults = FORMULAS.map((formula) => ({
-        key: formula.key,
-        name: formula.name,
-        price: Number(results[formula.key].toFixed(2)),
-      }));
-
-      return {
+      return buildContractSnapshot({
+        referenceSpot,
         expiryUnix,
         expiryLabel,
         strike,
         type,
-        livePremium: livePremium != null ? Number(livePremium.toFixed(2)) : null,
-        liveIv,
-        appliedVolatility: Number((derivedVol * 100).toFixed(2)),
-        volatilitySource,
-        openInterest: liveContract?.oi ?? null,
-        timeToExpiryDays: Number((timeYears * 365).toFixed(2)),
-        formulaResults,
-      };
+        liveContract,
+        indiaVix,
+        config,
+        includeLivePremium: true,
+      });
     }));
   });
+
+  const scenarioContracts = scenarioSpots.map((scenarioSpot) => ({
+    spot: Number(scenarioSpot.toFixed(2)),
+    contracts: expiries.flatMap((expiryUnix) => {
+      const expiryLabel = expiryNameMap.get(expiryUnix) || formatExpiryLabel(expiryUnix);
+      return strikes.flatMap((strike) => ['CE', 'PE'].map((type) => {
+        const liveContract = resolveLiveContract(contractMap, expiryLabel, expiryUnix, strike, type);
+        return buildContractSnapshot({
+          referenceSpot: scenarioSpot,
+          expiryUnix,
+          expiryLabel,
+          strike,
+          type,
+          liveContract,
+          indiaVix,
+          config,
+          includeLivePremium: false,
+        });
+      }));
+    }),
+  }));
 
   const strikeUniverse = buildStrikeUniverse({
     chainData,
@@ -962,6 +1027,7 @@ export default async function handler(req, res) {
     })),
     formulas: FORMULAS,
     contracts,
+    scenarioContracts,
     strategySuggestions,
     inputs: {
       riskFreeRate: config.riskFreeRate,

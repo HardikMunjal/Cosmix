@@ -4,25 +4,78 @@ const indexConfig = [
     symbol: '^NSEI',
     name: 'Nifty 50',
     fallback: 22450.35,
+    flag: '🇮🇳',
   },
   {
     key: 'BANKNIFTY',
     symbol: '^NSEBANK',
     name: 'Bank Nifty',
     fallback: 48120.6,
+    flag: '🏦',
   },
   {
     key: 'SENSEX',
     symbol: '^BSESN',
     name: 'Sensex',
-    fallback: 73810.25,
+    fallback: 76800.0,
+    flag: '🇮🇳',
+  },
+  {
+    key: 'INDIAVIX',
+    symbol: '^INDIAVIX',
+    name: 'India VIX',
+    fallback: 14.8,
+    flag: '⚡',
+  },
+  {
+    key: 'DOWFUT',
+    symbol: 'YM=F',
+    name: 'Dow Futures',
+    fallback: 39200.0,
+    flag: '🇺🇸',
+  },
+  {
+    key: 'SP500FUT',
+    symbol: 'ES=F',
+    name: 'S&P 500 Fut',
+    fallback: 5250.0,
+    flag: '🇺🇸',
+  },
+  {
+    key: 'HANGSENG',
+    symbol: '^HSI',
+    name: 'Hang Seng',
+    fallback: 17650.0,
+    flag: '🇭🇰',
+  },
+  {
+    key: 'NIKKEI',
+    symbol: '^N225',
+    name: 'Nikkei 225',
+    fallback: 38400.0,
+    flag: '🇯🇵',
+  },
+  {
+    key: 'DAX',
+    symbol: '^GDAXI',
+    name: 'DAX',
+    fallback: 18200.0,
+    flag: '🇩🇪',
+  },
+  {
+    key: 'FTSE',
+    symbol: '^FTSE',
+    name: 'FTSE 100',
+    fallback: 8100.0,
+    flag: '🇬🇧',
   },
 ];
 
 function buildFallbackIndex(index) {
   const history = Array.from({ length: 20 }, (_, idx) => {
-    const wave = Math.sin(idx / 2.5) * 0.006;
-    const drift = (idx - 10) * 0.0008;
+    const isVolatilityIndex = index.key === 'INDIAVIX';
+    const wave = Math.sin(idx / 2.5) * (isVolatilityIndex ? 0.028 : 0.006);
+    const drift = (idx - 10) * (isVolatilityIndex ? 0.0018 : 0.0008);
     return Number((index.fallback * (1 + wave + drift)).toFixed(2));
   });
   const price = history[history.length - 1];
@@ -34,6 +87,7 @@ function buildFallbackIndex(index) {
     key: index.key,
     symbol: index.symbol,
     name: index.name,
+    flag: index.flag || '',
     price,
     previousClose,
     change,
@@ -66,8 +120,10 @@ async function fetchIndex(index) {
       throw new Error('Index payload missing data');
     }
 
-    const price = Number((meta.regularMarketPrice ?? closes[closes.length - 1]).toFixed(2));
-    const previousClose = Number((meta.previousClose ?? meta.chartPreviousClose ?? closes[closes.length - 2] ?? price).toFixed(2));
+    const latestClose = closes[closes.length - 1];
+    const previousDailyClose = closes[closes.length - 2] ?? meta.previousClose ?? meta.chartPreviousClose ?? latestClose;
+    const price = Number((meta.regularMarketPrice ?? latestClose).toFixed(2));
+    const previousClose = Number(previousDailyClose.toFixed(2));
     const change = Number((price - previousClose).toFixed(2));
     const changePercent = Number(((change / previousClose) * 100).toFixed(2));
 
@@ -75,16 +131,19 @@ async function fetchIndex(index) {
       key: index.key,
       symbol: index.symbol,
       name: index.name,
+      flag: index.flag || '',
       price,
       previousClose,
       change,
       changePercent,
       history: closes.slice(-20).map((value) => Number(value.toFixed(2))),
+      changeWindow: '1D',
       source: 'yahoo-finance-public',
     };
   } catch (error) {
     return {
       ...buildFallbackIndex(index),
+      changeWindow: '1D',
       warning: error.message,
     };
   }

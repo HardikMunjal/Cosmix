@@ -379,9 +379,46 @@ export default function OptionsStrategyScreen() {
         (points[i - 1].pnl < 0 && points[i].pnl >= 0) ||
         (points[i - 1].pnl >= 0 && points[i].pnl < 0)
       ) {
-        breakevens.push(((points[i - 1].s + points[i].s) / 2).toFixed(0));
+        const prev = points[i - 1];
+        const cur = points[i];
+        const ratio = Math.abs(prev.pnl) / (Math.abs(prev.pnl) + Math.abs(cur.pnl));
+        breakevens.push(Math.round(prev.s + ratio * (cur.s - prev.s)).toString());
       }
     }
+
+    // Compute profit and loss zones
+    const profitZones = [];
+    const lossZones = [];
+    let zoneStart = null;
+    let zoneType = null;
+    for (let i = 0; i < points.length; i++) {
+      const currentType = points[i].pnl >= 0 ? 'profit' : 'loss';
+      if (zoneType === null) {
+        zoneStart = points[i].s;
+        zoneType = currentType;
+      } else if (currentType !== zoneType) {
+        const prev = points[i - 1];
+        const cur = points[i];
+        const ratio = Math.abs(prev.pnl) / (Math.abs(prev.pnl) + Math.abs(cur.pnl));
+        const boundary = Math.round(prev.s + ratio * (cur.s - prev.s));
+        const zone = { from: zoneStart, to: boundary };
+        if (zoneType === 'profit') profitZones.push(zone);
+        else lossZones.push(zone);
+        zoneStart = boundary;
+        zoneType = currentType;
+      }
+    }
+    if (zoneType && points.length) {
+      const zone = { from: zoneStart, to: points[points.length - 1].s };
+      if (zoneType === 'profit') profitZones.push(zone);
+      else lossZones.push(zone);
+    }
+    const profitRange = profitZones.length
+      ? profitZones.map((z) => `${z.from}–${z.to}`).join(', ')
+      : 'None';
+    const lossRange = lossZones.length
+      ? lossZones.map((z) => `${z.from}–${z.to}`).join(', ')
+      : 'None';
     const totalDebit = validLegs.reduce(
       (sum, l) => sum + (l.side === 'BUY' ? Number(l.premium) : -Number(l.premium)),
       0,
@@ -429,6 +466,8 @@ export default function OptionsStrategyScreen() {
       maxPnl,
       minPnl,
       breakevens,
+      profitRange,
+      lossRange,
       totalDebit,
       entryNetPremium,
       liveCloseValue,
@@ -676,6 +715,50 @@ export default function OptionsStrategyScreen() {
             </Text>
           )}
 
+          <Text style={[styles.sectionLabel, { marginTop: 20 }]}>Strategy Dashboard</Text>
+          <View style={styles.dashboardGrid}>
+            <View style={[styles.dashboardBox, { borderColor: '#166534' }]}>
+              <Text style={styles.dashboardLabel}>MAX PROFIT</Text>
+              <Text style={[styles.dashboardValue, { color: '#22c55e' }]}>
+                {metrics.maxPnl > 99999 ? '∞' : `₹${metrics.maxPnl.toFixed(0)}`}
+              </Text>
+            </View>
+            <View style={[styles.dashboardBox, { borderColor: '#7f1d1d' }]}>
+              <Text style={styles.dashboardLabel}>MAX LOSS</Text>
+              <Text style={[styles.dashboardValue, { color: '#f87171' }]}>
+                {metrics.minPnl < -99999 ? '-∞' : `₹${Math.abs(metrics.minPnl).toFixed(0)}`}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.dashboardGrid}>
+            <View style={[styles.dashboardBox, { borderColor: '#166534' }]}>
+              <Text style={styles.dashboardLabel}>PROFIT RANGE</Text>
+              <Text style={[styles.dashboardValue, { color: '#22c55e', fontSize: 14 }]}>
+                {metrics.profitRange}
+              </Text>
+            </View>
+            <View style={[styles.dashboardBox, { borderColor: '#7f1d1d' }]}>
+              <Text style={styles.dashboardLabel}>LOSS RANGE</Text>
+              <Text style={[styles.dashboardValue, { color: '#f87171', fontSize: 14 }]}>
+                {metrics.lossRange}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.dashboardGrid}>
+            <View style={[styles.dashboardBox, { borderColor: '#1e40af' }]}>
+              <Text style={styles.dashboardLabel}>BREAKEVEN(S)</Text>
+              <Text style={[styles.dashboardValue, { fontSize: 14 }]}>
+                {metrics.breakevens.length ? metrics.breakevens.join(' / ') : '—'}
+              </Text>
+            </View>
+            <View style={[styles.dashboardBox, { borderColor: '#334155' }]}>
+              <Text style={styles.dashboardLabel}>RISK:REWARD</Text>
+              <Text style={styles.dashboardValue}>
+                {metrics.minPnl !== 0 ? `1:${Math.abs(metrics.maxPnl / metrics.minPnl).toFixed(2)}` : '—'}
+              </Text>
+            </View>
+          </View>
+
           <Text style={[styles.sectionLabel, { marginTop: 16 }]}>Payoff at Expiry</Text>
           <View style={styles.chartWrap}>
             <Svg width={CHART_W} height={CHART_H}>
@@ -737,4 +820,8 @@ const styles = StyleSheet.create({
   holdAdviceText: { color: '#cbd5e1', fontSize: 13, lineHeight: 19, marginTop: 12, textAlign: 'center' },
   breakevenText: { color: '#94a3b8', fontSize: 13, marginTop: 10, textAlign: 'center' },
   chartWrap: { marginTop: 8, backgroundColor: '#0f172a', borderRadius: 12, padding: 8, borderWidth: 1, borderColor: '#1e293b' },
+  dashboardGrid: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  dashboardBox: { flex: 1, backgroundColor: '#0f172a', borderRadius: 14, padding: 16, borderWidth: 2, alignItems: 'center' },
+  dashboardLabel: { color: '#94a3b8', fontSize: 11, fontWeight: '700', letterSpacing: 0.5, marginBottom: 8 },
+  dashboardValue: { fontSize: 20, fontWeight: '700', color: '#f8fafc' },
 });

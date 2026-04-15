@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
+import dynamic from 'next/dynamic';
+
+const RechartsComponents = dynamic(
+  () => import('recharts').then((mod) => ({
+    default: ({ children, ...props }) => children(mod),
+  })),
+  { ssr: false, loading: () => <div style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>Loading chart…</div> },
+);
 
 // Returns true during NSE market hours: 9:00 AM – 3:30 PM IST, Mon–Fri
 function isMarketOpen() {
@@ -13,6 +21,23 @@ function isMarketOpen() {
 
 const STRIKE_STEP = 50;
 const WING_DISTANCE = 500;
+const STRIKE_SELECTOR_DISTANCE = 2000;
+const PAYOFF_VIEW_DISTANCE = 2000;
+const FORMULA_BLEND_WEIGHTS = {
+  blackScholes: 0.35,
+  binomialCrr: 0.35,
+  bachelier: 0.15,
+  monteCarlo: 0.15,
+};
+const PRICING_SOURCE_OPTIONS = [
+  { value: 'blend', label: 'Formula Blend (recommended)' },
+  { value: 'blackScholes', label: 'Black-Scholes' },
+  { value: 'binomialCrr', label: 'Binomial CRR' },
+  { value: 'bachelier', label: 'Bachelier' },
+  { value: 'monteCarlo', label: 'Monte Carlo GBM' },
+  { value: 'intrinsic', label: 'Intrinsic only' },
+  { value: 'live', label: 'Live / option chain' },
+];
 
 function normalizePremium(value) {
   return Number((Number(value) || 0).toFixed(2));
@@ -36,6 +61,7 @@ function createLeg(id, side, optionType, strike, chainMap) {
     side,
     optionType,
     strike,
+    quantity: 1,
     premium: marketPremium,
     marketPremium,
     locked: false,
@@ -58,10 +84,16 @@ function buildDefaultLegs(spot, strikesList, chainMap, getNextLegId) {
 function syncLegsWithMarket(currentLegs, chainMap) {
   return currentLegs.map((leg) => {
     const latest = chainMap?.[leg.optionType]?.[Number(leg.strike)];
-    if (latest == null) return leg;
+    if (latest == null) {
+      return {
+        ...leg,
+        quantity: Math.max(1, parseInt(leg.quantity || 1, 10) || 1),
+      };
+    }
     const marketPremium = normalizePremium(latest);
     return {
       ...leg,
+      quantity: Math.max(1, parseInt(leg.quantity || 1, 10) || 1),
       marketPremium,
       premium: leg.locked ? leg.premium : marketPremium,
     };
@@ -77,30 +109,317 @@ function optionIntrinsic(optionType, strike, spot) {
 
 function legPayoffAtExpiry(leg, spot) {
   const intrinsic = optionIntrinsic(leg.optionType, leg.strike, spot);
+  const quantity = Math.max(1, parseInt(leg.quantity || 1, 10) || 1);
   const premiumEffect = leg.side === 'SELL' ? leg.premium : -leg.premium;
   const intrinsicEffect = leg.side === 'SELL' ? -intrinsic : intrinsic;
-  return premiumEffect + intrinsicEffect;
+  return (premiumEffect + intrinsicEffect) * quantity;
 }
 
-function PayoffChart({ points, minY, maxY }) {
+function formatCurrency(value) {
+  const numeric = Number(value) || 0;
+  const sign = numeric < 0 ? '-' : '';
+  return `${sign}Rs. ${Math.abs(numeric).toLocaleString('en-IN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+function getPricingSourceLabel(value) {
+  return PRICING_SOURCE_OPTIONS.find((option) => option.value === value)?.label || 'Formula Blend';
+}
+
+function getPreferredFormulaPrice(contract, pricingSource = 'blend') {
+  const formulaMap = Object.fromEntries((contract?.formulaResults || []).map((entry) => [entry.key, Number(entry.price)]));
+
+  if (pricingSource === 'live') {
+    return normalizePremium(contract?.livePremium ?? formulaMap.blackScholes ?? formulaMap.intrinsic ?? 0);
+  }
+
+  if (pricingSource !== 'blend') {
+    return normalizePremium(formulaMap[pricingSource] ?? contract?.livePremium ?? formulaMap.blackScholes ?? formulaMap.intrinsic ?? 0);
+  }
+
+  const weightedEntries = Object.entries(FORMULA_BLEND_WEIGHTS)
+    .map(([key, weight]) => ({ value: Number(formulaMap[key]), weight }))
+    .filter((entry) => Number.isFinite(entry.value));
+
+  if (weightedEntries.length) {
+    const weightedTotal = weightedEntries.reduce((sum, entry) => sum + (entry.value * entry.weight), 0);
+    const totalWeight = weightedEntries.reduce((sum, entry) => sum + entry.weight, 0) || 1;
+    return normalizePremium(weightedTotal / totalWeight);
+  }
+
+  return normalizePremium(contract?.livePremium ?? formulaMap.blackScholes ?? formulaMap.intrinsic ?? 0);
+}
+
+function buildQuoteMapsFromRows(rows = [], getPrice = (row) => row.price || row.lastPrice || row.bid || row.ask || 0, getIv = (row) => row.iv ?? row.appliedVolatility ?? null) {
+  const map = { CE: {}, PE: {} };
+  const ivSnapshot = { CE: {}, PE: {} };
+
+  rows.forEach((row) => {
+    if (!map[row.type]) return;
+    map[row.type][Number(row.strike)] = normalizePremium(getPrice(row));
+    ivSnapshot[row.type][Number(row.strike)] = getIv(row);
+  });
+
+  return { map, ivSnapshot };
+}
+
+function mergeQuoteMaps(baseMap = { CE: {}, PE: {} }, overlayMap = { CE: {}, PE: {} }) {
+  return {
+    CE: { ...(baseMap.CE || {}), ...(overlayMap.CE || {}) },
+    PE: { ...(baseMap.PE || {}), ...(overlayMap.PE || {}) },
+  };
+}
+
+function PayoffChart({ points, minY, maxY, currentSpot, breakEvens = [] }) {
+  if (!points.length) {
+    return null;
+  }
+  const containerRef = useRef(null);
+  const [hover, setHover] = useState(null);
+
+  const spotMin = points[0].spot;
+  const spotMax = points[points.length - 1].spot;
+  const rangeX = spotMax - spotMin || 1;
+  const lowY = Math.min(minY, 0);
+  const highY = Math.max(maxY, 0);
+  const rangeY = highY - lowY || 1;
+
+  // Chart area within SVG (leaving room for axes)
+  const W = 100, H = 100;
+  const pad = { left: 14, right: 2, top: 4, bottom: 10 };
+  const cw = W - pad.left - pad.right;
+  const ch = H - pad.top - pad.bottom;
+
+  const xForSpot = (spot) => pad.left + ((spot - spotMin) / rangeX) * cw;
+  const yForValue = (value) => pad.top + ch - ((value - lowY) / rangeY) * ch;
+  const zeroY = yForValue(0);
+
+  // Build polyline
+  const polyline = points.map((p) => `${xForSpot(p.spot).toFixed(2)},${yForValue(p.value).toFixed(2)}`).join(' ');
+
+  // Build profit area (above zero, clamp at zero)
+  const profitPath = points.map((p, i) => {
+    const x = xForSpot(p.spot).toFixed(2);
+    const y = yForValue(Math.max(p.value, 0)).toFixed(2);
+    return `${i === 0 ? 'M' : 'L'}${x},${y}`;
+  }).join(' ') + ` L${xForSpot(spotMax).toFixed(2)},${zeroY.toFixed(2)} L${xForSpot(spotMin).toFixed(2)},${zeroY.toFixed(2)} Z`;
+
+  // Build loss area (below zero, clamp at zero)
+  const lossPath = points.map((p, i) => {
+    const x = xForSpot(p.spot).toFixed(2);
+    const y = yForValue(Math.min(p.value, 0)).toFixed(2);
+    return `${i === 0 ? 'M' : 'L'}${x},${y}`;
+  }).join(' ') + ` L${xForSpot(spotMax).toFixed(2)},${zeroY.toFixed(2)} L${xForSpot(spotMin).toFixed(2)},${zeroY.toFixed(2)} Z`;
+
+  // X-axis ticks (5-7 values)
+  const xTickCount = 6;
+  const xTicks = [];
+  for (let i = 0; i <= xTickCount; i++) {
+    const spot = spotMin + (rangeX * i) / xTickCount;
+    xTicks.push(Math.round(spot));
+  }
+
+  // Y-axis ticks (5 values)
+  const yTickCount = 5;
+  const yTicks = [];
+  for (let i = 0; i <= yTickCount; i++) {
+    const val = lowY + (rangeY * i) / yTickCount;
+    yTicks.push(Math.round(val));
+  }
+
+  const maxPoint = points.reduce((best, p) => (p.value > best.value ? p : best), points[0]);
+  const minPoint = points.reduce((best, p) => (p.value < best.value ? p : best), points[0]);
+
+  function handleMouseMove(e) {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const xPct = (e.clientX - rect.left) / rect.width;
+    const spotAtCursor = spotMin + xPct * rangeX;
+    // Find nearest point
+    let closest = points[0];
+    let minDist = Infinity;
+    for (const p of points) {
+      const dist = Math.abs(p.spot - spotAtCursor);
+      if (dist < minDist) { minDist = dist; closest = p; }
+    }
+    setHover({ spot: closest.spot, value: closest.value, x: e.clientX - rect.left, y: e.clientY - rect.top });
+  }
+
+  return (
+    <div>
+      <div ref={containerRef} style={{ position: 'relative' }} onMouseMove={handleMouseMove} onMouseLeave={() => setHover(null)}>
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          preserveAspectRatio="none"
+          style={{ width: '100%', height: '280px', borderRadius: '12px', background: 'linear-gradient(180deg, #031525, #020617)', display: 'block' }}
+        >
+          {/* grid lines */}
+          {yTicks.map((v) => (
+            <line key={`yg-${v}`} x1={pad.left} y1={yForValue(v)} x2={W - pad.right} y2={yForValue(v)} stroke="rgba(148,163,184,0.1)" strokeWidth="0.2" />
+          ))}
+          {xTicks.map((s) => (
+            <line key={`xg-${s}`} x1={xForSpot(s)} y1={pad.top} x2={xForSpot(s)} y2={H - pad.bottom} stroke="rgba(148,163,184,0.08)" strokeWidth="0.2" />
+          ))}
+
+          {/* profit area (green) */}
+          <path d={profitPath} fill="rgba(34,197,94,0.18)" />
+          {/* loss area (red) */}
+          <path d={lossPath} fill="rgba(248,113,113,0.18)" />
+
+          {/* zero line */}
+          <line x1={pad.left} y1={zeroY} x2={W - pad.right} y2={zeroY} stroke="#94a3b8" strokeWidth="0.3" strokeDasharray="1 1" />
+
+          {/* current spot vertical */}
+          <line x1={xForSpot(currentSpot)} y1={pad.top} x2={xForSpot(currentSpot)} y2={H - pad.bottom} stroke="#38bdf8" strokeDasharray="1 0.8" strokeWidth="0.4" />
+
+          {/* breakeven verticals */}
+          {breakEvens.map((v) => (
+            <line key={`be-${v}`} x1={xForSpot(Number(v))} y1={pad.top} x2={xForSpot(Number(v))} y2={H - pad.bottom} stroke="#fbbf24" strokeDasharray="0.8 1" strokeWidth="0.3" />
+          ))}
+
+          {/* payoff curve */}
+          <polyline fill="none" stroke="#22c55e" strokeWidth="0.8" points={polyline} />
+
+          {/* max/min markers */}
+          <circle cx={xForSpot(maxPoint.spot)} cy={yForValue(maxPoint.value)} r="0.8" fill="#22c55e" stroke="#fff" strokeWidth="0.3" />
+          <circle cx={xForSpot(minPoint.spot)} cy={yForValue(minPoint.value)} r="0.8" fill="#f87171" stroke="#fff" strokeWidth="0.3" />
+
+          {/* Y axis labels */}
+          {yTicks.map((v) => (
+            <text key={`yl-${v}`} x={pad.left - 1} y={yForValue(v) + 0.8} fill="#94a3b8" fontSize="2.5" textAnchor="end" dominantBaseline="middle">
+              {Math.abs(v) >= 100000 ? `${(v / 1000).toFixed(0)}k` : v.toLocaleString()}
+            </text>
+          ))}
+
+          {/* X axis labels */}
+          {xTicks.map((s) => (
+            <text key={`xl-${s}`} x={xForSpot(s)} y={H - pad.bottom + 4} fill="#94a3b8" fontSize="2.3" textAnchor="middle">
+              {s.toLocaleString()}
+            </text>
+          ))}
+
+          {/* axis labels */}
+          <text x={pad.left - 1} y={pad.top - 1.5} fill="#64748b" fontSize="2" textAnchor="end">P/L (₹)</text>
+          <text x={W - pad.right} y={H - pad.bottom + 7} fill="#64748b" fontSize="2" textAnchor="end">Spot →</text>
+
+          {/* hover crosshair */}
+          {hover && (
+            <>
+              <line x1={xForSpot(hover.spot)} y1={pad.top} x2={xForSpot(hover.spot)} y2={H - pad.bottom} stroke="rgba(255,255,255,0.5)" strokeWidth="0.2" />
+              <line x1={pad.left} y1={yForValue(hover.value)} x2={W - pad.right} y2={yForValue(hover.value)} stroke="rgba(255,255,255,0.3)" strokeWidth="0.2" strokeDasharray="0.5 0.5" />
+              <circle cx={xForSpot(hover.spot)} cy={yForValue(hover.value)} r="0.7" fill={hover.value >= 0 ? '#22c55e' : '#f87171'} stroke="#fff" strokeWidth="0.3" />
+            </>
+          )}
+        </svg>
+
+        {/* hover tooltip */}
+        {hover && (
+          <div style={{
+            position: 'absolute',
+            left: Math.min(hover.x + 10, (containerRef.current?.offsetWidth || 400) - 160),
+            top: Math.max(hover.y - 50, 4),
+            background: 'rgba(2,6,23,0.92)',
+            border: '1px solid rgba(148,163,184,0.3)',
+            borderRadius: 8,
+            padding: '6px 10px',
+            pointerEvents: 'none',
+            zIndex: 10,
+            minWidth: 120,
+          }}>
+            <div style={{ fontSize: 11, color: '#94a3b8' }}>Spot: <strong style={{ color: '#e2e8f0' }}>{hover.spot.toLocaleString()}</strong></div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: hover.value >= 0 ? '#22c55e' : '#f87171', marginTop: 2 }}>
+              {hover.value >= 0 ? '+' : ''}{hover.value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div style={styles.chartLegend}>
+        <span>🟢 Profit zone</span>
+        <span>🔴 Loss zone</span>
+        <span>🟦 Current spot ({Number(currentSpot || 0).toLocaleString()})</span>
+        <span>🟨 Breakeven</span>
+      </div>
+    </div>
+  );
+}
+
+function RangeMapChart({ points, profitZones = [], lossZones = [], currentSpot, breakEvens = [] }) {
   if (!points.length) {
     return null;
   }
 
-  const rangeY = maxY - minY || 1;
-  const polyline = points
-    .map((point, index) => {
-      const x = (index / (points.length - 1)) * 100;
-      const y = 110 - ((point.value - minY) / rangeY) * 100;
-      return `${x},${y}`;
-    })
-    .join(' ');
+  const rangeStart = points[0].spot;
+  const rangeEnd = points[points.length - 1].spot;
+  const totalRange = rangeEnd - rangeStart || 1;
+  const leftPct = (value) => Math.max(0, Math.min(100, ((Number(value) - rangeStart) / totalRange) * 100));
 
   return (
-    <svg viewBox="0 0 100 110" preserveAspectRatio="none" style={{ width: '100%', height: '220px' }}>
-      <line x1="0" y1="55" x2="100" y2="55" stroke="#334155" strokeDasharray="2 2" />
-      <polyline fill="none" stroke="#22c55e" strokeWidth="2.5" points={polyline} />
-    </svg>
+    <div style={styles.rangeChartWrap}>
+      <div style={styles.rangeTrack} />
+      {lossZones.map((zone, index) => (
+        <div
+          key={`loss-${zone.from}-${zone.to}-${index}`}
+          style={{
+            ...styles.rangeSegment,
+            left: `${leftPct(zone.from)}%`,
+            width: `${Math.max(2, leftPct(zone.to) - leftPct(zone.from))}%`,
+            background: '#b91c1c',
+          }}
+        />
+      ))}
+      {profitZones.map((zone, index) => (
+        <div
+          key={`profit-${zone.from}-${zone.to}-${index}`}
+          style={{
+            ...styles.rangeSegment,
+            left: `${leftPct(zone.from)}%`,
+            width: `${Math.max(2, leftPct(zone.to) - leftPct(zone.from))}%`,
+            background: '#15803d',
+          }}
+        />
+      ))}
+      <div style={{ ...styles.currentMarker, left: `${leftPct(currentSpot)}%` }} />
+      {breakEvens.map((value) => (
+        <div key={`be-${value}`} style={{ ...styles.breakEvenMarker, left: `${leftPct(value)}%` }} />
+      ))}
+      <div style={styles.chartLegend}>
+        <span>🟩 Profit range</span>
+        <span>🟥 Loss range</span>
+        <span>🟦 Current spot</span>
+      </div>
+      <div style={styles.chartMetaRow}>
+        <span>{rangeStart}</span>
+        <span>Break-evens {breakEvens.length ? breakEvens.join(', ') : '—'}</span>
+        <span>{rangeEnd}</span>
+      </div>
+    </div>
+  );
+}
+
+function MetricBarChart({ items = [] }) {
+  const scale = Math.max(...items.map((item) => Math.abs(Number(item.value) || 0)), 1);
+
+  return (
+    <div style={styles.barChartWrap}>
+      {items.map((item) => {
+        const numeric = Number(item.value) || 0;
+        const width = `${Math.max(5, (Math.abs(numeric) / scale) * 100)}%`;
+        return (
+          <div key={item.label} style={styles.barRow}>
+            <div style={styles.barLabel}>{item.label}</div>
+            <div style={styles.barTrack}>
+              <div style={{ ...styles.barFill, width, background: item.color }} />
+            </div>
+            <div style={{ ...styles.barValue, color: item.color }}>
+              {numeric >= 0 ? '+' : '-'}{Math.abs(numeric).toFixed(0)}
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -115,6 +434,8 @@ export default function OptionsStrategy() {
   const initializedDefaultsRef = useRef(false);
   const [user, setUser] = useState(null);
   const [spotPrice, setSpotPrice] = useState(23000);
+  const spotPriceRef = useRef(23000);
+  useEffect(() => { spotPriceRef.current = spotPrice; }, [spotPrice]);
   const [lotSize, setLotSize] = useState(65);
   const [expiryOptions, setExpiryOptions] = useState([]);
   const [selectedExpiry, setSelectedExpiry] = useState(null);
@@ -136,11 +457,141 @@ export default function OptionsStrategy() {
   const [sourceWarning, setSourceWarning] = useState('');
   const [ivInput, setIvInput] = useState('');
   const [rateInput, setRateInput] = useState('');
+  const [pricingSource, setPricingSource] = useState('blend');
+  const [strategyName, setStrategyName] = useState('My Saved Strategy');
+  const [savedStrategies, setSavedStrategies] = useState([]);
+  const [saveLoading, setSaveLoading] = useState(false);
+  const [saveMessage, setSaveMessage] = useState('');
+  const [editingStrategyId, setEditingStrategyId] = useState(null);
+
+  // Persist legs + key settings to sessionStorage so they survive page refresh
+  useEffect(() => {
+    if (!legs.length) return;
+    try {
+      sessionStorage.setItem('nifty-strategy-legs', JSON.stringify(legs));
+      sessionStorage.setItem('nifty-strategy-meta', JSON.stringify({
+        spotPrice, lotSize, pricingSource, ivInput, rateInput, selectedExpiry, strategyName, editingStrategyId,
+      }));
+    } catch (_) { /* ignore */ }
+  }, [legs, spotPrice, lotSize, pricingSource, ivInput, rateInput, selectedExpiry, strategyName, editingStrategyId]);
+
+  // Restore legs from sessionStorage on mount (before first market data fetch)
+  useEffect(() => {
+    try {
+      const savedLegs = sessionStorage.getItem('nifty-strategy-legs');
+      const savedMeta = sessionStorage.getItem('nifty-strategy-meta');
+      if (savedLegs) {
+        const parsed = JSON.parse(savedLegs);
+        if (Array.isArray(parsed) && parsed.length) {
+          nextLegIdRef.current = Math.max(1, ...parsed.map((l) => Number(l.id) || 0)) + 1;
+          setLegs(parsed);
+          initializedDefaultsRef.current = true;
+        }
+      }
+      if (savedMeta) {
+        const meta = JSON.parse(savedMeta);
+        if (meta.lotSize) setLotSize(meta.lotSize);
+        if (meta.pricingSource) setPricingSource(meta.pricingSource);
+        if (meta.ivInput) setIvInput(meta.ivInput);
+        if (meta.rateInput) setRateInput(meta.rateInput);
+        if (meta.strategyName) setStrategyName(meta.strategyName);
+        if (meta.editingStrategyId) setEditingStrategyId(meta.editingStrategyId);
+      }
+    } catch (_) { /* ignore */ }
+  }, []);
+
+  const loadedStrategyRef = useRef(null);
   const selectedExpiryRef = useRef(selectedExpiry);
   useEffect(() => { selectedExpiryRef.current = selectedExpiry; }, [selectedExpiry]);
   const pricingInputsRef = useRef({ ivInput: '', rateInput: '' });
   useEffect(() => { pricingInputsRef.current = { ivInput, rateInput }; }, [ivInput, rateInput]);
   const pricingHydratedRef = useRef(false);
+  const [optimizerResult, setOptimizerResult] = useState(null);
+  const [optimizerLoading, setOptimizerLoading] = useState(false);
+  const [optimizerError, setOptimizerError] = useState('');
+  const [calendarResult, setCalendarResult] = useState(null);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+  const [calendarError, setCalendarError] = useState('');
+  const [calSellExpiry, setCalSellExpiry] = useState('');
+  const [calBuyExpiry, setCalBuyExpiry] = useState('');
+
+  const runOptimizer = async () => {
+    setOptimizerLoading(true);
+    setOptimizerError('');
+    setOptimizerResult(null);
+    try {
+      const response = await fetch('/api/options-best-strategies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          spot: spotPrice,
+          lotSize,
+          pricingSource,
+          rate: Number(rateInput) || 6,
+          iv: Number(ivInput) || 14,
+          expiry: selectedExpiry || 0,
+          strikeRange: 2000,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Optimizer failed');
+      setOptimizerResult(data);
+    } catch (err) {
+      setOptimizerError(err.message);
+    } finally {
+      setOptimizerLoading(false);
+    }
+  };
+
+  const loadOptimizedStrategy = (strategy) => {
+    const hydratedLegs = strategy.legs.map((leg) => ({
+      id: getNextLegId(),
+      side: leg.side,
+      optionType: leg.type,
+      strike: Number(leg.strike),
+      quantity: leg.quantity,
+      premium: normalizePremium(leg.premium),
+      marketPremium: normalizePremium(leg.premium),
+      locked: false,
+    }));
+    setLegs(hydratedLegs);
+    setStrategyName(`${strategy.family || 'Optimized'} · ${strategy.legs.length} legs`);
+    setEditingStrategyId(null);
+    setSaveMessage('');
+  };
+
+  const runCalendarOptimizer = async () => {
+    if (!calSellExpiry || !calBuyExpiry) {
+      setCalendarError('Please select both Sell Expiry and Buy Expiry before running.');
+      return;
+    }
+    setCalendarLoading(true);
+    setCalendarError('');
+    setCalendarResult(null);
+    try {
+      const response = await fetch('/api/options-best-strategies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          spot: spotPrice,
+          lotSize,
+          pricingSource,
+          rate: Number(rateInput) || 6,
+          iv: Number(ivInput) || 14,
+          calendar: true,
+          sellExpiry: Number(calSellExpiry),
+          buyExpiry: Number(calBuyExpiry),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Calendar optimizer failed');
+      setCalendarResult(data);
+    } catch (err) {
+      setCalendarError(err.message);
+    } finally {
+      setCalendarLoading(false);
+    }
+  };
 
   const buildChainUrl = (expiryValue) => {
     const params = new URLSearchParams({ symbol: 'NIFTY' });
@@ -148,6 +599,69 @@ export default function OptionsStrategy() {
     if (pricingInputsRef.current.ivInput) params.set('iv', pricingInputsRef.current.ivInput);
     if (pricingInputsRef.current.rateInput) params.set('rate', pricingInputsRef.current.rateInput);
     return `/api/options-chain?${params.toString()}`;
+  };
+
+  const buildExpectedPricingUrl = (expiryValue, spotOverride = spotPrice) => {
+    const params = new URLSearchParams({
+      symbol: 'NIFTY',
+      strikeGap: String(STRIKE_STEP),
+      strikeLevels: String(Math.ceil(STRIKE_SELECTOR_DISTANCE / STRIKE_STEP)),
+      expiryCount: '1',
+    });
+    if (expiryValue) params.set('expiries', String(expiryValue));
+    if (Number.isFinite(Number(spotOverride))) params.set('spot', String(Number(spotOverride).toFixed(2)));
+    if (pricingInputsRef.current.rateInput) params.set('rate', pricingInputsRef.current.rateInput);
+    return `/api/options-expected-price?${params.toString()}`;
+  };
+
+  const syncQuoteState = async (quotePayload, expiryValue, fallbackSpot = spotPrice) => {
+    const nextSpot = quotePayload?.spot ? Number(quotePayload.spot.toFixed(2)) : Number(fallbackSpot || 0);
+    const baseMaps = buildQuoteMapsFromRows(quotePayload?.strikes || []);
+    let nextMap = baseMaps.map;
+    let nextIvMap = baseMaps.ivSnapshot;
+
+    if (expiryValue) {
+      try {
+        const formulaResponse = await fetch(buildExpectedPricingUrl(expiryValue, nextSpot));
+        const formulaData = await formulaResponse.json();
+        if (formulaResponse.ok) {
+          const formulaMaps = buildQuoteMapsFromRows(
+            formulaData.contracts || [],
+            (contract) => getPreferredFormulaPrice(contract, pricingSource),
+            (contract) => contract.appliedVolatility ?? contract.liveIv ?? null,
+          );
+          nextMap = pricingSource === 'live'
+            ? mergeQuoteMaps(formulaMaps.map, nextMap)
+            : mergeQuoteMaps(nextMap, formulaMaps.map);
+          nextIvMap = mergeQuoteMaps(nextIvMap, formulaMaps.ivSnapshot);
+        }
+      } catch (_) { /* ignore */ }
+    }
+
+    const allStrikes = [
+      ...(quotePayload?.strikes || []).map((item) => Number(item.strike)),
+      ...Object.keys(nextMap.CE || {}).map((value) => Number(value)),
+      ...Object.keys(nextMap.PE || {}).map((value) => Number(value)),
+    ].filter(Number.isFinite);
+    const unique = Array.from(new Set(allStrikes)).sort((a, b) => a - b);
+
+    if (unique.length) setStrikesList(unique);
+    if (Number.isFinite(nextSpot) && nextSpot > 0) {
+      setSpotPrice(nextSpot);
+    }
+    setChainMap(nextMap);
+    setIvMap(nextIvMap);
+    if (unique.length) {
+      applyMarketData(nextMap, nextSpot, unique);
+    }
+    if (quotePayload?.source) setLiveSource(quotePayload.source);
+    setPricingModel(quotePayload?.pricingModel || null);
+    const priceModeText = pricingSource === 'live'
+      ? 'Premium source: live / option-chain values.'
+      : `Premium source: ${getPricingSourceLabel(pricingSource)} from Expected Option Prices formulas.`;
+    setSourceWarning([quotePayload?.warning, priceModeText].filter(Boolean).join(' '));
+    setLastUpdated(new Date());
+    setSecsAgo(0);
   };
 
   // Tick seconds-ago counter every second
@@ -166,6 +680,61 @@ export default function OptionsStrategy() {
     }
     setUser(JSON.parse(storedUser));
   }, [router]);
+
+  useEffect(() => {
+    if (!user) return;
+    (async () => {
+      try {
+        const response = await fetch('/api/options-strategies');
+        const data = await response.json();
+        if (response.ok) {
+          setSavedStrategies(data.strategies || []);
+        }
+      } catch (_) { /* ignore */ }
+    })();
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || !router.isReady) return;
+    const strategyId = router.query?.strategyId;
+    if (!strategyId || loadedStrategyRef.current === String(strategyId)) return;
+
+    (async () => {
+      try {
+        const response = await fetch(`/api/options-strategies?id=${encodeURIComponent(String(strategyId))}`);
+        const data = await response.json();
+        if (!response.ok || !data.strategy) {
+          throw new Error(data.error || 'Unable to load saved strategy.');
+        }
+
+        const strategy = data.strategy;
+        loadedStrategyRef.current = String(strategy.id);
+        initializedDefaultsRef.current = true;
+        setEditingStrategyId(strategy.id);
+        setStrategyName(strategy.name || 'My Saved Strategy');
+        setLotSize(Number(strategy.lotSize) || 65);
+        setPricingSource(strategy.pricingSource || 'blend');
+        if (strategy.ivInput != null) setIvInput(String(strategy.ivInput));
+        if (strategy.rateInput != null) setRateInput(String(strategy.rateInput));
+        if (strategy.savedAtSpot) setSpotPrice(Number(strategy.savedAtSpot));
+        if (strategy.selectedExpiry) setSelectedExpiry(Number(strategy.selectedExpiry));
+
+        const hydratedLegs = (strategy.legs || []).map((leg) => ({
+          ...leg,
+          strike: Number(leg.strike),
+          quantity: Math.max(1, parseInt(leg.quantity || 1, 10) || 1),
+          premium: normalizePremium(leg.premium),
+          marketPremium: normalizePremium(leg.marketPremium ?? leg.premium),
+          locked: Boolean(leg.locked),
+        }));
+        nextLegIdRef.current = Math.max(1, ...hydratedLegs.map((leg) => Number(leg.id) || 0)) + 1;
+        setLegs(hydratedLegs);
+        setSaveMessage(`Editing "${strategy.name}". Update the legs and save to overwrite it on the dashboard.`);
+      } catch (error) {
+        setSaveMessage(error.message || 'Unable to load saved strategy.');
+      }
+    })();
+  }, [router.isReady, router.query, user]);
 
   useEffect(() => {
     const loadNifty = async () => {
@@ -201,34 +770,23 @@ export default function OptionsStrategy() {
             setSelectedExpiry(firstExpiry);
           }
           // Step 2: fetch strikes specifically for the first expiry date
-          const expParam = firstExpiry ? `&expiry=${firstExpiry}` : '';
           const er = await fetch(buildChainUrl(firstExpiry));
           const expiryData = await er.json();
           const src = expiryData.strikes?.length ? expiryData : chainData;
           if (src.strikes && src.strikes.length) {
-            const unique = Array.from(new Set(src.strikes.map((s) => Number(s.strike)))).sort((a, b) => a - b);
-            setStrikesList(unique);
-            const map = { CE: {}, PE: {} };
-            const nextIvMap = { CE: {}, PE: {} };
-            src.strikes.forEach((s) => {
-              if (map[s.type]) map[s.type][Number(s.strike)] = s.price || s.lastPrice || s.bid || s.ask || 0;
-              if (nextIvMap[s.type]) nextIvMap[s.type][Number(s.strike)] = s.iv ?? null;
-            });
-            setChainMap(map);
-            setIvMap(nextIvMap);
-            applyMarketData(map, src.spot ? Number(src.spot.toFixed(2)) : spotPrice, unique);
+            await syncQuoteState({
+              ...src,
+              source: expiryData.source || src.source,
+              pricingModel: expiryData.pricingModel || src.pricingModel,
+              warning: expiryData.warning || src.warning,
+              spot: expiryData.spot ?? src.spot,
+            }, firstExpiry, src.spot ? Number(src.spot.toFixed(2)) : spotPriceRef.current);
           }
-          if (expiryData.source) setLiveSource(expiryData.source);
-          if (expiryData.spot) setSpotPrice(Number(expiryData.spot.toFixed(2)));
-          setPricingModel(expiryData.pricingModel || null);
-          setSourceWarning(expiryData.warning || '');
           if (!pricingHydratedRef.current && expiryData.pricingModel) {
             setIvInput(String(expiryData.pricingModel.baseIv));
             setRateInput(String(expiryData.pricingModel.riskFreeRate));
             pricingHydratedRef.current = true;
           }
-          setLastUpdated(new Date());
-          setSecsAgo(0);
         } catch (e) {
           // ignore
         }
@@ -268,6 +826,10 @@ export default function OptionsStrategy() {
       }
       if (field === 'premium') {
         next.premium = normalizePremium(value);
+        // Only lock onBlur, not on every keystroke
+      }
+      if (field === 'quantity') {
+        next.quantity = Math.max(1, parseInt(value || 1, 10) || 1);
       }
       return next;
     }));
@@ -277,33 +839,49 @@ export default function OptionsStrategy() {
     setLegs((current) => current.map((leg) => {
       if (leg.id !== id) return leg;
       if (leg.locked) {
+        // Unlocking: revert to current market premium
         return {
           ...leg,
           locked: false,
           premium: leg.marketPremium ?? leg.premium,
         };
       }
+      // Locking: keep the user's current premium as-is
       return {
         ...leg,
         locked: true,
-        premium: leg.marketPremium ?? leg.premium,
       };
     }));
   };
 
-  const addStrategySet = () => {
-    setLegs((current) => [
-      ...current,
-      ...buildDefaultLegs(spotPrice, strikesList, chainMapRef.current, getNextLegId),
-    ]);
+  const MAX_LEGS = 8;
+
+  const fetchAndSetSpot = async () => {
+    try {
+      const response = await fetch('/api/market-indices');
+      const data = await response.json();
+      const nifty = (data.indices || []).find((index) => index.key === 'NIFTY50');
+      if (nifty) setSpotPrice(Number(nifty.price.toFixed(2)));
+    } catch (_) { /* ignore */ }
   };
 
-  const addCustomLeg = () => {
-    const strike = resolveStrategyStrike(spotPrice, strikesList, 0);
-    setLegs((current) => [
-      ...current,
-      createLeg(getNextLegId(), 'SELL', 'CE', strike, chainMapRef.current),
-    ]);
+  const addStrategySet = async () => {
+    await fetchAndSetSpot();
+    setLegs((current) => {
+      const defaults = buildDefaultLegs(spotPriceRef.current, strikesList, chainMapRef.current, getNextLegId);
+      const room = MAX_LEGS - current.length;
+      if (room <= 0) return current;
+      return [...current, ...defaults.slice(0, room)];
+    });
+  };
+
+  const addCustomLeg = async () => {
+    await fetchAndSetSpot();
+    setLegs((current) => {
+      if (current.length >= MAX_LEGS) return current;
+      const strike = resolveStrategyStrike(spotPriceRef.current, strikesList, 0);
+      return [...current, createLeg(getNextLegId(), 'SELL', 'CE', strike, chainMapRef.current)];
+    });
   };
 
   const removeLeg = (id) => {
@@ -318,22 +896,10 @@ export default function OptionsStrategy() {
         const res = await fetch(buildChainUrl(selectedExpiry));
         const data = await res.json();
         if (data.strikes && data.strikes.length) {
-          const unique = Array.from(new Set(data.strikes.map((s) => Number(s.strike)))).sort((a, b) => a - b);
-          setStrikesList(unique);
-          const map = { CE: {}, PE: {} };
-          const nextIvMap = { CE: {}, PE: {} };
-          data.strikes.forEach((s) => {
-            if (map[s.type]) map[s.type][Number(s.strike)] = s.price || s.lastPrice || s.bid || s.ask || 0;
-            if (nextIvMap[s.type]) nextIvMap[s.type][Number(s.strike)] = s.iv ?? null;
-          });
-          setChainMap(map);
-          setIvMap(nextIvMap);
-          applyMarketData(map, data.spot ? Number(data.spot.toFixed(2)) : spotPrice, unique);
+          await syncQuoteState(data, selectedExpiry, data.spot ? Number(data.spot.toFixed(2)) : spotPriceRef.current);
         } else {
           setStrikesList([]);
         }
-        setPricingModel(data.pricingModel || null);
-        setSourceWarning(data.warning || '');
       } catch (e) { /* ignore */ }
     })();
   }, [selectedExpiry]);
@@ -347,25 +913,9 @@ export default function OptionsStrategy() {
         const exp = selectedExpiryRef.current;
         const res = await fetch(buildChainUrl(exp));
         const data = await res.json();
-        if (data.spot) setSpotPrice(Number(data.spot.toFixed(2)));
-        if (data.source) setLiveSource(data.source);
         if (data.strikes && data.strikes.length) {
-          const unique = Array.from(new Set(data.strikes.map((s) => Number(s.strike)))).sort((a, b) => a - b);
-          setStrikesList(unique);
-          const map = { CE: {}, PE: {} };
-          const nextIvMap = { CE: {}, PE: {} };
-          data.strikes.forEach((s) => {
-            if (map[s.type]) map[s.type][Number(s.strike)] = s.price || s.lastPrice || s.bid || s.ask || 0;
-            if (nextIvMap[s.type]) nextIvMap[s.type][Number(s.strike)] = s.iv ?? null;
-          });
-          setChainMap(map);
-          setIvMap(nextIvMap);
-          applyMarketData(map, data.spot ? Number(data.spot.toFixed(2)) : spotPrice, unique);
+          await syncQuoteState(data, exp, data.spot ? Number(data.spot.toFixed(2)) : spotPriceRef.current);
         }
-        setPricingModel(data.pricingModel || null);
-        setSourceWarning(data.warning || '');
-        setLastUpdated(new Date());
-        setSecsAgo(0);
       } catch (_) { /* ignore */ } finally {
         setLiveLoading(false);
       }
@@ -380,27 +930,88 @@ export default function OptionsStrategy() {
     try {
       const res = await fetch(buildChainUrl(selectedExpiryRef.current));
       const data = await res.json();
-      if (data.spot) setSpotPrice(Number(data.spot.toFixed(2)));
-      if (data.source) setLiveSource(data.source);
       if (data.strikes && data.strikes.length) {
-        const unique = Array.from(new Set(data.strikes.map((s) => Number(s.strike)))).sort((a, b) => a - b);
-        setStrikesList(unique);
-        const map = { CE: {}, PE: {} };
-        const nextIvMap = { CE: {}, PE: {} };
-        data.strikes.forEach((s) => {
-          if (map[s.type]) map[s.type][Number(s.strike)] = s.price || s.lastPrice || s.bid || s.ask || 0;
-          if (nextIvMap[s.type]) nextIvMap[s.type][Number(s.strike)] = s.iv ?? null;
-        });
-        setChainMap(map);
-        setIvMap(nextIvMap);
-        applyMarketData(map, data.spot ? Number(data.spot.toFixed(2)) : spotPrice, unique);
+        await syncQuoteState(data, selectedExpiryRef.current, data.spot ? Number(data.spot.toFixed(2)) : spotPriceRef.current);
       }
-      setPricingModel(data.pricingModel || null);
-      setSourceWarning(data.warning || '');
-      setLastUpdated(new Date());
-      setSecsAgo(0);
     } catch (_) { /* ignore */ } finally {
       setLiveLoading(false);
+    }
+  };
+
+  const saveCurrentStrategy = async () => {
+    if (!legs.length) {
+      setSaveMessage('Add at least one leg before saving.');
+      return;
+    }
+
+    const cleanName = strategyName.trim() || `Nifty Strategy ${savedStrategies.length + 1}`;
+    const existingStrategy = editingStrategyId
+      ? savedStrategies.find((strategy) => String(strategy.id) === String(editingStrategyId))
+      : null;
+    setSaveLoading(true);
+    setSaveMessage('');
+
+    try {
+      const payload = {
+        id: editingStrategyId || `opt-${Date.now()}`,
+        name: cleanName,
+        createdAt: existingStrategy?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        selectedExpiry,
+        expiryLabel: selectedExpiry ? new Date(Number(selectedExpiry) * 1000).toDateString() : 'Not selected',
+        lotSize,
+        savedAtSpot: Number(spotPrice.toFixed(2)),
+        liveSource,
+        pricingSource,
+        ivInput,
+        rateInput,
+        legs: legs.map((leg) => ({
+          ...leg,
+          strike: Number(leg.strike),
+          quantity: Math.max(1, parseInt(leg.quantity || 1, 10) || 1),
+          premium: normalizePremium(leg.premium),
+          marketPremium: normalizePremium(leg.marketPremium ?? leg.premium),
+          locked: true,
+        })),
+        snapshotMetrics: {
+          maxProfit: metrics.maxProfit,
+          maxLoss: metrics.maxLoss,
+          currentPayoff: metrics.currentPayoff,
+          entryNetPremium: metrics.entryNetPremium,
+          liveCloseValue: metrics.liveCloseValue,
+          premiumRemaining: metrics.premiumRemaining,
+          capturedPremium: metrics.capturedPremium,
+          capturePct: metrics.capturePct,
+          markToMarket: metrics.markToMarket,
+          breakEvens: metrics.breakEvens,
+          profitRange: metrics.profitRange,
+          lossRange: metrics.lossRange,
+          points: metrics.points,
+          minY: metrics.minY,
+          maxY: metrics.maxY,
+        },
+      };
+
+      const response = await fetch('/api/options-strategies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Unable to save strategy right now.');
+      }
+
+      const savedId = data.strategy?.id || payload.id;
+      setEditingStrategyId(savedId);
+      setSavedStrategies(data.strategies || []);
+      setSaveMessage(`${existingStrategy ? 'Updated' : 'Saved'} "${cleanName}" with fixed entry prices and ${getPricingSourceLabel(pricingSource)} pricing.`);
+      router.push(`/nifty-strategies?saved=${encodeURIComponent(String(savedId))}`);
+    } catch (error) {
+      setSaveMessage(error.message || 'Unable to save strategy right now.');
+    } finally {
+      setSaveLoading(false);
     }
   };
 
@@ -418,6 +1029,15 @@ export default function OptionsStrategy() {
         capturePct: 0,
         markToMarket: 0,
         breakEvens: [],
+        profitZones: [],
+        lossZones: [],
+        profitRange: 'None',
+        lossRange: 'None',
+        maxProfitSpot: null,
+        maxLossSpot: null,
+        profitRangeWidth: 0,
+        lossRangeWidth: 0,
+        riskRewardRatio: null,
         minY: 0,
         maxY: 0,
         holdAdvice: 'Add strategy legs to see payoff metrics.',
@@ -427,8 +1047,8 @@ export default function OptionsStrategy() {
     const sortedStrikes = [...new Set(legs.map((leg) => leg.strike))].sort((left, right) => left - right);
     const lower = sortedStrikes[0] || spotPrice - 1000;
     const upper = sortedStrikes[sortedStrikes.length - 1] || spotPrice + 1000;
-    const start = Math.max(lower - 1000, 0);
-    const end = upper + 1000;
+    const start = Math.max(lower - PAYOFF_VIEW_DISTANCE, 0);
+    const end = upper + PAYOFF_VIEW_DISTANCE;
     const step = Math.max(Math.round((end - start) / 30), 50);
 
     const points = [];
@@ -440,19 +1060,43 @@ export default function OptionsStrategy() {
     const pointValues = points.map((point) => point.value);
     const maxProfit = Math.max(...pointValues);
     const maxLoss = Math.min(...pointValues);
+    const maxProfitPoint = points.reduce((best, point) => (point.value > best.value ? point : best), points[0]);
+    const maxLossPoint = points.reduce((best, point) => (point.value < best.value ? point : best), points[0]);
+
+    // Detect unlimited profit/loss: if payoff at edges is still growing/shrinking significantly
+    const edgeThreshold = step * 0.5; // if the slope at the edge is meaningfully non-zero
+    const leftEdgeSlope = points.length >= 2 ? (points[1].value - points[0].value) / step : 0;
+    const rightEdgeSlope = points.length >= 2 ? (points[points.length - 1].value - points[points.length - 2].value) / step : 0;
+    const isUnlimitedProfitUp = rightEdgeSlope > 0.1; // profit keeps rising as spot goes up
+    const isUnlimitedProfitDown = leftEdgeSlope < -0.1; // profit keeps rising as spot goes down
+    const isUnlimitedLossUp = rightEdgeSlope < -0.1; // loss keeps growing as spot goes up
+    const isUnlimitedLossDown = leftEdgeSlope > 0.1; // loss keeps growing as spot goes down
+    const isUnlimitedProfit = isUnlimitedProfitUp || isUnlimitedProfitDown;
+    const isUnlimitedLoss = isUnlimitedLossUp || isUnlimitedLossDown;
     const atCurrentSpot = legs.reduce((sum, leg) => sum + legPayoffAtExpiry(leg, spotPrice), 0) * lotSize;
-    const entryNetPremium = legs.reduce((sum, leg) => sum + (leg.side === 'SELL' ? leg.premium : -leg.premium), 0) * lotSize;
-    const liveCloseValue = legs.reduce((sum, leg) => {
-      const marketPremium = Number(leg.marketPremium ?? leg.premium) || 0;
-      return sum + (leg.side === 'BUY' ? marketPremium : -marketPremium);
+    const entryNetPremium = legs.reduce((sum, leg) => {
+      const quantity = Math.max(1, parseInt(leg.quantity || 1, 10) || 1);
+      return sum + ((leg.side === 'SELL' ? leg.premium : -leg.premium) * quantity);
     }, 0) * lotSize;
-    const premiumSoldAtEntry = legs.reduce((sum, leg) => sum + (leg.side === 'SELL' ? leg.premium : 0), 0) * lotSize;
-    const premiumRemaining = legs.reduce((sum, leg) => sum + (leg.side === 'SELL' ? Number(leg.marketPremium ?? leg.premium) || 0 : 0), 0) * lotSize;
+    const liveCloseValue = legs.reduce((sum, leg) => {
+      const quantity = Math.max(1, parseInt(leg.quantity || 1, 10) || 1);
+      const marketPremium = Number(leg.marketPremium ?? leg.premium) || 0;
+      return sum + ((leg.side === 'BUY' ? marketPremium : -marketPremium) * quantity);
+    }, 0) * lotSize;
+    const premiumSoldAtEntry = legs.reduce((sum, leg) => {
+      const quantity = Math.max(1, parseInt(leg.quantity || 1, 10) || 1);
+      return sum + ((leg.side === 'SELL' ? leg.premium : 0) * quantity);
+    }, 0) * lotSize;
+    const premiumRemaining = legs.reduce((sum, leg) => {
+      const quantity = Math.max(1, parseInt(leg.quantity || 1, 10) || 1);
+      return sum + ((leg.side === 'SELL' ? Number(leg.marketPremium ?? leg.premium) || 0 : 0) * quantity);
+    }, 0) * lotSize;
     const capturedPremium = premiumSoldAtEntry - premiumRemaining;
     const capturePct = premiumSoldAtEntry > 0 ? (capturedPremium / premiumSoldAtEntry) * 100 : 0;
     const markToMarket = legs.reduce((sum, leg) => {
+      const quantity = Math.max(1, parseInt(leg.quantity || 1, 10) || 1);
       const marketPremium = Number(leg.marketPremium ?? leg.premium) || 0;
-      return sum + (leg.side === 'SELL' ? leg.premium - marketPremium : marketPremium - leg.premium);
+      return sum + ((leg.side === 'SELL' ? leg.premium - marketPremium : marketPremium - leg.premium) * quantity);
     }, 0) * lotSize;
 
     const breakEvenCandidates = [];
@@ -460,9 +1104,46 @@ export default function OptionsStrategy() {
       const previous = points[index - 1];
       const current = points[index];
       if ((previous.value <= 0 && current.value >= 0) || (previous.value >= 0 && current.value <= 0)) {
-        breakEvenCandidates.push(current.spot);
+        // Linear interpolation for more accurate breakeven
+        const ratio = Math.abs(previous.value) / (Math.abs(previous.value) + Math.abs(current.value));
+        const interpolated = Math.round(previous.spot + ratio * (current.spot - previous.spot));
+        breakEvenCandidates.push(interpolated);
       }
     }
+
+    // Compute profit and loss zones
+    const profitZones = [];
+    const lossZones = [];
+    let zoneStart = null;
+    let zoneType = null; // 'profit' or 'loss'
+    for (let index = 0; index < points.length; index += 1) {
+      const p = points[index];
+      const currentType = p.value >= 0 ? 'profit' : 'loss';
+      if (zoneType === null) {
+        zoneStart = p.spot;
+        zoneType = currentType;
+      } else if (currentType !== zoneType) {
+        // Interpolate exact boundary
+        const prev = points[index - 1];
+        const ratio = Math.abs(prev.value) / (Math.abs(prev.value) + Math.abs(p.value));
+        const boundary = Math.round(prev.spot + ratio * (p.spot - prev.spot));
+        const zone = { from: zoneStart, to: boundary };
+        if (zoneType === 'profit') profitZones.push(zone);
+        else lossZones.push(zone);
+        zoneStart = boundary;
+        zoneType = currentType;
+      }
+    }
+    // Close last zone
+    if (zoneType && points.length) {
+      const zone = { from: zoneStart, to: points[points.length - 1].spot };
+      if (zoneType === 'profit') profitZones.push(zone);
+      else lossZones.push(zone);
+    }
+
+    const profitRangeWidth = profitZones.reduce((sum, zone) => sum + Math.max(zone.to - zone.from, 0), 0);
+    const lossRangeWidth = lossZones.reduce((sum, zone) => sum + Math.max(zone.to - zone.from, 0), 0);
+    const riskRewardRatio = maxLoss !== 0 ? Math.abs(maxProfit / maxLoss) : null;
 
     let holdAdvice = 'Lock a leg once you like the entry premium to start tracking premium decay from that point.';
     if (legs.some((leg) => leg.locked)) {
@@ -489,6 +1170,21 @@ export default function OptionsStrategy() {
       capturePct: Number(capturePct.toFixed(1)),
       markToMarket: Number(markToMarket.toFixed(2)),
       breakEvens: breakEvenCandidates,
+      profitZones,
+      lossZones,
+      profitRange: profitZones.length
+        ? profitZones.map((z) => `${z.from}–${z.to}`).join(', ')
+        : 'None',
+      lossRange: lossZones.length
+        ? lossZones.map((z) => `${z.from}–${z.to}`).join(', ')
+        : 'None',
+      maxProfitSpot: maxProfitPoint?.spot ?? null,
+      maxLossSpot: maxLossPoint?.spot ?? null,
+      profitRangeWidth: Number(profitRangeWidth.toFixed(0)),
+      lossRangeWidth: Number(lossRangeWidth.toFixed(0)),
+      riskRewardRatio,
+      isUnlimitedProfit,
+      isUnlimitedLoss,
       minY: Math.min(...pointValues),
       maxY: Math.max(...pointValues),
       holdAdvice,
@@ -496,8 +1192,11 @@ export default function OptionsStrategy() {
   }, [legs, lotSize, spotPrice]);
 
   const explanation = useMemo(() => {
-    const maxLossAbsolute = Math.abs(metrics.maxLoss).toFixed(2);
-    return `For this strategy, max profit is Rs. ${metrics.maxProfit.toFixed(2)} and max loss is Rs. ${maxLossAbsolute}. Locking a leg freezes its entry premium so you can compare premium captured versus premium still left in the market.`;
+    const bestProfitSpot = Number.isFinite(metrics.maxProfitSpot) ? metrics.maxProfitSpot : '—';
+    const worstLossSpot = Number.isFinite(metrics.maxLossSpot) ? metrics.maxLossSpot : '—';
+    const profitLabel = metrics.isUnlimitedProfit ? 'Unlimited (∞)' : formatCurrency(metrics.maxProfit);
+    const lossLabel = metrics.isUnlimitedLoss ? 'Unlimited (∞)' : formatCurrency(Math.abs(metrics.maxLoss));
+    return `Max profit is ${profitLabel} near spot ${bestProfitSpot}, max loss is ${lossLabel} near ${worstLossSpot}, and the live profitable expiry range is ${metrics.profitRange}. Saving this setup freezes today's entry prices so the dashboard can compare live market P/L against the locked structure.`;
   }, [metrics]);
 
   if (!user) {
@@ -559,6 +1258,17 @@ export default function OptionsStrategy() {
               <label style={styles.label}>Rate %</label>
               <input type="number" value={rateInput} onChange={(e) => setRateInput(e.target.value)} style={styles.input} />
             </div>
+            <div style={styles.controlsRow}>
+              <label style={styles.label}>Premium Source</label>
+              <select value={pricingSource} onChange={(e) => setPricingSource(e.target.value)} style={styles.input}>
+                {PRICING_SOURCE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
+            <div style={styles.heroHint}>
+              Using <strong>{getPricingSourceLabel(pricingSource)}</strong> to match the Expected Option Prices page more closely.
+            </div>
             <button onClick={applyModelInputs} style={styles.applyButton}>Apply Model Inputs</button>
           </div>
         </div>
@@ -569,6 +1279,7 @@ export default function OptionsStrategy() {
             <span>Side</span>
             <span>Type</span>
             <span>Strike</span>
+            <span>Lots</span>
             <span>Entry Premium</span>
             <span>Actions</span>
           </div>
@@ -582,8 +1293,9 @@ export default function OptionsStrategy() {
             </select>
           </div>
           <div style={styles.legActionsBar}>
-            <button onClick={addStrategySet} style={styles.secondaryButton}>+ Add Default Set</button>
-            <button onClick={addCustomLeg} style={styles.secondaryButton}>+ Add Custom Leg</button>
+            <button onClick={addStrategySet} disabled={legs.length >= MAX_LEGS} style={legs.length >= MAX_LEGS ? { ...styles.secondaryButton, opacity: 0.4, cursor: 'not-allowed' } : styles.secondaryButton}>+ Add Default Set</button>
+            <button onClick={addCustomLeg} disabled={legs.length >= MAX_LEGS} style={legs.length >= MAX_LEGS ? { ...styles.secondaryButton, opacity: 0.4, cursor: 'not-allowed' } : styles.secondaryButton}>+ Add Custom Leg</button>
+            <span style={{ color: '#94a3b8', fontSize: 12, alignSelf: 'center' }}>{legs.length} / {MAX_LEGS} legs</span>
           </div>
           {legs.map((leg) => (
             <div key={leg.id} style={styles.legWrap}>
@@ -598,9 +1310,9 @@ export default function OptionsStrategy() {
                 </select>
                 {strikesList && strikesList.length ? (
                   (() => {
-                    const radius = 1000;
+                    const radius = STRIKE_SELECTOR_DISTANCE;
                     const nearby = strikesList.filter((s) => s >= Math.max(0, spotPrice - radius) && s <= spotPrice + radius);
-                    const display = nearby.length ? nearby.slice(0, 40) : strikesList.slice(0, 40);
+                    const display = nearby.length ? nearby.slice(0, 120) : strikesList.slice(0, 120);
                     return (
                       <select value={leg.strike} disabled={leg.locked} onChange={(e) => updateLeg(leg.id, 'strike', Number(e.target.value || 0))} style={styles.input}>
                         {display.map((s) => (<option key={s} value={s}>{s}</option>))}
@@ -610,7 +1322,15 @@ export default function OptionsStrategy() {
                 ) : (
                   <input type="number" value={leg.strike} disabled={leg.locked} onChange={(e) => updateLeg(leg.id, 'strike', parseFloat(e.target.value || 0))} style={styles.input} />
                 )}
-                <input type="number" value={leg.premium} disabled={leg.locked} onChange={(e) => updateLeg(leg.id, 'premium', parseFloat(e.target.value || 0))} style={styles.input} />
+                <input type="number" min="1" value={leg.quantity ?? 1} onChange={(e) => updateLeg(leg.id, 'quantity', e.target.value)} style={styles.input} />
+                <input
+                  type="number"
+                  value={leg.premium}
+                  disabled={leg.locked}
+                  onChange={(e) => updateLeg(leg.id, 'premium', parseFloat(e.target.value || 0))}
+                  onBlur={() => updateLeg(leg.id, 'locked', true)}
+                  style={styles.input}
+                />
                 <div style={styles.legButtons}>
                   <button onClick={() => toggleLock(leg.id)} style={leg.locked ? styles.lockedButton : styles.secondaryButton}>
                     {leg.locked ? 'Unlock' : 'Lock'}
@@ -656,15 +1376,400 @@ export default function OptionsStrategy() {
           </div>
           <div style={styles.metricCard}>
             <div style={styles.metricLabel}>Maximum Profit</div>
-            <div style={{ ...styles.metricValue, color: '#22c55e' }}>Rs. {metrics.maxProfit.toFixed(2)}</div>
+            <div style={{ ...styles.metricValue, color: '#22c55e' }}>{metrics.isUnlimitedProfit ? '∞ Unlimited' : `Rs. ${metrics.maxProfit.toFixed(2)}`}</div>
           </div>
           <div style={styles.metricCard}>
             <div style={styles.metricLabel}>Maximum Loss</div>
-            <div style={{ ...styles.metricValue, color: '#f87171' }}>Rs. {Math.abs(metrics.maxLoss).toFixed(2)}</div>
+            <div style={{ ...styles.metricValue, color: '#f87171' }}>{metrics.isUnlimitedLoss ? '∞ Unlimited' : `Rs. ${Math.abs(metrics.maxLoss).toFixed(2)}`}</div>
           </div>
           <div style={styles.metricCard}>
             <div style={styles.metricLabel}>Payoff At Current Spot</div>
             <div style={{ ...styles.metricValue, color: metrics.currentPayoff >= 0 ? '#22c55e' : '#f87171' }}>Rs. {metrics.currentPayoff.toFixed(2)}</div>
+          </div>
+        </div>
+
+        <div style={styles.card}>
+          <h2 style={styles.sectionTitle}>{editingStrategyId ? 'Update Saved Strategy' : 'Save Locked Strategy'}</h2>
+          {editingStrategyId ? (
+            <div style={styles.editingBanner}>
+              Editing saved strategy <strong>{strategyName}</strong>. Save again to update the same dashboard box.
+            </div>
+          ) : null}
+          <div style={styles.saveRow}>
+            <input
+              type="text"
+              value={strategyName}
+              onChange={(e) => setStrategyName(e.target.value)}
+              placeholder="Example: Weekly iron condor #1"
+              style={styles.input}
+            />
+            <button onClick={saveCurrentStrategy} style={styles.saveButton}>
+              {saveLoading ? 'Saving…' : editingStrategyId ? 'Update Strategy' : 'Save to Nifty Tracker'}
+            </button>
+            <button onClick={() => router.push('/nifty-strategies')} style={styles.secondaryButton}>Open Nifty Tracker</button>
+          </div>
+          <p style={styles.explanation}>
+            Saving writes this setup into a JSON file and freezes the current entry premiums. After save, the separate Nifty tracker page shows the strategy with live P/L, up/down movement, and expandable graphs.
+          </p>
+          <div style={styles.saveHint}>Saved strategies: {savedStrategies.length} · strike selection now shows about 2000 points up and down from spot.</div>
+          {saveMessage ? <div style={styles.saveMessage}>{saveMessage}</div> : null}
+        </div>
+
+        <div style={styles.card}>
+          <h2 style={styles.sectionTitle}>🔍 Strategy Optimizer — Find Best Shorting Strategies</h2>
+          <p style={styles.explanation}>
+            The optimizer exhaustively searches hundreds of thousands of combinations across 11 strategy families (Iron Condor, Iron Butterfly, Jade Lizard, Twisted Sister, Ratio Condor, Strangle+Wings, Ratio Spread, Double Condor, Bear Call Ladder, Bull Put Ladder, Layered Condor) with 3–8 legs. It evaluates every viable combination and ranks the best for 6 scoring profiles. Lot size = {lotSize || 65} (1 lot = {lotSize || 65} qty).
+          </p>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', marginTop: 12, marginBottom: 12 }}>
+            <button onClick={runOptimizer} disabled={optimizerLoading} style={optimizerLoading ? { ...styles.applyButton, opacity: 0.6, cursor: 'not-allowed' } : styles.applyButton}>
+              {optimizerLoading ? 'Analyzing…' : 'Run Optimizer'}
+            </button>
+            {optimizerResult && !optimizerLoading ? (
+              <span style={{ color: '#22c55e', fontSize: 13 }}>
+                ✓ Evaluated {optimizerResult.totalCombinationsEvaluated?.toLocaleString()} combinations · {optimizerResult.viableCandidates?.toLocaleString()} viable{optimizerResult.computeTimeMs ? ` · ${(optimizerResult.computeTimeMs / 1000).toFixed(1)}s` : ''}
+              </span>
+            ) : null}
+          </div>
+          {optimizerLoading ? (
+            <div style={styles.loaderWrap}>
+              <div style={styles.loaderOuter}>
+                <div style={styles.loaderInner} />
+              </div>
+              <div style={styles.loaderText}>
+                <div style={{ fontSize: 15, fontWeight: 'bold', color: '#e2e8f0', marginBottom: 6 }}>Finding best strategies…</div>
+                <div style={{ fontSize: 12, color: '#94a3b8' }}>Evaluating Iron Condors, Butterflies, Jade Lizards, Ratio Spreads, Call/Put Ladders, Layered Condors and more across all combinations</div>
+              </div>
+              <style>{`
+                @keyframes optimizerSpin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+                @keyframes optimizerPulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+              `}</style>
+            </div>
+          ) : null}
+          {optimizerError ? <div style={{ ...styles.saveMessage, borderColor: 'rgba(248,113,113,0.3)', color: '#fecaca' }}>{optimizerError}</div> : null}
+          {optimizerResult && !optimizerLoading ? (
+            <div>
+              <details style={{ marginBottom: 14, background: '#0c1829', border: '1px solid #1e293b', borderRadius: 10, padding: '10px 14px' }}>
+                <summary style={{ cursor: 'pointer', color: '#94a3b8', fontSize: 13, fontWeight: 'bold' }}>
+                  📊 Combination Details — {optimizerResult.totalCombinationsEvaluated?.toLocaleString()} total checked, {optimizerResult.viableCandidates?.toLocaleString()} viable{optimizerResult.computeTimeMs ? ` (${(optimizerResult.computeTimeMs / 1000).toFixed(1)}s)` : ''}
+                </summary>
+                <div style={{ marginTop: 10, fontSize: 12, color: '#cbd5e1' }}>
+                  <div style={{ marginBottom: 8, color: '#e2e8f0', fontWeight: 'bold' }}>Combinations checked per family:</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 6 }}>
+                    {Object.entries(optimizerResult.familyCounts || {}).map(([family, count]) => (
+                      <div key={family} style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 6, padding: '6px 10px', fontSize: 11 }}>
+                        <strong style={{ color: '#38bdf8' }}>{family}</strong>: {count.toLocaleString()} combinations
+                      </div>
+                    ))}
+                  </div>
+                  {optimizerResult.bestPerFamily && optimizerResult.bestPerFamily.length > 0 ? (
+                    <div style={{ marginTop: 12 }}>
+                      <div style={{ color: '#e2e8f0', fontWeight: 'bold', marginBottom: 6 }}>Best strategy found per family (best overall score):</div>
+                      {optimizerResult.bestPerFamily.map((bpf) => (
+                        <div key={bpf.family} style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, padding: '8px 10px', marginBottom: 6, fontSize: 11, color: '#cbd5e1' }}>
+                          <strong style={{ color: '#38bdf8' }}>{bpf.family}</strong> ({bpf.legCount} legs): {bpf.legs.map(l => `${l.side} ${l.strike} ${l.type}`).join(' / ')} — Max Profit: <span style={{ color: '#22c55e' }}>Rs. {bpf.maxProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>, Max Loss: <span style={{ color: '#f87171' }}>Rs. {Math.abs(bpf.maxLoss).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>, Zone: {bpf.profitZoneWidth} pts
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              </details>
+              {(optimizerResult.profiles || []).map((profile) => (
+                <details key={profile.key} style={{ marginBottom: 12 }} open={profile.key === 'balanced'}>
+                  <summary style={{ cursor: 'pointer', color: '#f8fafc', fontSize: 15, fontWeight: 'bold', padding: '8px 0' }}>
+                    {profile.label} <span style={{ fontWeight: 'normal', color: '#94a3b8', fontSize: 12 }}>— {profile.description}</span>
+                  </summary>
+                  <div style={{ display: 'grid', gap: 10, marginTop: 8 }}>
+                    {(profile.strategies || []).map((strat) => (
+                      <div key={`${profile.key}-${strat.rank}`} style={{ background: '#08111f', border: '1px solid #1e293b', borderRadius: 12, padding: 14 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+                          <div>
+                            <span style={{ color: '#38bdf8', fontWeight: 'bold', fontSize: 14 }}>#{strat.rank} {strat.family}</span>
+                            <span style={{ color: '#94a3b8', fontSize: 12, marginLeft: 8 }}>{strat.legCount} legs · {strat.totalLots} lots</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <span style={{ background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.4)', borderRadius: 8, padding: '4px 12px', color: '#22c55e', fontWeight: 'bold', fontSize: 15 }}>Profit: Rs. {strat.maxProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
+                            <button
+                              onClick={() => loadOptimizedStrategy(strat)}
+                              style={{ ...styles.applyButton, padding: '6px 14px', fontSize: 12 }}
+                            >
+                              Use This Strategy
+                            </button>
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+                          {strat.legs.map((leg, li) => (
+                            <span
+                              key={li}
+                              style={{
+                                display: 'inline-block',
+                                padding: '4px 10px',
+                                borderRadius: 999,
+                                fontSize: 11,
+                                fontWeight: 'bold',
+                                background: leg.side === 'SELL' ? 'rgba(239,68,68,0.15)' : 'rgba(34,197,94,0.15)',
+                                color: leg.side === 'SELL' ? '#fca5a5' : '#86efac',
+                                border: `1px solid ${leg.side === 'SELL' ? 'rgba(239,68,68,0.3)' : 'rgba(34,197,94,0.3)'}`,
+                              }}
+                            >
+                              {leg.side} {leg.quantity > 1 ? `${leg.quantity}x ` : ''}{leg.strike} {leg.type} @ {leg.premium.toFixed(2)}
+                            </span>
+                          ))}
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8, fontSize: 12 }}>
+                          <div style={{ color: '#94a3b8' }}>Credit: <span style={{ color: '#22c55e', fontWeight: 'bold' }}>Rs. {strat.entryCredit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span></div>
+                          <div style={{ color: '#94a3b8' }}>Max Profit: <span style={{ color: '#22c55e', fontWeight: 'bold' }}>Rs. {strat.maxProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span> <span style={{ fontSize: 10, color: '#64748b' }}>(1 lot × {optimizerResult.lotSize || 65} qty)</span></div>
+                          <div style={{ color: '#94a3b8' }}>Max Loss: <span style={{ color: '#f87171', fontWeight: 'bold' }}>Rs. {Math.abs(strat.maxLoss).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span> <span style={{ fontSize: 10, color: '#64748b' }}>(1 lot × {optimizerResult.lotSize || 65} qty)</span></div>
+                          <div style={{ color: '#94a3b8' }}>Profit Zone: <span style={{ color: '#facc15', fontWeight: 'bold' }}>{strat.profitZoneWidth} pts</span></div>
+                          <div style={{ color: '#94a3b8' }}>Risk:Reward: <span style={{ color: '#60a5fa', fontWeight: 'bold' }}>{strat.rewardToRisk ? `1:${strat.rewardToRisk}` : '—'}</span></div>
+                          <div style={{ color: '#94a3b8' }}>Break-evens: <span style={{ color: '#e2e8f0' }}>{strat.breakEvens.length ? strat.breakEvens.join(', ') : '—'}</span></div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              ))}
+            </div>
+          ) : null}
+        </div>
+
+        <div style={styles.card}>
+          <h2 style={styles.sectionTitle}>📅 Calendar Spread Optimizer — Cross-Expiry Strategies</h2>
+          <p style={styles.explanation}>
+            Calendar spreads sell options on a near-term expiry and buy on a far-term expiry to capture time decay difference. For example, sell 13th Apr CE and buy 21st Apr CE. This searches thousands of cross-expiry combos to find the best calendar strategies.
+          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10, marginTop: 12, marginBottom: 12, alignItems: 'end' }}>
+            <div>
+              <label style={{ color: '#94a3b8', fontSize: 12, display: 'block', marginBottom: 4 }}>Sell Expiry (near-term)</label>
+              <select value={calSellExpiry} onChange={(e) => setCalSellExpiry(e.target.value)} style={styles.input}>
+                <option value="">Select expiry to sell</option>
+                {expiryOptions.map((exp) => (
+                  <option key={`sell-${exp.value}`} value={exp.value}>{exp.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={{ color: '#94a3b8', fontSize: 12, display: 'block', marginBottom: 4 }}>Buy Expiry (far-term)</label>
+              <select value={calBuyExpiry} onChange={(e) => setCalBuyExpiry(e.target.value)} style={styles.input}>
+                <option value="">Select expiry to buy</option>
+                {expiryOptions.map((exp) => (
+                  <option key={`buy-${exp.value}`} value={exp.value}>{exp.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <button onClick={runCalendarOptimizer} disabled={calendarLoading} style={calendarLoading ? { ...styles.applyButton, opacity: 0.6, cursor: 'not-allowed' } : styles.applyButton}>
+                {calendarLoading ? 'Analyzing…' : 'Run Calendar Optimizer'}
+              </button>
+            </div>
+          </div>
+          {calendarLoading ? (
+            <div style={styles.loaderWrap}>
+              <div style={styles.loaderOuter}>
+                <div style={styles.loaderInner} />
+              </div>
+              <div style={styles.loaderText}>
+                <div style={{ fontSize: 15, fontWeight: 'bold', color: '#e2e8f0', marginBottom: 6 }}>Analyzing calendar spreads…</div>
+                <div style={{ fontSize: 12, color: '#94a3b8' }}>Comparing premiums across expiries and evaluating Calendar CE, Calendar PE, Double Calendar and Calendar Condor structures</div>
+              </div>
+              <style>{`
+                @keyframes optimizerSpin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+                @keyframes optimizerPulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+              `}</style>
+            </div>
+          ) : null}
+          {calendarError ? <div style={{ ...styles.saveMessage, borderColor: 'rgba(248,113,113,0.3)', color: '#fecaca' }}>{calendarError}</div> : null}
+          {calendarResult && !calendarLoading ? (
+            <div>
+              <div style={{ color: '#22c55e', fontSize: 13, marginBottom: 12 }}>
+                ✓ Evaluated {calendarResult.totalCombinationsEvaluated?.toLocaleString()} calendar combinations · {calendarResult.viableCandidates?.toLocaleString()} viable · Sell {calendarResult.sellExpiryDays}d / Buy {calendarResult.buyExpiryDays}d
+              </div>
+              {(calendarResult.profiles || []).map((profile) => (
+                <details key={profile.key} style={{ marginBottom: 12 }} open={profile.key === 'cal-balanced'}>
+                  <summary style={{ cursor: 'pointer', color: '#f8fafc', fontSize: 15, fontWeight: 'bold', padding: '8px 0' }}>
+                    {profile.label} <span style={{ fontWeight: 'normal', color: '#94a3b8', fontSize: 12 }}>— {profile.description}</span>
+                  </summary>
+                  <div style={{ display: 'grid', gap: 10, marginTop: 8 }}>
+                    {(profile.strategies || []).map((strat) => (
+                      <div key={`${profile.key}-${strat.rank}`} style={{ background: '#08111f', border: '1px solid #1e293b', borderRadius: 12, padding: 14 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+                          <div>
+                            <span style={{ color: '#a78bfa', fontWeight: 'bold', fontSize: 14 }}>#{strat.rank} {strat.family}</span>
+                            <span style={{ color: '#94a3b8', fontSize: 12, marginLeft: 8 }}>{strat.legCount} legs · {strat.totalLots} lots</span>
+                          </div>
+                          <button
+                            onClick={() => loadOptimizedStrategy(strat)}
+                            style={{ ...styles.applyButton, padding: '6px 14px', fontSize: 12, background: '#7c3aed' }}
+                          >
+                            Use This Strategy
+                          </button>
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+                          {strat.legs.map((leg, li) => (
+                            <span
+                              key={li}
+                              style={{
+                                display: 'inline-block',
+                                padding: '4px 10px',
+                                borderRadius: 999,
+                                fontSize: 11,
+                                fontWeight: 'bold',
+                                background: leg.side === 'SELL' ? 'rgba(239,68,68,0.15)' : 'rgba(34,197,94,0.15)',
+                                color: leg.side === 'SELL' ? '#fca5a5' : '#86efac',
+                                border: `1px solid ${leg.side === 'SELL' ? 'rgba(239,68,68,0.3)' : 'rgba(34,197,94,0.3)'}`,
+                              }}
+                            >
+                              {leg.side} {leg.quantity > 1 ? `${leg.quantity}x ` : ''}{leg.strike} {leg.type} @ {leg.premium.toFixed(2)}
+                            </span>
+                          ))}
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8, fontSize: 12 }}>
+                          <div style={{ color: '#94a3b8' }}>Credit: <span style={{ color: '#22c55e', fontWeight: 'bold' }}>Rs. {strat.entryCredit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span></div>
+                          <div style={{ color: '#94a3b8' }}>Max Profit: <span style={{ color: '#22c55e', fontWeight: 'bold' }}>Rs. {strat.maxProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span></div>
+                          <div style={{ color: '#94a3b8' }}>Max Loss: <span style={{ color: '#f87171', fontWeight: 'bold' }}>Rs. {Math.abs(strat.maxLoss).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span></div>
+                          <div style={{ color: '#94a3b8' }}>Profit Zone: <span style={{ color: '#facc15', fontWeight: 'bold' }}>{strat.profitZoneWidth} pts</span></div>
+                          <div style={{ color: '#94a3b8' }}>Risk:Reward: <span style={{ color: '#60a5fa', fontWeight: 'bold' }}>{strat.rewardToRisk ? `1:${strat.rewardToRisk}` : '—'}</span></div>
+                          <div style={{ color: '#94a3b8' }}>Break-evens: <span style={{ color: '#e2e8f0' }}>{strat.breakEvens.length ? strat.breakEvens.join(', ') : '—'}</span></div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              ))}
+            </div>
+          ) : null}
+        </div>
+
+        <div style={styles.card}>
+          <h2 style={styles.sectionTitle}>Strategy Dashboard</h2>
+          <div style={styles.dashboardGrid}>
+            <div style={{ ...styles.dashboardBox, borderColor: '#166534' }}>
+              <div style={styles.dashboardLabel}>Max Profit</div>
+              <div style={{ ...styles.dashboardValue, color: '#22c55e' }}>{metrics.isUnlimitedProfit ? '∞ Unlimited' : `Rs. ${metrics.maxProfit.toFixed(2)}`}</div>
+            </div>
+            <div style={{ ...styles.dashboardBox, borderColor: '#7f1d1d' }}>
+              <div style={styles.dashboardLabel}>Max Loss</div>
+              <div style={{ ...styles.dashboardValue, color: '#f87171' }}>{metrics.isUnlimitedLoss ? '∞ Unlimited' : `Rs. ${Math.abs(metrics.maxLoss).toFixed(2)}`}</div>
+            </div>
+            <div style={{ ...styles.dashboardBox, borderColor: '#1e40af' }}>
+              <div style={styles.dashboardLabel}>Breakeven(s)</div>
+              <div style={styles.dashboardValue}>
+                {metrics.breakEvens.length ? metrics.breakEvens.map((v) => `Rs. ${v}`).join(', ') : '—'}
+              </div>
+            </div>
+            <div style={{ ...styles.dashboardBox, borderColor: '#166534' }}>
+              <div style={styles.dashboardLabel}>Profit Range</div>
+              <div style={{ ...styles.dashboardValue, color: '#22c55e', fontSize: '16px' }}>
+                {metrics.profitRange}
+              </div>
+            </div>
+            <div style={{ ...styles.dashboardBox, borderColor: '#7f1d1d' }}>
+              <div style={styles.dashboardLabel}>Loss Range</div>
+              <div style={{ ...styles.dashboardValue, color: '#f87171', fontSize: '16px' }}>
+                {metrics.lossRange}
+              </div>
+            </div>
+            <div style={{ ...styles.dashboardBox, borderColor: '#334155' }}>
+              <div style={styles.dashboardLabel}>Risk:Reward</div>
+              <div style={styles.dashboardValue}>
+                {metrics.riskRewardRatio ? `1:${metrics.riskRewardRatio.toFixed(2)}` : '—'}
+              </div>
+            </div>
+            <div style={{ ...styles.dashboardBox, borderColor: '#0f766e' }}>
+              <div style={styles.dashboardLabel}>Best Profit Near</div>
+              <div style={{ ...styles.dashboardValue, color: '#5eead4' }}>
+                {metrics.maxProfitSpot ?? '—'}
+              </div>
+            </div>
+            <div style={{ ...styles.dashboardBox, borderColor: '#854d0e' }}>
+              <div style={styles.dashboardLabel}>Profit Zone Width</div>
+              <div style={{ ...styles.dashboardValue, color: '#facc15' }}>
+                {metrics.profitRangeWidth > 0 ? `${metrics.profitRangeWidth} pts` : 'None'}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style={styles.card}>
+          <h2 style={styles.sectionTitle}>Expiry Payoff Curve</h2>
+          <PayoffChart
+            points={metrics.points}
+            minY={metrics.minY}
+            maxY={metrics.maxY}
+            currentSpot={spotPrice}
+            breakEvens={metrics.breakEvens}
+          />
+          <div style={styles.breakEvenRow}>
+            <strong>Break-even zones:</strong> {metrics.breakEvens.length > 0 ? metrics.breakEvens.map((value) => `Rs. ${value}`).join(', ') : 'No zero-crossing found in sampled range'}
+          </div>
+          <div style={styles.chartInfoGrid}>
+            <div style={styles.chartInfoCard}>
+              <div style={styles.chartInfoLabel}>Max profit</div>
+              <div style={{ ...styles.chartInfoValue, color: '#22c55e' }}>
+                {metrics.isUnlimitedProfit ? '∞ Unlimited' : formatCurrency(metrics.maxProfit)}
+              </div>
+              <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>near spot {metrics.maxProfitSpot ?? '—'}</div>
+            </div>
+            <div style={styles.chartInfoCard}>
+              <div style={styles.chartInfoLabel}>Max loss</div>
+              <div style={{ ...styles.chartInfoValue, color: '#f87171' }}>
+                {metrics.isUnlimitedLoss ? '∞ Unlimited' : formatCurrency(Math.abs(metrics.maxLoss))}
+              </div>
+              <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>near spot {metrics.maxLossSpot ?? '—'}</div>
+            </div>
+            <div style={styles.chartInfoCard}>
+              <div style={styles.chartInfoLabel}>Payoff at current spot</div>
+              <div style={{ ...styles.chartInfoValue, color: metrics.currentPayoff >= 0 ? '#22c55e' : '#f87171' }}>
+                {formatCurrency(metrics.currentPayoff)}
+              </div>
+            </div>
+            <div style={styles.chartInfoCard}>
+              <div style={styles.chartInfoLabel}>Risk:Reward</div>
+              <div style={styles.chartInfoValue}>
+                {metrics.isUnlimitedProfit || metrics.isUnlimitedLoss
+                  ? (metrics.isUnlimitedProfit ? '∞' : '1') + ':' + (metrics.isUnlimitedLoss ? '∞' : '1')
+                  : metrics.riskRewardRatio != null ? `1:${metrics.riskRewardRatio.toFixed(2)}` : '—'}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style={styles.card}>
+          <h2 style={styles.sectionTitle}>Profit vs Loss Range Map</h2>
+          <RangeMapChart
+            points={metrics.points}
+            profitZones={metrics.profitZones}
+            lossZones={metrics.lossZones}
+            currentSpot={spotPrice}
+            breakEvens={metrics.breakEvens}
+          />
+          <p style={styles.explanation}>
+            Green stretches show expiry spots where the structure stays profitable. Red stretches show where risk is active, and the blue marker is the live Nifty level.
+          </p>
+        </div>
+
+        <div style={styles.doubleChartGrid}>
+          <div style={styles.card}>
+            <h2 style={styles.sectionTitle}>Risk Snapshot</h2>
+            <MetricBarChart
+              items={[
+                { label: 'Max Profit', value: metrics.maxProfit, color: '#22c55e' },
+                { label: 'Max Loss', value: Math.abs(metrics.maxLoss), color: '#f87171' },
+                { label: 'Current Payoff', value: metrics.currentPayoff, color: metrics.currentPayoff >= 0 ? '#22c55e' : '#f97316' },
+                { label: 'Live MTM', value: metrics.markToMarket, color: metrics.markToMarket >= 0 ? '#38bdf8' : '#f43f5e' },
+              ]}
+            />
+          </div>
+
+          <div style={styles.card}>
+            <h2 style={styles.sectionTitle}>Premium Snapshot</h2>
+            <MetricBarChart
+              items={[
+                { label: 'Entry Net', value: metrics.entryNetPremium, color: '#c084fc' },
+                { label: 'Premium Left', value: metrics.premiumRemaining, color: '#f59e0b' },
+                { label: 'Captured', value: metrics.capturedPremium, color: '#22c55e' },
+                { label: 'Close Value', value: metrics.liveCloseValue, color: '#60a5fa' },
+              ]}
+            />
           </div>
         </div>
 
@@ -674,20 +1779,12 @@ export default function OptionsStrategy() {
         </div>
 
         <div style={styles.card}>
-          <h2 style={styles.sectionTitle}>Expiry Payoff Chart</h2>
-          <PayoffChart points={metrics.points} minY={metrics.minY} maxY={metrics.maxY} />
-          <div style={styles.breakEvenRow}>
-            <strong>Break-even zones:</strong> {metrics.breakEvens.length > 0 ? metrics.breakEvens.map((value) => `Rs. ${value}`).join(', ') : 'No zero-crossing found in sampled range'}
-          </div>
-        </div>
-
-        <div style={styles.card}>
           <h2 style={styles.sectionTitle}>What This Means</h2>
           <p style={styles.explanation}>{explanation}</p>
           <ul style={styles.bullets}>
-            <li>If Nifty expires near the short strike, you keep most of the net credit.</li>
-            <li>Your long wings at 22000 PE and 24000 CE cap the loss on both sides.</li>
-            <li>Exact max profit and max loss depend on the option premiums, not just strikes.</li>
+            <li>The payoff curve shows exactly where max profit sits and how quickly the risk grows away from that zone.</li>
+            <li>The range map makes the profitable expiry band much easier to see before you save the structure.</li>
+            <li>Saved snapshots keep the entry prices fixed, so dashboard MTM stays comparable even when the market moves.</li>
           </ul>
         </div>
       </div>
@@ -790,7 +1887,7 @@ const styles = {
   },
   legsHeader: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(5, 1fr)',
+    gridTemplateColumns: '1fr 1fr 1.1fr 0.8fr 1fr 1.2fr',
     gap: '10px',
     color: '#94a3b8',
     fontSize: '12px',
@@ -798,7 +1895,7 @@ const styles = {
   },
   legRow: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(5, 1fr)',
+    gridTemplateColumns: '1fr 1fr 1.1fr 0.8fr 1fr 1.2fr',
     gap: '10px',
   },
   legActionsBar: {
@@ -902,6 +1999,183 @@ const styles = {
     fontWeight: 'bold',
     color: '#f8fafc',
   },
+  dashboardGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+    gap: '16px',
+  },
+  dashboardBox: {
+    background: '#0f172a',
+    border: '2px solid #334155',
+    borderRadius: '14px',
+    padding: '20px',
+    textAlign: 'center',
+  },
+  dashboardLabel: {
+    color: '#94a3b8',
+    fontSize: '13px',
+    marginBottom: '10px',
+    textTransform: 'uppercase',
+    letterSpacing: '0.5px',
+  },
+  dashboardValue: {
+    fontSize: '22px',
+    fontWeight: 'bold',
+    color: '#f8fafc',
+  },
+  editingBanner: {
+    marginBottom: '12px',
+    background: 'rgba(37, 99, 235, 0.12)',
+    border: '1px solid rgba(96, 165, 250, 0.28)',
+    color: '#dbeafe',
+    borderRadius: '10px',
+    padding: '10px 12px',
+    fontSize: '13px',
+  },
+  saveRow: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+    gap: '10px',
+    alignItems: 'center',
+    marginBottom: '12px',
+  },
+  saveButton: {
+    background: '#059669',
+    color: '#ecfdf5',
+    border: 'none',
+    borderRadius: '8px',
+    padding: '10px 12px',
+    cursor: 'pointer',
+    fontWeight: 'bold',
+  },
+  saveHint: {
+    color: '#93c5fd',
+    fontSize: '12px',
+    marginTop: '8px',
+  },
+  saveMessage: {
+    marginTop: '10px',
+    background: 'rgba(8, 145, 178, 0.12)',
+    border: '1px solid rgba(34, 211, 238, 0.28)',
+    color: '#cffafe',
+    borderRadius: '10px',
+    padding: '10px 12px',
+    fontSize: '13px',
+  },
+  chartLegend: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '12px',
+    color: '#cbd5e1',
+    fontSize: '12px',
+    marginTop: '10px',
+  },
+  chartMetaRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    gap: '8px',
+    color: '#94a3b8',
+    fontSize: '12px',
+    marginTop: '8px',
+  },
+  rangeChartWrap: {
+    position: 'relative',
+    height: '72px',
+    marginTop: '10px',
+    marginBottom: '6px',
+  },
+  rangeTrack: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: '26px',
+    height: '14px',
+    borderRadius: '999px',
+    background: '#1e293b',
+  },
+  rangeSegment: {
+    position: 'absolute',
+    top: '26px',
+    height: '14px',
+    borderRadius: '999px',
+  },
+  currentMarker: {
+    position: 'absolute',
+    top: '10px',
+    width: '2px',
+    height: '46px',
+    background: '#38bdf8',
+    boxShadow: '0 0 10px rgba(56, 189, 248, 0.5)',
+  },
+  breakEvenMarker: {
+    position: 'absolute',
+    top: '20px',
+    width: '8px',
+    height: '8px',
+    marginLeft: '-4px',
+    borderRadius: '999px',
+    background: '#fbbf24',
+    border: '2px solid #111827',
+  },
+  barChartWrap: {
+    display: 'grid',
+    gap: '10px',
+  },
+  barRow: {
+    display: 'grid',
+    gridTemplateColumns: '110px 1fr 72px',
+    gap: '10px',
+    alignItems: 'center',
+  },
+  barLabel: {
+    color: '#cbd5e1',
+    fontSize: '12px',
+  },
+  barTrack: {
+    height: '12px',
+    borderRadius: '999px',
+    background: '#0f172a',
+    overflow: 'hidden',
+    border: '1px solid #1e293b',
+  },
+  barFill: {
+    height: '100%',
+    borderRadius: '999px',
+  },
+  barValue: {
+    fontSize: '12px',
+    fontWeight: 'bold',
+    textAlign: 'right',
+  },
+  chartInfoGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+    gap: '12px',
+    marginTop: '14px',
+  },
+  chartInfoCard: {
+    background: '#0f172a',
+    border: '1px solid #1e293b',
+    borderRadius: '12px',
+    padding: '12px',
+  },
+  chartInfoLabel: {
+    color: '#94a3b8',
+    fontSize: '11px',
+    marginBottom: '6px',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+  },
+  chartInfoValue: {
+    color: '#f8fafc',
+    fontSize: '18px',
+    fontWeight: 'bold',
+  },
+  doubleChartGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+    gap: '16px',
+  },
   breakEvenRow: {
     marginTop: '12px',
     color: '#cbd5e1',
@@ -918,5 +2192,34 @@ const styles = {
     fontSize: '13px',
     lineHeight: '1.7',
     paddingLeft: '20px',
+  },
+  loaderWrap: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '20px',
+    padding: '24px 20px',
+    background: 'linear-gradient(135deg, rgba(15,23,42,0.95), rgba(30,41,59,0.8))',
+    border: '1px solid rgba(56,189,248,0.2)',
+    borderRadius: '16px',
+    marginBottom: '16px',
+  },
+  loaderOuter: {
+    width: '48px',
+    height: '48px',
+    borderRadius: '50%',
+    border: '3px solid #1e293b',
+    borderTopColor: '#38bdf8',
+    animation: 'optimizerSpin 1s linear infinite',
+    flexShrink: 0,
+  },
+  loaderInner: {
+    width: '100%',
+    height: '100%',
+    borderRadius: '50%',
+    background: 'radial-gradient(circle, rgba(56,189,248,0.15) 0%, transparent 70%)',
+    animation: 'optimizerPulse 1.5s ease-in-out infinite',
+  },
+  loaderText: {
+    flex: 1,
   },
 };
