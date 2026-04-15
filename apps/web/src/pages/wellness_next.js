@@ -73,7 +73,10 @@ const DEFAULT_FORM = {
 
 function getApiBase() {
   if (typeof window === 'undefined') return 'http://localhost:3000';
-  return `http://${window.location.hostname}:3000`;
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    return `http://${window.location.hostname}:3000`;
+  }
+  return '';
 }
 function formatCurrency(value) {
   if (value == null || Number.isNaN(Number(value))) return '--';

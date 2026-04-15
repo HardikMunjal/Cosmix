@@ -6,7 +6,8 @@
     "dev": "next dev -H 0.0.0.0 -p 3005",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "migrate:strategies": "node scripts/migrate-options-strategies-db.js"
   },
   "dependencies": {
     "@seald-io/nedb": "^4.1.2",

@@ -68,9 +68,13 @@ export default function Chat() {
     setUser(userData);
 
     const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-    const socketUrl = `http://${host}:3002`;
+    const isLocalHost = host === 'localhost' || host === '127.0.0.1';
+    const socketUrl = isLocalHost ? `http://${host}:3002` : undefined;
+    const socketOptions = isLocalHost
+      ? { transports: ['websocket', 'polling'] }
+      : { path: '/chat-socket/socket.io', transports: ['websocket', 'polling'] };
 
-    socket = io(socketUrl, { transports: ['websocket', 'polling'] });
+    socket = socketUrl ? io(socketUrl, socketOptions) : io(socketOptions);
 
     socket.on('connect', () => {
       console.log('Connected to chat server', socket.id, 'at', socketUrl);

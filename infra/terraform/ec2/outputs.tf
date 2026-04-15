@@ -13,6 +13,11 @@ output "ssh_command" {
   description = "SSH command template for connecting to the instance"
 }
 
+output "key_pair_name" {
+  value       = local.effective_key_pair_name
+  description = "AWS EC2 key pair name attached to the instance"
+}
+
 output "app_directory" {
   value       = var.app_directory
   description = "Directory where the app should be cloned or copied"

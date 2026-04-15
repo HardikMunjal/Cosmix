@@ -19,6 +19,24 @@ variable "instance_type" {
 variable "key_pair_name" {
   description = "Existing AWS EC2 key pair name used for SSH access"
   type        = string
+  default     = ""
+}
+
+variable "create_key_pair" {
+  description = "Create a new AWS EC2 key pair from a local public key"
+  type        = bool
+  default     = false
+}
+
+variable "public_key_path" {
+  description = "Path to the local SSH public key used when create_key_pair is true"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.create_key_pair == false || length(trimspace(var.public_key_path)) > 0
+    error_message = "public_key_path must be set when create_key_pair is true."
+  }
 }
 
 variable "admin_cidr" {

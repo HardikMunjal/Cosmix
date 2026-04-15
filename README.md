@@ -110,11 +110,11 @@ The local Docker stack is defined in [infra/docker-compose.yml](infra/docker-com
 
 ### EC2 Deployment
 
-For a single-instance AWS deployment, use the dedicated EC2 compose file at [infra/docker-compose.ec2.yml](infra/docker-compose.ec2.yml). This setup exposes:
+For a single-instance AWS deployment, use the dedicated EC2 compose file at [infra/docker-compose.ec2.yml](infra/docker-compose.ec2.yml). This setup exposes only one public port:
 
-- Web app on port `80`
-- API gateway on port `3000`
-- Chat websocket service on port `3002`
+- Web app and internal reverse proxy on port `80`
+
+The chat websocket and wellness endpoints are routed through the same public host on port `80`, so the EC2 security group can stay minimal and free-tier-friendly.
 
 Provision the instance and network with Terraform from [infra/terraform/ec2](infra/terraform/ec2):
 
@@ -124,7 +124,8 @@ Provision the instance and network with Terraform from [infra/terraform/ec2](inf
   cd infra/terraform/ec2
   cp terraform.tfvars.example terraform.tfvars
   ```
-3. For AWS free tier or a small demo budget, keep the deployment on a single `t3.micro` and do not add load balancers, RDS, or multi-node Kubernetes. The EC2 Terraform defaults now reflect that smaller footprint and add a swap file during bootstrap to reduce out-of-memory failures during Docker builds.
+  You can either reference an existing EC2 key pair or set `create_key_pair = true` with a local `public_key_path` to create one during provisioning.
+3. For AWS free tier or a small demo budget, keep the deployment on a single `t3.micro` and do not add load balancers, RDS, NAT gateways, or multi-node Kubernetes. The EC2 Terraform defaults now reflect that smaller footprint and add a swap file during bootstrap to reduce out-of-memory failures during Docker builds.
 3. Apply the infrastructure:
   ```
   terraform init
@@ -140,12 +141,28 @@ Provision the instance and network with Terraform from [infra/terraform/ec2](inf
 After the stack is up:
 
 - Web: `http://<ec2-public-ip>/`
-- API Gateway: `http://<ec2-public-ip>:3000`
-- Chat websocket: `http://<ec2-public-ip>:3002`
+
+The browser will use the same public origin for the web UI, chat websocket, and wellness calls.
 
 This is a pragmatic single-node deployment for development or demos. It intentionally keeps the architecture simple and does not yet add TLS, a reverse proxy, autoscaling, or managed database connectivity.
 
 Note: even with these smaller defaults, building several Node.js images on a micro instance will be slow. The deployment is realistic for demos, not production traffic.
+
+### AWS Inputs You Need Ready
+
+Before provisioning the EC2 stack, have these values ready:
+
+- AWS region, ideally `us-east-1` for free-tier-friendly defaults.
+- An existing EC2 key pair name for SSH access, or a public SSH key so a new key pair can be created.
+- Your public IP in CIDR form for `admin_cidr`, for example `203.0.113.10/32`.
+- Your repository clone method:
+  - public HTTPS repo URL, or
+  - private repo URL plus a plan for cloning it on the instance.
+- Whether you want only the web app public. If yes, the default EC2 setup now keeps only port `80` public.
+- Optional domain name if you want Route 53 / TLS later.
+- Optional third-party secrets such as Strava credentials if you want wellness sync in production.
+
+For a more explicit handoff checklist, see [docs/aws-free-tier-deploy.md](docs/aws-free-tier-deploy.md).
 
 ### Login
 

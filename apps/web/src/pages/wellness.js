@@ -106,7 +106,11 @@ export default function WellnessPage() {
 
   const showMicSecurityWarning = typeof window !== 'undefined' && !window.isSecureContext && window.location.hostname !== 'localhost';
 
-  const API_BASE = typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:3004` : '';
+  const API_BASE = typeof window !== 'undefined'
+    ? ((window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+      ? `${window.location.protocol}//${window.location.hostname}:3004`
+      : '')
+    : '';
   const saveTimerRef = useRef(null);
 
   /* ---- init (runs once) ---- */
@@ -134,7 +138,7 @@ export default function WellnessPage() {
     setLoading(false);
 
     // Then try loading from server (overrides if server has data)
-    fetch(`${`${window.location.protocol}//${window.location.hostname}:3004`}/wellness/data/${encodeURIComponent(uid)}`)
+    fetch(`${API_BASE}/wellness/data/${encodeURIComponent(uid)}`)
       .then((r) => r.ok ? r.json() : null)
       .then((serverData) => {
         if (!serverData) return;
@@ -165,7 +169,7 @@ export default function WellnessPage() {
         setStravaConnected(true);
         setStravaMsg('Strava connected! Syncing activities...');
         // Immediately fetch activities after connect
-        fetch(`${window.location.protocol}//${window.location.hostname}:3004/wellness/strava/activities/${encodeURIComponent(uid)}`)
+        fetch(`${API_BASE}/wellness/strava/activities/${encodeURIComponent(uid)}`)
           .then((r) => r.ok ? r.json() : null)
           .then((actData) => {
             if (!actData?.fields || Object.keys(actData.fields).length === 0) {
@@ -188,13 +192,13 @@ export default function WellnessPage() {
     }
 
     // Check Strava connection status & auto-fill
-    fetch(`${window.location.protocol}//${window.location.hostname}:3004/wellness/strava/status/${encodeURIComponent(uid)}`)
+    fetch(`${API_BASE}/wellness/strava/status/${encodeURIComponent(uid)}`)
       .then((r) => r.ok ? r.json() : null)
       .then((d) => {
         if (!d?.connected) return;
         setStravaConnected(true);
         // Auto-fetch today's activities
-        return fetch(`${window.location.protocol}//${window.location.hostname}:3004/wellness/strava/activities/${encodeURIComponent(uid)}`)
+        return fetch(`${API_BASE}/wellness/strava/activities/${encodeURIComponent(uid)}`)
           .then((r) => r.ok ? r.json() : null)
           .then((actData) => {
             if (!actData?.fields || Object.keys(actData.fields).length === 0) return;
@@ -210,7 +214,7 @@ export default function WellnessPage() {
           });
       })
       .catch(() => {});
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [API_BASE, router]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---- sync to server (debounced) ---- */
   function syncToServer(newEntries, newForm) {

@@ -1,6 +1,7 @@
 FROM node:20-slim AS builder
 
 WORKDIR /usr/src/app
+ENV NODE_OPTIONS=--max-old-space-size=1536
 
 COPY apps/web/package.json ./
 RUN npm install

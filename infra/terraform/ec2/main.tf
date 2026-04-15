@@ -13,6 +13,10 @@ provider "aws" {
   region = var.aws_region
 }
 
+locals {
+  effective_key_pair_name = var.create_key_pair ? aws_key_pair.cosmix[0].key_name : var.key_pair_name
+}
+
 data "aws_ami" "amazon_linux_2023" {
   most_recent = true
   owners      = ["137112412989"]
@@ -96,22 +100,6 @@ resource "aws_security_group" "cosmix" {
     cidr_blocks = var.public_ingress_cidrs
   }
 
-  ingress {
-    description = "API gateway"
-    from_port   = 3000
-    to_port     = 3000
-    protocol    = "tcp"
-    cidr_blocks = var.public_ingress_cidrs
-  }
-
-  ingress {
-    description = "Chat websocket"
-    from_port   = 3002
-    to_port     = 3002
-    protocol    = "tcp"
-    cidr_blocks = var.public_ingress_cidrs
-  }
-
   egress {
     from_port   = 0
     to_port     = 0
@@ -124,12 +112,22 @@ resource "aws_security_group" "cosmix" {
   }
 }
 
+resource "aws_key_pair" "cosmix" {
+  count      = var.create_key_pair ? 1 : 0
+  key_name   = var.key_pair_name
+  public_key = file(var.public_key_path)
+
+  tags = {
+    Name = var.key_pair_name
+  }
+}
+
 resource "aws_instance" "cosmix" {
   ami                         = data.aws_ami.amazon_linux_2023.id
   instance_type               = var.instance_type
   subnet_id                   = aws_subnet.public.id
   vpc_security_group_ids      = [aws_security_group.cosmix.id]
-  key_name                    = var.key_pair_name
+  key_name                    = local.effective_key_pair_name
   associate_public_ip_address = true
 
   user_data = templatefile("${path.module}/user-data.sh.tftpl", {

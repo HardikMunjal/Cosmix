@@ -50,3 +50,11 @@ _test_ws.js
 
 # Archives
 *.tgz
+
+# Terraform local state and secrets
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+infra/terraform/ec2/terraform.tfvars

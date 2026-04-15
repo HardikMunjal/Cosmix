@@ -17,6 +17,7 @@
     "rxjs": "^7.0.0"
   },
   "devDependencies": {
+    "@types/express": "^5.0.3",
     "@nestjs/testing": "^9.0.0",
     "eslint": "^7.32.0",
     "ts-node": "^10.9.2",
