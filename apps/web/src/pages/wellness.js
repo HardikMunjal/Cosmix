@@ -1,41 +1,55 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 
-const STORAGE_ENTRIES_KEY = 'cosmix-wellness-entries';
-const STORAGE_GOALS_KEY = 'cosmix-wellness-goals';
-const STORAGE_LAST_FORM_KEY = 'cosmix-wellness-form';
-const STORAGE_GREETED_KEY = 'cosmix-astra-greeted';
-const STORAGE_CONV_KEY = 'cosmix-astra-conversations';
+import {
+  DEFAULT_FORM,
+  LANGUAGE_OPTIONS,
+  formatMetric,
+  formatUpdateList,
+  parseActivityCommand,
+  todayDate,
+} from '../lib/wellnessParsing';
+import {
+  DAILY_PENALTY,
+  computeDashboardStats,
+  computeEntryScores,
+} from '../lib/wellnessScoring';
 
-const SILENCE_NUDGE_MS = 42000;
+const STORAGE_LANG_KEY = 'cosmix-henna-language';
+function storageKey(userId, suffix) { return `cosmix-wellness-${userId}-${suffix}`; }
 
-const NUDGE_LINES = [
-  'Yaar, still there? I am right here - just say something!',
-  "Arre, how is your body feeling right now? Mountains don't wait!",
-  "Don't go quiet on me! Even a quick note helps your trek prep.",
-  'Your Hampta Pass goal is calling. How did today go, yaar?',
-  'Come on, what is on your mind? I am listening.',
-  'No pressure, but the mountains are calling - how are you doing?',
+/* ---------- activity dropdown config ---------- */
+const ACTIVITY_OPTIONS = [
+  { id: 'running', label: 'Running', icon: '🏃', fields: [{ key: 'runningDistanceKm', label: 'Distance', unit: 'km', step: 0.1 }, { key: 'runningMinutes', label: 'Time', unit: 'mins', step: 1 }] },
+  { id: 'walking', label: 'Walking', icon: '🚶', fields: [{ key: 'walkingDistanceKm', label: 'Distance', unit: 'km', step: 0.1 }, { key: 'walkingMinutes', label: 'Time', unit: 'mins', step: 1 }] },
+  { id: 'exercise', label: 'Workout', icon: '💪', fields: [{ key: 'exerciseMinutes', label: 'Time', unit: 'mins', step: 1 }] },
+  { id: 'badminton', label: 'Badminton', icon: '🏸', fields: [{ key: 'badmintonMinutes', label: 'Time', unit: 'mins', step: 1 }] },
+  { id: 'football', label: 'Football', icon: '⚽', fields: [{ key: 'footballMinutes', label: 'Time', unit: 'mins', step: 1 }] },
+  { id: 'cricket', label: 'Cricket', icon: '🏏', fields: [{ key: 'cricketMinutes', label: 'Time', unit: 'mins', step: 1 }] },
+  { id: 'swimming', label: 'Swimming', icon: '🏊', fields: [{ key: 'swimmingMinutes', label: 'Time', unit: 'mins', step: 1 }] },
+  { id: 'meditation', label: 'Meditation', icon: '🧘', fields: [{ key: 'meditationMinutes', label: 'Time', unit: 'mins', step: 1 }] },
+  { id: 'whisky', label: 'Whisky', icon: '🥃', fields: [{ key: 'whiskyPegs', label: 'Pegs', unit: 'pegs', step: 1 }] },
+  { id: 'fastfood', label: 'Fast food', icon: '🍔', fields: [{ key: 'fastFoodServings', label: 'Count', unit: 'count', step: 1 }] },
+  { id: 'sugar', label: 'Sugar', icon: '🍬', fields: [{ key: 'sugarServings', label: 'Count', unit: 'count', step: 1 }] },
+  { id: 'sleep', label: 'Sleep', icon: '😴', fields: [{ key: 'sleepHours', label: 'Hours', unit: 'hrs', step: 0.5 }] },
 ];
 
-const TREK_QUOTES = [
-  { quote: 'The mountains are calling and I must go.', author: 'John Muir' },
-  { quote: 'It is not the mountain we conquer but ourselves.', author: 'Sir Edmund Hillary' },
-  { quote: 'Every mountain top is within reach if you just keep climbing.', author: 'Barry Finlay' },
-  { quote: 'The summit is what drives us, but the climb itself is what matters.', author: 'Conrad Anker' },
-  { quote: 'Great things are done when men and mountains meet.', author: 'William Blake' },
-  { quote: 'In the mountains, there is the greatest freedom.', author: 'Markus Zusak' },
-  { quote: 'Somewhere between the bottom and the summit is the answer to why we climb.', author: 'Greg Child' },
-];
+/* ---------- helpers ---------- */
+function parseStoredJson(key, fallback) {
+  if (typeof window === 'undefined') return fallback;
+  const raw = localStorage.getItem(key);
+  if (!raw) return fallback;
+  try { return JSON.parse(raw); } catch (_) { return fallback; }
+}
 
 function weatherIcon(code) {
-  if (code === 0) return '\u2600\uFE0F';
-  if (code <= 3) return '\u26C5';
-  if (code <= 48) return '\uD83C\uDF2B\uFE0F';
-  if (code <= 67) return '\uD83C\uDF27\uFE0F';
-  if (code <= 77) return '\u2744\uFE0F';
-  if (code <= 82) return '\uD83C\uDF26\uFE0F';
-  return '\u26C8\uFE0F';
+  if (code === 0) return '☀️';
+  if (code <= 3) return '⛅';
+  if (code <= 48) return '🌫️';
+  if (code <= 67) return '🌧️';
+  if (code <= 77) return '❄️';
+  if (code <= 82) return '🌦️';
+  return '⛈️';
 }
 
 function weatherDesc(code) {
@@ -49,779 +63,836 @@ function weatherDesc(code) {
   return 'Thunderstorm';
 }
 
-const ACTIVITY_FIELDS = [
-  { key: 'runningMinutes', label: 'Running', unit: 'mins', color: '#fb7185' },
-  { key: 'meditationMinutes', label: 'Meditation', unit: 'mins', color: '#38bdf8' },
-  { key: 'waterLiters', label: 'Drinking water', unit: 'L', color: '#2dd4bf', step: 0.25 },
-  { key: 'headacheLevel', label: 'Headache', unit: '/10', color: '#f59e0b' },
-  { key: 'exerciseMinutes', label: 'Exercise', unit: 'mins', color: '#f97316' },
-  { key: 'fastFoodServings', label: 'Fast food', unit: 'servings', color: '#f87171' },
-  { key: 'cricketMinutes', label: 'Cricket', unit: 'mins', color: '#a78bfa' },
-  { key: 'footballMinutes', label: 'Football', unit: 'mins', color: '#22c55e' },
-  { key: 'badmintonMinutes', label: 'Badminton', unit: 'mins', color: '#facc15' },
-  { key: 'swimmingMinutes', label: 'Swimming', unit: 'mins', color: '#60a5fa' },
-];
-
-const DEFAULT_FORM = {
-  date: new Date().toISOString().slice(0, 10),
-  runningMinutes: 0,
-  meditationMinutes: 10,
-  waterLiters: 2.5,
-  headacheLevel: 0,
-  exerciseMinutes: 20,
-  fastFoodServings: 0,
-  cricketMinutes: 0,
-  footballMinutes: 0,
-  badmintonMinutes: 0,
-  swimmingMinutes: 0,
-  moodScore: 7,
-  notes: '',
-};
-
-function getApiBase() {
-  if (typeof window === 'undefined') return 'http://localhost:3000';
-  return `http://${window.location.hostname}:3000`;
-}
-
-function formatCurrency(value) {
-  if (value == null || Number.isNaN(Number(value))) return '--';
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    maximumFractionDigits: 0,
-  }).format(Number(value));
-}
-
-function parseStoredJson(key, fallback) {
-  if (typeof window === 'undefined') return fallback;
-  const raw = localStorage.getItem(key);
-  if (!raw) return fallback;
-  try {
-    return JSON.parse(raw);
-  } catch (_) {
-    return fallback;
-  }
-}
-
-function pickBestVoice(voices) {
-  const tiers = [
-    (voice) => /microsoft heera/i.test(voice.name),
-    (voice) => /microsoft ravi/i.test(voice.name),
-    (voice) => voice.lang === 'en-IN',
-    (voice) => /google.*en-in/i.test(voice.name),
-    (voice) => /veena/i.test(voice.name),
-    (voice) => /priya/i.test(voice.name),
-    (voice) => /microsoft.*natural.*en/i.test(voice.name),
-    (voice) => /microsoft.*online.*natural/i.test(voice.name),
-    (voice) => /google.*wavenet/i.test(voice.name),
-    (voice) => /google uk english female/i.test(voice.name),
-    (voice) => /samantha/i.test(voice.name),
-    (voice) => /karen/i.test(voice.name),
-    (voice) => /aria/i.test(voice.name),
-    (voice) => /female/i.test(voice.name),
-  ];
-
-  for (const test of tiers) {
-    const found = voices.find(test);
-    if (found) return found;
-  }
-
-  return voices.find((voice) => /en-IN/i.test(voice.lang))
-    || voices.find((voice) => /en/i.test(voice.lang))
-    || voices[0]
-    || null;
-}
-
-function parseTranscriptIntoForm(form, transcript) {
-  const next = { ...form };
-  const patterns = [
-    ['runningMinutes', /(run|running)\s+(for\s+)?(\d+(?:\.\d+)?)\s*(minutes|mins|min)?/i],
-    ['meditationMinutes', /(meditat(?:e|ed|ion))\s+(for\s+)?(\d+(?:\.\d+)?)\s*(minutes|mins|min)?/i],
-    ['waterLiters', /(drank|drink|water)\s+(\d+(?:\.\d+)?)\s*(litres|liters|l|glass|glasses)?/i],
-    ['exerciseMinutes', /(exercise|workout|gym)\s+(for\s+)?(\d+(?:\.\d+)?)\s*(minutes|mins|min)?/i],
-    ['headacheLevel', /(headache)\s+(level\s+)?(\d+(?:\.\d+)?)\s*(out of 10|\/10)?/i],
-    ['fastFoodServings', /(fast food|burger|pizza)\s+(\d+(?:\.\d+)?)\s*(times|servings)?/i],
-    ['cricketMinutes', /(cricket)\s+(for\s+)?(\d+(?:\.\d+)?)\s*(minutes|mins|min)?/i],
-    ['footballMinutes', /(football)\s+(for\s+)?(\d+(?:\.\d+)?)\s*(minutes|mins|min)?/i],
-    ['badmintonMinutes', /(badminton)\s+(for\s+)?(\d+(?:\.\d+)?)\s*(minutes|mins|min)?/i],
-    ['swimmingMinutes', /(swimming|swim)\s+(for\s+)?(\d+(?:\.\d+)?)\s*(minutes|mins|min)?/i],
-  ];
-
-  patterns.forEach(([field, regex]) => {
-    const match = transcript.match(regex);
-    if (!match) return;
-    const num = match.slice().reverse().find((value) => /^\d+(?:\.\d+)?$/.test(value));
-    if (num) next[field] = Number(num);
-  });
-
-  const moodMatch = transcript.match(/mood\s+(\d+(?:\.\d+)?)\s*(out of 10|\/10)?/i);
-  if (moodMatch) next.moodScore = Number(moodMatch[1]);
-  next.notes = [form.notes, transcript].filter(Boolean).join(form.notes ? '\n' : '');
-  return next;
-}
-
-const dailyQuote = TREK_QUOTES[new Date().getDate() % TREK_QUOTES.length];
-
 function MountainBg() {
   return (
-    <div style={styles.mountainBgFixed} aria-hidden="true">
-      <div style={styles.mountainSky} />
-      <div style={styles.starField} />
-      <div style={styles.sunGlow} />
-      <svg style={styles.mountainSvgLayer} viewBox="0 0 1440 500" preserveAspectRatio="xMidYMax slice">
-        <polygon points="0,500 0,290 200,170 420,250 640,135 860,225 1080,155 1300,215 1440,185 1440,500" fill="rgba(99,102,241,0.42)" />
-        <polygon points="0,500 0,345 175,270 355,310 535,238 715,278 895,227 1075,265 1255,232 1440,252 1440,500" fill="rgba(30,58,138,0.58)" />
-        <polygon points="535,238 548,210 568,224 585,198 605,218 622,207 637,220 658,238" fill="rgba(255,255,255,0.55)" />
-        <polygon points="860,225 875,198 895,215 912,192 932,212 948,225" fill="rgba(255,255,255,0.5)" />
-        <polygon points="200,270 215,242 232,258 250,238 268,252 282,270" fill="rgba(255,255,255,0.45)" />
-        <polygon points="0,500 0,392 138,367 298,383 458,354 618,370 778,349 938,365 1098,350 1258,360 1440,349 1440,500" fill="rgba(15,23,42,0.8)" />
-        <polygon points="0,500 0,455 40,445 75,450 105,440 135,452 170,444 210,450 245,440 280,450 315,440 350,452 385,442 420,452 455,440 490,452 525,442 560,452 600,440 640,454 680,442 720,450 760,437 800,452 840,442 880,450 920,440 960,454 1000,440 1040,450 1080,438 1120,452 1160,440 1200,450 1240,442 1280,452 1320,440 1360,448 1400,438 1440,447 1440,500" fill="rgba(2,6,23,0.92)" />
-      </svg>
-      <svg style={{ ...styles.mountainSvgLayer, top: '8%', animation: 'cloudDrift 35s ease-in-out infinite alternate' }} viewBox="0 0 1440 180" preserveAspectRatio="xMidYMid slice">
-        <ellipse cx="280" cy="70" rx="160" ry="34" fill="rgba(255,255,255,0.06)" />
-        <ellipse cx="760" cy="55" rx="210" ry="38" fill="rgba(255,255,255,0.05)" />
-        <ellipse cx="1180" cy="82" rx="145" ry="28" fill="rgba(255,255,255,0.06)" />
+    <div style={s.bgWrap} aria-hidden="true">
+      <div style={s.bgSky} />
+      <div style={s.bgGlow} />
+      <svg style={s.bgMountains} viewBox="0 0 1440 600" preserveAspectRatio="xMidYMax slice">
+        <polygon points="0,600 0,280 220,180 420,250 650,120 890,230 1130,150 1440,240 1440,600" fill="rgba(255,255,255,0.12)" />
+        <polygon points="0,600 0,360 180,310 410,360 640,250 860,300 1080,240 1280,300 1440,270 1440,600" fill="rgba(17,24,39,0.42)" />
+        <polygon points="0,600 0,430 170,400 340,430 520,390 720,420 940,382 1140,430 1440,390 1440,600" fill="rgba(15,23,42,0.78)" />
       </svg>
     </div>
   );
 }
 
+/* ================================================ */
 export default function WellnessPage() {
   const router = useRouter();
   const recognitionRef = useRef(null);
-  const robotStageRef = useRef(null);
-  const dragStateRef = useRef(null);
-  const speechRef = useRef({ voice: null, speaking: false });
-  const nudgeTimerRef = useRef(null);
-  const subtitleTimerRef = useRef(null);
-  const nudgeIndexRef = useRef(0);
+  const recognitionActiveRef = useRef(false);
+  const initDoneRef = useRef(false);
+  const userIdRef = useRef(null);
 
   const [user, setUser] = useState(null);
-  const [defaults, setDefaults] = useState(null);
-  const [entries, setEntries] = useState([]);
-  const [goals, setGoals] = useState([]);
-  const [form, setForm] = useState(DEFAULT_FORM);
-  const [coachPayload, setCoachPayload] = useState(null);
-  const [coachPrompt, setCoachPrompt] = useState('How am I doing today?');
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [entries, setEntries] = useState([]);
+  const [form, setForm] = useState(DEFAULT_FORM);
+  const [selectedDate, setSelectedDate] = useState(todayDate());
+  const [selectedActivity, setSelectedActivity] = useState('');
+  const [fieldValues, setFieldValues] = useState({});
+  const [commandInput, setCommandInput] = useState('');
+  const [assistantReply, setAssistantReply] = useState('');
   const [listening, setListening] = useState(false);
   const [transcript, setTranscript] = useState('');
-  const [voiceStatus, setVoiceStatus] = useState('Loading voice...');
-  const [robotPos, setRobotPos] = useState({ x: 18, y: 20 });
-  const [subtitle, setSubtitle] = useState('');
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const [chatHistory, setChatHistory] = useState([]);
+  const [voiceStatus, setVoiceStatus] = useState('Mic ready');
+  const [voiceLanguage, setVoiceLanguage] = useState('hi-IN');
   const [weather, setWeather] = useState(null);
+  const [inputMode, setInputMode] = useState('dropdown');
+  const [stravaConnected, setStravaConnected] = useState(false);
+  const [stravaLoading, setStravaLoading] = useState(false);
+  const [stravaMsg, setStravaMsg] = useState('');
 
+  const showMicSecurityWarning = typeof window !== 'undefined' && !window.isSecureContext && window.location.hostname !== 'localhost';
+
+  const API_BASE = typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:3004` : '';
+  const saveTimerRef = useRef(null);
+
+  /* ---- init (runs once) ---- */
   useEffect(() => {
+    if (typeof window === 'undefined' || initDoneRef.current) return;
     const storedUser = localStorage.getItem('user');
-    if (!storedUser) {
-      router.push('/');
-      return;
-    }
-    setUser(JSON.parse(storedUser));
-    setChatHistory(parseStoredJson(STORAGE_CONV_KEY, []));
-  }, [router]);
+    if (!storedUser) { router.push('/'); return; }
+    const parsed = JSON.parse(storedUser);
+    const uid = parsed.id || parsed.email || parsed.username || 'default';
+    userIdRef.current = uid;
+    setUser(parsed);
 
+    // Load from localStorage first (instant)
+    const localEntries = parseStoredJson(storageKey(uid, 'entries'), []);
+    const localForm = parseStoredJson(storageKey(uid, 'form'), DEFAULT_FORM);
+    const today = todayDate();
+    const todayEntry = localEntries.find((e) => e.date === today);
+    const resolvedForm = todayEntry || { ...DEFAULT_FORM, ...localForm, date: today };
+    setEntries(localEntries);
+    setForm(resolvedForm);
+    setSelectedDate(today);
+    const storedLanguage = localStorage.getItem(STORAGE_LANG_KEY);
+    if (storedLanguage && LANGUAGE_OPTIONS.some((o) => o.value === storedLanguage)) setVoiceLanguage(storedLanguage);
+    initDoneRef.current = true;
+    setLoading(false);
+
+    // Then try loading from server (overrides if server has data)
+    fetch(`${`${window.location.protocol}//${window.location.hostname}:3004`}/wellness/data/${encodeURIComponent(uid)}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((serverData) => {
+        if (!serverData) return;
+        const sEntries = serverData.entries || [];
+        const sForm = serverData.form || null;
+        if (sEntries.length > 0) {
+          // Merge: server entries take priority by date
+          const merged = [...sEntries];
+          const serverDates = new Set(sEntries.map((e) => e.date));
+          localEntries.forEach((e) => { if (!serverDates.has(e.date)) merged.push(e); });
+          setEntries(merged);
+          localStorage.setItem(storageKey(uid, 'entries'), JSON.stringify(merged));
+          const sTodayEntry = merged.find((e) => e.date === today);
+          if (sTodayEntry) setForm(sTodayEntry);
+        }
+        if (sForm && sEntries.length === 0 && localEntries.length === 0) {
+          setForm({ ...DEFAULT_FORM, ...sForm, date: today });
+        }
+      })
+      .catch(() => { /* server offline, localStorage is fine */ });
+
+    // Handle Strava OAuth result (server-side callback redirects here with ?strava=ok)
+    const urlParams = new URLSearchParams(window.location.search);
+    const stravaResult = urlParams.get('strava');
+    if (stravaResult) {
+      window.history.replaceState({}, '', window.location.pathname);
+      if (stravaResult === 'ok') {
+        setStravaConnected(true);
+        setStravaMsg('Strava connected! Syncing activities...');
+        // Immediately fetch activities after connect
+        fetch(`${window.location.protocol}//${window.location.hostname}:3004/wellness/strava/activities/${encodeURIComponent(uid)}`)
+          .then((r) => r.ok ? r.json() : null)
+          .then((actData) => {
+            if (!actData?.fields || Object.keys(actData.fields).length === 0) {
+              setStravaMsg('Strava connected! No activities found today.');
+              return;
+            }
+            setStravaMsg(`Strava connected! Synced ${actData.activities} activities`);
+            setForm((prev) => {
+              const updated = { ...prev };
+              for (const [key, val] of Object.entries(actData.fields)) {
+                if (!updated[key] || updated[key] === 0) updated[key] = val;
+              }
+              return updated;
+            });
+          })
+          .catch(() => setStravaMsg('Strava connected but sync failed'));
+      } else {
+        setStravaMsg('Strava authorization failed. Try again.');
+      }
+    }
+
+    // Check Strava connection status & auto-fill
+    fetch(`${window.location.protocol}//${window.location.hostname}:3004/wellness/strava/status/${encodeURIComponent(uid)}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => {
+        if (!d?.connected) return;
+        setStravaConnected(true);
+        // Auto-fetch today's activities
+        return fetch(`${window.location.protocol}//${window.location.hostname}:3004/wellness/strava/activities/${encodeURIComponent(uid)}`)
+          .then((r) => r.ok ? r.json() : null)
+          .then((actData) => {
+            if (!actData?.fields || Object.keys(actData.fields).length === 0) return;
+            setStravaMsg(`Strava: ${actData.activities} activities synced`);
+            // Auto-fill only empty fields in current form
+            setForm((prev) => {
+              const updated = { ...prev };
+              for (const [key, val] of Object.entries(actData.fields)) {
+                if (!updated[key] || updated[key] === 0) updated[key] = val;
+              }
+              return updated;
+            });
+          });
+      })
+      .catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ---- sync to server (debounced) ---- */
+  function syncToServer(newEntries, newForm) {
+    const uid = userIdRef.current;
+    if (!uid) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      fetch(`${API_BASE}/wellness/data/${encodeURIComponent(uid)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entries: newEntries, form: newForm }),
+      }).catch(() => { /* server offline, silent fail */ });
+    }, 1500);
+  }
+
+  /* ---- Strava connect / disconnect ---- */
+  function handleStravaConnect() {
+    const uid = userIdRef.current;
+    if (!uid) return;
+    setStravaLoading(true);
+    const redirectUri = `${window.location.protocol}//${window.location.host}/wellness`;
+    fetch(`${API_BASE}/wellness/strava/auth-url?userId=${encodeURIComponent(uid)}&redirectUri=${encodeURIComponent(redirectUri)}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.url) window.location.href = d.url;
+        else { setStravaMsg('Strava not configured on server (set STRAVA_CLIENT_ID / STRAVA_CLIENT_SECRET)'); setStravaLoading(false); }
+      })
+      .catch(() => { setStravaMsg('Server offline'); setStravaLoading(false); });
+  }
+  function handleStravaDisconnect() {
+    const uid = userIdRef.current;
+    if (!uid) return;
+    fetch(`${API_BASE}/wellness/strava/${encodeURIComponent(uid)}`, { method: 'DELETE' })
+      .then(() => { setStravaConnected(false); setStravaMsg('Strava disconnected'); })
+      .catch(() => {});
+  }
+  function handleStravaSync() {
+    const uid = userIdRef.current;
+    if (!uid) return;
+    setStravaLoading(true);
+    setStravaMsg('');
+    fetch(`${API_BASE}/wellness/strava/activities/${encodeURIComponent(uid)}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => {
+        setStravaLoading(false);
+        if (!d || !d.fields || Object.keys(d.fields).length === 0) {
+          setStravaMsg('No Strava activities today');
+          return;
+        }
+        setStravaMsg(`Synced ${d.activities} activities from Strava`);
+        setForm((prev) => {
+          const updated = { ...prev };
+          for (const [key, val] of Object.entries(d.fields)) {
+            updated[key] = val; // overwrite with Strava data
+          }
+          return updated;
+        });
+      })
+      .catch(() => { setStravaLoading(false); setStravaMsg('Sync failed'); });
+  }
+
+  /* ---- persist (only after init, per-user keys) ---- */
+  useEffect(() => {
+    if (!initDoneRef.current || !userIdRef.current) return;
+    localStorage.setItem(storageKey(userIdRef.current, 'form'), JSON.stringify(form));
+    syncToServer(entries, form);
+  }, [form]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!initDoneRef.current || !userIdRef.current) return;
+    localStorage.setItem(storageKey(userIdRef.current, 'entries'), JSON.stringify(entries));
+    syncToServer(entries, form);
+  }, [entries]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (initDoneRef.current) localStorage.setItem(STORAGE_LANG_KEY, voiceLanguage); }, [voiceLanguage]);
+
+  /* ---- weather ---- */
   useEffect(() => {
     if (typeof window === 'undefined' || !navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition(
-      async ({ coords: { latitude, longitude } }) => {
-        try {
-          const [weatherResponse, geoResponse] = await Promise.all([
-            fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,weather_code,wind_speed_10m&timezone=auto`),
-            fetch(`https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`),
-          ]);
-          const weatherPayload = await weatherResponse.json();
-          const geoPayload = await geoResponse.json();
-          const code = weatherPayload.current?.weather_code ?? 0;
-          setWeather({
-            temp: Math.round(weatherPayload.current?.temperature_2m ?? 0),
-            wind: Math.round(weatherPayload.current?.wind_speed_10m ?? 0),
-            code,
-            icon: weatherIcon(code),
-            desc: weatherDesc(code),
-            city: geoPayload.address?.city || geoPayload.address?.town || geoPayload.address?.village || 'your area',
-          });
-        } catch (_) {
-          // Ignore weather fetch failures.
-        }
-      },
-      () => {
-        // Ignore denied geolocation.
-      },
-    );
-  }, []);
-
-  useEffect(() => {
-    if (!user) return;
-    let cancelled = false;
-
-    async function bootstrap() {
-      setLoading(true);
+    navigator.geolocation.getCurrentPosition(async ({ coords: { latitude, longitude } }) => {
       try {
-        const response = await fetch(`${getApiBase()}/wellness/defaults`);
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.message || 'Failed to load defaults');
-        if (cancelled) return;
-
-        setDefaults(payload);
-
-        const storedEntries = parseStoredJson(STORAGE_ENTRIES_KEY, []);
-        const storedGoals = parseStoredJson(STORAGE_GOALS_KEY, payload.goals || []);
-        const storedForm = parseStoredJson(STORAGE_LAST_FORM_KEY, payload.starterEntry || DEFAULT_FORM);
-
-        setEntries(storedEntries);
-        setGoals(storedGoals);
-        setForm({ ...DEFAULT_FORM, ...storedForm, date: new Date().toISOString().slice(0, 10) });
-
-        const alreadyGreeted = localStorage.getItem(STORAGE_GREETED_KEY);
-        const greetAsk = alreadyGreeted
-          ? `Welcome back ${user.username}! Give a quick, warm, friendly check-in in Indian English - how the body is doing and one key thing to focus on today. Be casual like a close friend.`
-          : `Say a warm, personal Hi to ${user.username} for the very first time in Indian English! Introduce yourself as Astra, their mountain fitness and wellness buddy. Be short, energetic, and motivating like a good Indian friend - use words like yaar, arre etc naturally.`;
-
-        const coachRes = await requestCoachRaw({
-          userName: user.username,
-          latestEntry: storedEntries[0] || { ...DEFAULT_FORM, ...storedForm },
-          entries: storedEntries,
-          goals: storedGoals,
-          ask: greetAsk,
+        const [wRes, gRes] = await Promise.all([
+          fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,weather_code,wind_speed_10m&timezone=auto`),
+          fetch(`https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`),
+        ]);
+        const wData = await wRes.json();
+        const gData = await gRes.json();
+        const code = wData.current?.weather_code ?? 0;
+        setWeather({
+          temp: Math.round(wData.current?.temperature_2m ?? 0),
+          wind: Math.round(wData.current?.wind_speed_10m ?? 0),
+          icon: weatherIcon(code), desc: weatherDesc(code),
+          city: gData.address?.city || gData.address?.town || gData.address?.village || 'your area',
         });
-        if (cancelled) return;
-
-        setCoachPayload(coachRes);
-        localStorage.setItem(STORAGE_GREETED_KEY, '1');
-        pushChat('astra', coachRes.coachReply);
-        setTimeout(() => speakCoach(coachRes.coachReply), 700);
-      } catch (error) {
-        if (!cancelled) console.error(error);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-
-    bootstrap();
-    return () => {
-      cancelled = true;
-    };
-  }, [user]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) {
-      setVoiceStatus('Speech not supported');
-      return;
-    }
-
-    const assign = () => {
-      const voices = window.speechSynthesis.getVoices();
-      const picked = pickBestVoice(voices);
-      speechRef.current.voice = picked;
-      setVoiceStatus(picked ? picked.name : 'Default voice');
-    };
-
-    assign();
-    window.speechSynthesis.onvoiceschanged = assign;
-
-    return () => {
-      window.speechSynthesis.onvoiceschanged = null;
-    };
+      } catch (_) { /* ignore */ }
+    }, () => { /* ignore */ });
   }, []);
 
+  /* ---- date change → load that entry ---- */
   useEffect(() => {
-    if (loading) return;
-    resetNudgeTimer();
-    return () => clearTimeout(nudgeTimerRef.current);
-  }, [loading]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    const move = (event) => {
-      if (!dragStateRef.current || !robotStageRef.current) return;
-      const rect = robotStageRef.current.getBoundingClientRect();
-      setRobotPos({
-        x: Math.min(Math.max(event.clientX - rect.left - dragStateRef.current.offsetX, 0), rect.width - 120),
-        y: Math.min(Math.max(event.clientY - rect.top - dragStateRef.current.offsetY, 0), rect.height - 150),
-      });
-    };
-
-    const stop = () => {
-      dragStateRef.current = null;
-    };
-
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', stop);
-
-    return () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', stop);
-    };
-  }, []);
-
-  function pushChat(role, text) {
-    setChatHistory((prev) => {
-      const next = [...prev, { role, text, ts: Date.now() }].slice(-40);
-      localStorage.setItem(STORAGE_CONV_KEY, JSON.stringify(next));
-      return next;
-    });
-  }
-
-  function resetNudgeTimer() {
-    clearTimeout(nudgeTimerRef.current);
-    nudgeTimerRef.current = setTimeout(() => {
-      const line = NUDGE_LINES[nudgeIndexRef.current % NUDGE_LINES.length];
-      nudgeIndexRef.current += 1;
-      pushChat('astra', line);
-      speakCoach(line);
-      resetNudgeTimer();
-    }, SILENCE_NUDGE_MS);
-  }
-
-  async function requestCoachRaw({ userName, latestEntry, entries: nextEntries, goals: nextGoals, ask }) {
-    const res = await fetch(`${getApiBase()}/wellness/coach`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userName, latestEntry, entries: nextEntries, goals: nextGoals, ask }),
-    });
-    const payload = await res.json();
-    if (!res.ok) throw new Error(payload.message || 'Coach request failed');
-    return payload;
-  }
-
-  async function requestCoach({ latestEntry, entries: nextEntries, goals: nextGoals, ask }) {
-    if (!user) return null;
-    const payload = await requestCoachRaw({
-      userName: user.username,
-      latestEntry,
-      entries: nextEntries,
-      goals: nextGoals,
-      ask,
-    });
-    setCoachPayload(payload);
-    return payload;
-  }
-
-  function persistState(nextEntries, nextGoals, nextForm) {
-    localStorage.setItem(STORAGE_ENTRIES_KEY, JSON.stringify(nextEntries));
-    localStorage.setItem(STORAGE_GOALS_KEY, JSON.stringify(nextGoals));
-    localStorage.setItem(STORAGE_LAST_FORM_KEY, JSON.stringify(nextForm));
-  }
-
-  async function handleSaveEntry() {
-    setSaving(true);
-    resetNudgeTimer();
-    const entryToSave = { ...form, date: form.date || new Date().toISOString().slice(0, 10) };
-    const nextEntries = [entryToSave, ...entries.filter((entry) => entry.date !== entryToSave.date)].slice(0, 14);
-    setEntries(nextEntries);
-    persistState(nextEntries, goals, entryToSave);
-    pushChat('user', coachPrompt || 'Saved my day.');
-
-    try {
-      const payload = await requestCoach({ latestEntry: entryToSave, entries: nextEntries, goals, ask: coachPrompt });
-      if (payload) {
-        pushChat('astra', payload.coachReply);
-        speakCoach(payload.coachReply);
-      }
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setSaving(false);
+    if (!initDoneRef.current) return;
+    const existing = entries.find((e) => e.date === selectedDate);
+    if (existing) {
+      setForm(existing);
+    } else {
+      setForm({ ...DEFAULT_FORM, date: selectedDate });
     }
+  }, [selectedDate]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ---- save ---- */
+  function saveEntry(nextForm) {
+    const entry = { ...nextForm, date: nextForm.date || selectedDate };
+    setEntries((cur) => [entry, ...cur.filter((e) => e.date !== entry.date)].slice(0, 60));
+    setForm(entry);
+    return entry;
   }
 
-  async function handleAskCoach() {
-    if (!coachPrompt.trim()) return;
-    setSaving(true);
-    resetNudgeTimer();
-    pushChat('user', coachPrompt);
-
-    try {
-      const payload = await requestCoach({ latestEntry: form, entries, goals, ask: coachPrompt });
-      if (payload) {
-        pushChat('astra', payload.coachReply);
-        speakCoach(payload.coachReply);
+  /* ---- dropdown save ---- */
+  function handleDropdownSave() {
+    const actCfg = ACTIVITY_OPTIONS.find((a) => a.id === selectedActivity);
+    if (!actCfg) { setAssistantReply('Pick an activity first.'); return; }
+    const next = { ...form, date: selectedDate };
+    const updates = [];
+    actCfg.fields.forEach((f) => {
+      const val = Number(fieldValues[f.key] || 0);
+      if (val > 0) {
+        next[f.key] = (Number(next[f.key] || 0)) + val;
+        updates.push({ key: f.key, label: f.label, unit: f.unit, value: next[f.key] });
       }
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setSaving(false);
-    }
+    });
+    if (!updates.length) { setAssistantReply('Enter at least one value.'); return; }
+    saveEntry(next);
+    setAssistantReply(`Added: ${formatUpdateList(updates)}`);
+    setFieldValues({});
   }
 
-  function speakCoach(text) {
-    if (typeof window === 'undefined' || !window.speechSynthesis || !text) return;
-    window.speechSynthesis.cancel();
-    clearTimeout(subtitleTimerRef.current);
-
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.voice = speechRef.current.voice;
-    utterance.lang = 'en-IN';
-    utterance.rate = 0.92;
-    utterance.pitch = 1.08;
-    utterance.volume = 1;
-
-    const words = text.split(/\s+/);
-    let wordIdx = 0;
-
-    utterance.onboundary = (event) => {
-      if (event.name === 'word') {
-        wordIdx += 1;
-        setSubtitle(words.slice(Math.max(0, wordIdx - 7), wordIdx).join(' '));
-      }
-    };
-
-    utterance.onstart = () => {
-      setIsSpeaking(true);
-      setSubtitle(words.slice(0, 7).join(' '));
-      speechRef.current.speaking = true;
-    };
-
-    utterance.onend = () => {
-      speechRef.current.speaking = false;
-      setIsSpeaking(false);
-      subtitleTimerRef.current = setTimeout(() => setSubtitle(''), 2200);
-    };
-
-    utterance.onerror = () => {
-      setIsSpeaking(false);
-      setSubtitle('');
-    };
-
-    window.speechSynthesis.speak(utterance);
-  }
-
-  function startVoiceInput() {
-    if (typeof window === 'undefined') return;
-    const SpeechRecognitionApi = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognitionApi) {
-      setVoiceStatus('Voice input not supported in this browser');
+  /* ---- text parse ---- */
+  function handleParsedMessage(message, source = 'text') {
+    const trimmed = String(message || '').trim();
+    if (!trimmed) return;
+    const { nextForm, updates } = parseActivityCommand(form, trimmed);
+    if (!updates.length) {
+      setAssistantReply('Could not understand. Try again?');
+      if (source === 'voice') setTranscript(trimmed);
       return;
     }
+    saveEntry({ ...nextForm, date: selectedDate });
+    setAssistantReply(`Added: ${formatUpdateList(updates)}`);
+    setCommandInput('');
+    if (source === 'voice') setTranscript(trimmed);
+  }
 
-    resetNudgeTimer();
+  function toggleTracking() {
+    setForm((cur) => ({ ...cur, trackingStartedAt: cur.trackingStartedAt ? null : new Date().toISOString(), date: selectedDate }));
+  }
+
+  /* ---- voice ---- */
+  async function startVoiceInput() {
+    if (typeof window === 'undefined') return;
+    if (recognitionActiveRef.current || listening) { setVoiceStatus('Already listening'); return; }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { setVoiceStatus('Needs Chrome / Edge'); return; }
+    if (!window.isSecureContext && window.location.hostname !== 'localhost') { setVoiceStatus('Needs HTTPS'); return; }
+    try { const st = await navigator.mediaDevices.getUserMedia({ audio: true }); st.getTracks().forEach((t) => t.stop()); } catch (_) { setVoiceStatus('Mic denied'); return; }
 
     if (!recognitionRef.current) {
-      const rec = new SpeechRecognitionApi();
-      rec.lang = 'en-IN';
-      rec.interimResults = false;
-      rec.maxAlternatives = 1;
-      rec.onresult = (event) => {
-        const spoken = event.results?.[0]?.[0]?.transcript || '';
-        setTranscript(spoken);
-        const merged = parseTranscriptIntoForm(form, spoken);
-        setForm(merged);
-        localStorage.setItem(STORAGE_LAST_FORM_KEY, JSON.stringify(merged));
-        pushChat('user', spoken);
-        resetNudgeTimer();
-      };
-      rec.onstart = () => setListening(true);
-      rec.onend = () => setListening(false);
-      rec.onerror = () => {
-        setListening(false);
-        setVoiceStatus('Could not understand mic. Try again.');
+      const rec = new SR();
+      rec.continuous = false; rec.interimResults = false; rec.maxAlternatives = 1;
+      rec.onresult = (e) => { handleParsedMessage(e.results?.[0]?.[0]?.transcript || '', 'voice'); };
+      rec.onstart = () => { recognitionActiveRef.current = true; setListening(true); setVoiceStatus('Listening...'); };
+      rec.onend = () => { recognitionActiveRef.current = false; setListening(false); setVoiceStatus('Mic ready'); };
+      rec.onerror = (e) => {
+        recognitionActiveRef.current = false; setListening(false);
+        if (e?.error === 'no-speech') { setAssistantReply('No speech heard.'); setVoiceStatus('No speech'); return; }
+        if (e?.error === 'not-allowed') { setVoiceStatus('Mic blocked'); return; }
+        setVoiceStatus('Mic error');
       };
       recognitionRef.current = rec;
     }
-
-    recognitionRef.current.start();
+    recognitionRef.current.lang = voiceLanguage;
+    recognitionActiveRef.current = true;
+    try { recognitionRef.current.start(); } catch (err) {
+      recognitionActiveRef.current = false;
+      setVoiceStatus(err?.name === 'InvalidStateError' ? 'Already listening' : 'Mic error');
+    }
   }
 
-  const weeklyMovement = useMemo(
-    () => entries.slice(0, 7).reduce(
-      (sum, entry) => sum
-        + Number(entry.runningMinutes || 0)
-        + Number(entry.exerciseMinutes || 0)
-        + Number(entry.cricketMinutes || 0)
-        + Number(entry.footballMinutes || 0)
-        + Number(entry.badmintonMinutes || 0)
-        + Number(entry.swimmingMinutes || 0),
-      0,
-    ),
-    [entries],
+  /* ---- computed ---- */
+  const stats = useMemo(() => computeDashboardStats(entries, form), [entries, form]);
+  const todayScores = useMemo(() => computeEntryScores(form), [form]);
+
+  const recentRunning = useMemo(
+    () => (entries.length ? entries : [form]).filter((e) => Number(e.runningDistanceKm || 0) > 0 || Number(e.runningMinutes || 0) > 0).slice(0, 5),
+    [entries, form],
   );
 
+  const recentWalking = useMemo(
+    () => (entries.length ? entries : [form]).filter((e) => Number(e.walkingDistanceKm || 0) > 0 || Number(e.walkingMinutes || 0) > 0).slice(0, 5),
+    [entries, form],
+  );
+
+  const selectedActivityConfig = ACTIVITY_OPTIONS.find((a) => a.id === selectedActivity);
+
+  /* ---- chart data ---- */
+  const weekChartData = useMemo(() => {
+    const today = new Date();
+    const days = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toISOString().slice(0, 10);
+      const entry = (dateStr === form.date) ? form : entries.find((e) => e.date === dateStr);
+      const scores = entry ? computeEntryScores(entry) : { physicalScore: 0, mentalScore: 0, totalScore: 0, workoutMinutes: 0 };
+      days.push({ date: dateStr, dayLabel: d.toLocaleDateString('en', { weekday: 'short' }), ...scores });
+    }
+    return days;
+  }, [entries, form]);
+
+  const activityBreakdown = useMemo(() => {
+    const week = [form, ...entries.filter((e) => e.date !== form.date)].slice(0, 7);
+    const totals = [
+      { label: 'Running', icon: '🏃', mins: week.reduce((s, e) => s + Number(e.runningMinutes || 0), 0), color: '#fb7185' },
+      { label: 'Walking', icon: '🚶', mins: week.reduce((s, e) => s + Number(e.walkingMinutes || 0), 0), color: '#a3e635' },
+      { label: 'Workout', icon: '💪', mins: week.reduce((s, e) => s + Number(e.exerciseMinutes || 0), 0), color: '#f59e0b' },
+      { label: 'Badminton', icon: '🏸', mins: week.reduce((s, e) => s + Number(e.badmintonMinutes || 0), 0), color: '#eab308' },
+      { label: 'Football', icon: '⚽', mins: week.reduce((s, e) => s + Number(e.footballMinutes || 0), 0), color: '#22c55e' },
+      { label: 'Cricket', icon: '🏏', mins: week.reduce((s, e) => s + Number(e.cricketMinutes || 0), 0), color: '#8b5cf6' },
+      { label: 'Swimming', icon: '🏊', mins: week.reduce((s, e) => s + Number(e.swimmingMinutes || 0), 0), color: '#0ea5e9' },
+      { label: 'Meditation', icon: '🧘', mins: week.reduce((s, e) => s + Number(e.meditationMinutes || 0), 0), color: '#38bdf8' },
+    ].filter((a) => a.mins > 0);
+    const totalMins = totals.reduce((s, a) => s + a.mins, 0);
+    return { activities: totals, totalMins };
+  }, [entries, form]);
+
+  const todayActivities = useMemo(() => {
+    const list = [];
+    if (Number(form.runningDistanceKm || 0) > 0 || Number(form.runningMinutes || 0) > 0) list.push({ icon: '🏃', label: 'Running', detail: `${formatMetric(form.runningDistanceKm)} km · ${formatMetric(form.runningMinutes)} mins` });
+    if (Number(form.walkingDistanceKm || 0) > 0 || Number(form.walkingMinutes || 0) > 0) list.push({ icon: '🚶', label: 'Walking', detail: `${formatMetric(form.walkingDistanceKm)} km · ${formatMetric(form.walkingMinutes)} mins` });
+    if (Number(form.exerciseMinutes || 0) > 0) list.push({ icon: '💪', label: 'Workout', detail: `${formatMetric(form.exerciseMinutes)} mins` });
+    if (Number(form.badmintonMinutes || 0) > 0) list.push({ icon: '🏸', label: 'Badminton', detail: `${formatMetric(form.badmintonMinutes)} mins` });
+    if (Number(form.footballMinutes || 0) > 0) list.push({ icon: '⚽', label: 'Football', detail: `${formatMetric(form.footballMinutes)} mins` });
+    if (Number(form.cricketMinutes || 0) > 0) list.push({ icon: '🏏', label: 'Cricket', detail: `${formatMetric(form.cricketMinutes)} mins` });
+    if (Number(form.swimmingMinutes || 0) > 0) list.push({ icon: '🏊', label: 'Swimming', detail: `${formatMetric(form.swimmingMinutes)} mins` });
+    if (Number(form.meditationMinutes || 0) > 0) list.push({ icon: '🧘', label: 'Meditation', detail: `${formatMetric(form.meditationMinutes)} mins` });
+    if (Number(form.whiskyPegs || 0) > 0) list.push({ icon: '🥃', label: 'Whisky', detail: `${formatMetric(form.whiskyPegs)} pegs` });
+    if (Number(form.fastFoodServings || 0) > 0) list.push({ icon: '🍔', label: 'Fast food', detail: `${formatMetric(form.fastFoodServings)} count` });
+    if (Number(form.sugarServings || 0) > 0) list.push({ icon: '🍬', label: 'Sugar', detail: `${formatMetric(form.sugarServings)} count` });
+    if (Number(form.sleepHours || 0) > 0) list.push({ icon: '😴', label: 'Sleep', detail: `${formatMetric(form.sleepHours)} hrs` });
+    return list;
+  }, [form]);
+
+  /* ---- loading ---- */
   if (!user || loading) {
     return (
-      <div style={styles.loading}>
-        <style>{loadingKeyframes}</style>
+      <div style={s.loadingPage}>
+        <style>{pageKeyframes}</style>
         <MountainBg />
-        <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '18px', color: '#f8fafc' }}>
-          <div style={styles.loadingDot} />
-          <span style={{ fontSize: '20px', fontWeight: 700, textShadow: '0 2px 10px rgba(0,0,0,0.4)' }}>Astra is waking up...</span>
-          <span style={{ fontSize: '13px', opacity: 0.65 }}>Loading your mountain wellness companion</span>
+        <div style={s.loadingCard}>
+          <div style={s.loadingOrb} />
+          <div style={s.loadingTitle}>Loading Henna...</div>
         </div>
       </div>
     );
   }
 
+  /* ======== RENDER ======== */
   return (
     <>
       <style>{pageKeyframes}</style>
       <MountainBg />
-
-      <div style={styles.page} className="wellness-page">
-        <div style={styles.header}>
-          <div>
-            <div style={styles.eyebrow}>Mountain Wellness Cockpit</div>
-            <h1 style={styles.title}>Astra · Your Trek Buddy</h1>
-            <div style={styles.subtitle}>Your Indian wellness companion that talks, listens, and gets you summit-ready every single day.</div>
+      <div style={s.page} className="henna-page">
+        {/* header */}
+        <div style={s.header}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={s.eyebrow}>Wellness Tracker</div>
+            <h1 style={s.title}>Henna</h1>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'flex-end', flexShrink: 0 }}>
-            {weather ? (
-              <div style={styles.weatherWidget}>
-                <span style={{ fontSize: '30px', lineHeight: 1 }}>{weather.icon}</span>
-                <div>
-                  <div style={styles.weatherTemp}>{weather.temp}°C</div>
-                  <div style={styles.weatherCity}>{weather.city}</div>
-                  <div style={styles.weatherDesc}>{weather.desc} · {weather.wind} km/h wind</div>
-                </div>
+          <div style={s.headerRight}>
+            {weather && (
+              <div style={s.weatherPill}>
+                <span>{weather.icon}</span>
+                <span style={{ fontWeight: 800 }}>{weather.temp}°C</span>
+                <span style={{ fontSize: 11, opacity: 0.8 }}>{weather.city}</span>
               </div>
-            ) : null}
-            <button onClick={() => router.push('/dashboard')} style={styles.secondaryButton}>← Dashboard</button>
+            )}
+            <button onClick={() => router.push('/dashboard')} style={s.chipBtn}>Dashboard</button>
           </div>
         </div>
 
-        <div style={styles.quoteCard}>
-          <span style={styles.quoteIcon}>🏔</span>
-          <div>
-            <div style={styles.quoteText}>"{dailyQuote.quote}"</div>
-            <div style={styles.quoteAuthor}>- {dailyQuote.author}</div>
+        {/* scores on top */}
+        <div style={s.scoreStrip} className="score-strip">
+          <div style={s.scoreCard}>
+            <div style={s.scoreIcon}>🏋️</div>
+            <div>
+              <div style={s.scoreLabel}>Physical</div>
+              <div style={s.scoreNum}>{formatMetric(stats.totalPhysicalScore)}</div>
+            </div>
+          </div>
+          <div style={s.scoreCard}>
+            <div style={s.scoreIcon}>🧠</div>
+            <div>
+              <div style={s.scoreLabel}>Mental</div>
+              <div style={s.scoreNum}>{formatMetric(stats.totalMentalScore)}</div>
+            </div>
+          </div>
+          <div style={s.scoreCard}>
+            <div style={s.scoreIcon}>⚡</div>
+            <div>
+              <div style={s.scoreLabel}>Total</div>
+              <div style={s.scoreNum}>{formatMetric(stats.totalBodyScore)}</div>
+            </div>
+          </div>
+          <div style={s.scoreCard}>
+            <div style={s.scoreIcon}>📅</div>
+            <div>
+              <div style={s.scoreLabel}>Today</div>
+              <div style={s.scoreNum}>{formatMetric(todayScores.totalScore)}</div>
+            </div>
           </div>
         </div>
 
-        <div style={styles.heroGrid} className="wellness-hero">
-          <div style={styles.heroCard}>
-            <div style={styles.heroMetricLabel}>Weekly movement</div>
-            <div style={styles.heroMetricValue}>{weeklyMovement} <span style={styles.heroUnit}>mins</span></div>
-            <div style={styles.heroMetricHint}>Running, exercise, sports and swimming - last 7 entries.</div>
+        {/* weekly summary bar */}
+        <div style={s.weeklySummary} className="score-strip">
+          <div style={s.weeklyItem}>
+            <span style={s.weeklyIcon}>🔥</span>
+            <span style={s.weeklyLabel}>Active days</span>
+            <span style={s.weeklyVal}>{stats.activeDays}<span style={{ opacity: 0.5, fontWeight: 400 }}>/7</span></span>
           </div>
-          <div style={styles.heroCard}>
-            <div style={styles.heroMetricLabel}>Recovery score</div>
-            <div style={styles.heroMetricValue}>{coachPayload?.summary?.recoveryScore ?? '--'}<span style={styles.heroUnit}>/100</span></div>
-            <div style={styles.heroMetricHint}>Hydration + headache + meditation + food quality.</div>
+          <div style={s.weeklyItem}>
+            <span style={s.weeklyIcon}>⏱️</span>
+            <span style={s.weeklyLabel}>Weekly mins</span>
+            <span style={s.weeklyVal}>{formatMetric(stats.weeklyWorkoutMinutes)}</span>
           </div>
-          <div style={styles.heroCard}>
-            <div style={styles.heroMetricLabel}>Trek readiness</div>
-            <div style={styles.heroMetricValue}>{coachPayload?.summary?.travelReadiness ?? '--'}<span style={styles.heroUnit}>/100</span></div>
-            <div style={styles.heroMetricHint}>How ready your body is for Hampta Pass or Norway.</div>
+          <div style={s.weeklyItem}>
+            <span style={s.weeklyIcon}>🏃</span>
+            <span style={s.weeklyLabel}>Weekly km</span>
+            <span style={s.weeklyVal}>{formatMetric(stats.weeklyRunningKm)}</span>
+          </div>
+          <div style={s.weeklyItem}>
+            <span style={s.weeklyIcon}>📈</span>
+            <span style={s.weeklyLabel}>Avg pace</span>
+            <span style={s.weeklyVal}>{stats.averagePace == null ? '--' : `${formatMetric(stats.averagePace)}`}<span style={{ opacity: 0.5, fontWeight: 400, fontSize: 11 }}>{stats.averagePace != null ? ' min/km' : ''}</span></span>
           </div>
         </div>
 
-        <div style={styles.layout} className="wellness-layout">
-          <div style={styles.leftColumn}>
-            <div style={styles.robotCard}>
-              <div style={styles.robotHeaderRow}>
-                <div>
-                  <div style={styles.robotTitle}>Astra</div>
-                  <div style={styles.robotHint}>Drag me around · Double-tap to repeat · I'll check in if you go quiet</div>
-                </div>
-                <div style={styles.voiceBadge} title="Active voice">{voiceStatus}</div>
-              </div>
-
-              <div ref={robotStageRef} style={styles.robotStage} className="wellness-stage">
-                <div
-                  style={{ ...styles.robotAvatar, left: robotPos.x, top: robotPos.y }}
-                  onPointerDown={(event) => {
-                    const rect = event.currentTarget.getBoundingClientRect();
-                    dragStateRef.current = { offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top };
-                  }}
-                  onDoubleClick={() => {
-                    const line = coachPayload?.coachReply || 'Keep going yaar! You are doing amazing!';
-                    pushChat('astra', line);
-                    speakCoach(line);
-                  }}
-                >
-                  <div style={styles.robotHead} className={isSpeaking ? 'astra-speaking' : ''}>
-                    <div style={styles.robotEye} className="astra-eye" />
-                    <div style={styles.robotEye} className="astra-eye" />
-                  </div>
-                  <div style={styles.robotBody}>
-                    <div style={{ ...styles.robotCore, ...(isSpeaking ? { boxShadow: '0 0 32px rgba(244,114,182,0.9)' } : {}) }} />
-                  </div>
-                </div>
-
-                <div style={styles.speechBubble}>
-                  <div style={styles.speechLabel}>{isSpeaking ? 'Speaking...' : 'Astra says'}</div>
-                  <div style={styles.speechText}>{coachPayload?.coachReply || "Tell me about your day, yaar. I'll give you a proper plan!"}</div>
-                </div>
-              </div>
-
-              {subtitle ? (
-                <div style={styles.subtitleBar}>
-                  <span style={styles.subtitleText}>{subtitle}</span>
-                </div>
-              ) : null}
-
-              <div style={styles.robotControls}>
-                <button onClick={startVoiceInput} style={listening ? styles.micButtonActive : styles.micButton}>
-                  {listening ? 'Listening...' : 'Use mic'}
-                </button>
-                <button onClick={() => { const line = coachPayload?.coachReply || 'Keep going yaar. You are doing great!'; speakCoach(line); }} style={styles.primaryButton}>Speak advice</button>
-              </div>
-
-              {transcript ? (
-                <div style={styles.voiceTranscriptCard}>
-                  <div style={styles.voiceTranscriptTitle}>You said</div>
-                  <div style={styles.voiceTranscriptText}>{transcript}</div>
-                </div>
-              ) : null}
+        {/* main grid */}
+        <div style={s.mainGrid} className="main-grid">
+          {/* left: add activity */}
+          <div style={s.card}>
+            <div style={s.cardHead}>
+              <span style={s.cardTitle}>Add Activity</span>
+              <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} style={s.dateInput} max={todayDate()} />
             </div>
 
-            <div style={styles.card}>
-              <div style={styles.cardTitle}>Conversation with Astra</div>
-              <div style={styles.chatScroll} className="wellness-chat">
-                {chatHistory.length === 0 ? (
-                  <div style={styles.chatEmpty}>No messages yet - Astra will say hi soon!</div>
+            <div style={s.toggleRow}>
+              <button onClick={() => setInputMode('dropdown')} style={inputMode === 'dropdown' ? s.toggleActive : s.toggleBtn}>Dropdown</button>
+              <button onClick={() => setInputMode('text')} style={inputMode === 'text' ? s.toggleActive : s.toggleBtn}>Text / Voice</button>
+            </div>
+
+            {inputMode === 'dropdown' ? (
+              <>
+                <div style={s.activityGrid} className="activity-grid">
+                  {ACTIVITY_OPTIONS.map((a) => (
+                    <button
+                      key={a.id}
+                      onClick={() => { setSelectedActivity(a.id); setFieldValues({}); }}
+                      style={selectedActivity === a.id ? s.actBtnActive : s.actBtn}
+                    >
+                      <span style={{ fontSize: 20 }}>{a.icon}</span>
+                      <span style={{ fontSize: 11, fontWeight: 600 }}>{a.label}</span>
+                    </button>
+                  ))}
+                </div>
+
+                {selectedActivityConfig && (
+                  <div style={s.fieldRow} className="field-row">
+                    {selectedActivityConfig.fields.map((f) => (
+                      <div key={f.key} style={s.fieldGroup}>
+                        <label style={s.fieldLabel}>{f.label} ({f.unit})</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step={f.step}
+                          value={fieldValues[f.key] || ''}
+                          onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))}
+                          placeholder="0"
+                          style={s.fieldInput}
+                        />
+                      </div>
+                    ))}
+                    <button onClick={handleDropdownSave} style={s.addBtn}>+ Add</button>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div style={{ marginTop: 12 }}>
+                <div style={s.textRow}>
+                  <input
+                    value={commandInput}
+                    onChange={(e) => setCommandInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleParsedMessage(commandInput, 'text'); }}
+                    placeholder="e.g. running 5 km 30 min"
+                    style={s.textInput}
+                  />
+                  <button onClick={() => handleParsedMessage(commandInput, 'text')} style={s.addBtn}>Add</button>
+                </div>
+                <div style={s.voiceRow}>
+                  <button onClick={startVoiceInput} style={listening ? s.micActive : s.micBtn}>
+                    {listening ? '🔴 Listening...' : '🎙️ Voice'}
+                  </button>
+                  <select value={voiceLanguage} onChange={(e) => setVoiceLanguage(e.target.value)} style={s.langSelect}>
+                    {LANGUAGE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                  <span style={{ fontSize: 12, opacity: 0.7 }}>{voiceStatus}</span>
+                </div>
+                {showMicSecurityWarning && <div style={s.warnText}>Mic needs HTTPS or localhost.</div>}
+                {transcript && <div style={s.metaText}>Heard: {transcript}</div>}
+              </div>
+            )}
+
+            {assistantReply && <div style={s.replyBubble}>{assistantReply}</div>}
+            <div style={s.warnText}>⚠️ Daily drain: -{DAILY_PENALTY.physical} physical (body decay), -{DAILY_PENALTY.mental} mental (office/life)</div>
+
+            {/* Strava integration */}
+            <div style={{ marginTop: 14, padding: '10px 14px', background: 'rgba(252,82,0,0.12)', borderRadius: 10, border: '1px solid rgba(252,82,0,0.25)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 18 }}>🏃</span>
+                <span style={{ fontWeight: 700, fontSize: 13, color: '#fc5200' }}>Strava</span>
+                {stravaConnected ? (
+                  <>
+                    <span style={{ fontSize: 12, color: '#4ade80', fontWeight: 600 }}>● Connected</span>
+                    <button onClick={handleStravaSync} disabled={stravaLoading} style={{ ...s.chipBtn, fontSize: 11, padding: '4px 10px', background: 'rgba(252,82,0,0.2)', color: '#fc5200', border: '1px solid rgba(252,82,0,0.3)' }}>
+                      {stravaLoading ? '...' : '🔄 Sync now'}
+                    </button>
+                    <button onClick={handleStravaDisconnect} style={{ ...s.chipBtn, fontSize: 11, padding: '4px 10px', background: 'rgba(239,68,68,0.15)', color: '#f87171', border: '1px solid rgba(239,68,68,0.3)' }}>
+                      Disconnect
+                    </button>
+                  </>
                 ) : (
-                  chatHistory.map((msg) => (
-                    <div key={msg.ts} style={msg.role === 'astra' ? styles.chatBubbleAstra : styles.chatBubbleUser}>
-                      <div style={styles.chatRole}>{msg.role === 'astra' ? 'Astra' : 'You'}</div>
-                      <div>{msg.text}</div>
-                    </div>
-                  ))
+                  <button onClick={handleStravaConnect} disabled={stravaLoading} style={{ ...s.chipBtn, fontSize: 11, padding: '4px 12px', background: 'rgba(252,82,0,0.25)', color: '#fff', border: '1px solid rgba(252,82,0,0.4)', fontWeight: 700 }}>
+                    {stravaLoading ? 'Connecting...' : 'Connect Strava'}
+                  </button>
                 )}
               </div>
+              {stravaMsg && <div style={{ fontSize: 11, marginTop: 6, opacity: 0.85, color: '#fbbf24' }}>{stravaMsg}</div>}
+              {!stravaConnected && <div style={{ fontSize: 11, marginTop: 4, opacity: 0.6 }}>Auto-import running, walking & workouts from Strava</div>}
             </div>
 
-            <div style={styles.card}>
-              <div style={styles.cardTitle}>Trek and travel goals</div>
-              <div style={styles.goalList}>
-                {goals.map((goal) => {
-                  const insight = coachPayload?.goalInsights?.find((item) => item.id === goal.id);
-                  return (
-                    <div key={goal.id} style={styles.goalCard}>
-                      <div style={styles.goalTop}>
-                        <div>
-                          <div style={styles.goalTitle}>{goal.title}</div>
-                          <div style={styles.goalMeta}>{goal.location} · {goal.targetMonth}</div>
-                        </div>
-                        <div style={styles.goalBudget}>{goal.budgetLabel || formatCurrency(goal.budget)}</div>
-                      </div>
-                      <div style={styles.goalVibe}>{goal.vibe}</div>
-                      <div style={styles.goalProgress}>Readiness {insight?.readiness ?? 0}/100</div>
-                      <div style={styles.goalAction}>{insight?.nextAction || 'Keep feeding Astra daily.'}</div>
-                      {insight?.monthlyBudgetLabel ? <div style={styles.goalBudgetHint}>Monthly target: {insight.monthlyBudgetLabel}</div> : null}
+            {todayActivities.length > 0 && (
+              <div style={s.loggedSection}>
+                <div style={s.loggedTitle}>Logged on {selectedDate}</div>
+                <div style={s.loggedList}>
+                  {todayActivities.map((a) => (
+                    <div key={a.label} style={s.loggedItem}>
+                      <span>{a.icon}</span>
+                      <span style={{ fontWeight: 700 }}>{a.label}</span>
+                      <span style={{ opacity: 0.8, fontSize: 13 }}>{a.detail}</span>
                     </div>
-                  );
-                })}
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
           </div>
 
-          <div style={styles.rightColumn}>
-            <div style={styles.card}>
-              <div style={styles.cardTitle}>Today's activity</div>
-              <div style={styles.formGrid} className="wellness-form-grid">
-                {ACTIVITY_FIELDS.map((field) => (
-                  <label key={field.key} style={{ ...styles.metricInputCard, borderColor: `${field.color}55` }}>
-                    <span style={styles.metricInputLabel}>{field.label}</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step={field.step || 1}
-                      value={form[field.key]}
-                      onChange={(event) => {
-                        setForm((current) => ({ ...current, [field.key]: Number(event.target.value || 0) }));
-                        resetNudgeTimer();
-                      }}
-                      style={styles.input}
-                    />
-                    <span style={styles.metricInputUnit}>{field.unit}</span>
-                  </label>
-                ))}
-                <label style={styles.metricInputCard}>
-                  <span style={styles.metricInputLabel}>Mood</span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="10"
-                    value={form.moodScore}
-                    onChange={(event) => {
-                      setForm((current) => ({ ...current, moodScore: Number(event.target.value || 0) }));
-                      resetNudgeTimer();
-                    }}
-                    style={styles.input}
-                  />
-                  <span style={styles.metricInputUnit}>/10</span>
-                </label>
-                <label style={{ ...styles.metricInputCard, gridColumn: '1 / -1' }}>
-                  <span style={styles.metricInputLabel}>Notes</span>
-                  <textarea
-                    value={form.notes}
-                    onChange={(event) => {
-                      setForm((current) => ({ ...current, notes: event.target.value }));
-                      resetNudgeTimer();
-                    }}
-                    style={styles.textarea}
-                    placeholder="How was your body, food, focus, and mood today?"
-                  />
-                </label>
+          {/* right: readiness targets */}
+          <div style={s.card}>
+            <div style={s.cardTitle}>Readiness Targets</div>
+            {[
+              { label: 'Hampta Pass', ...stats.readiness.hamptaPass, color: '#fb7185' },
+              { label: 'Skiing Feb 2027', ...stats.readiness.skiing2027, color: '#38bdf8' },
+              { label: 'Marathon 10km', ...stats.readiness.marathon10k, color: '#f59e0b' },
+            ].map((t) => (
+              <div key={t.label} style={s.targetCard}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontWeight: 700, fontSize: 14 }}>{t.label}</span>
+                  <span style={{ fontSize: 13, opacity: 0.8 }}>{formatMetric(t.currentScore)} / {t.targetScore}</span>
+                </div>
+                <div style={s.progressTrack}>
+                  <div style={{ ...s.progressBar, width: `${Math.min(100, t.percent)}%`, background: t.color }} />
+                </div>
+                <div style={{ fontSize: 12, opacity: 0.7 }}>{formatMetric(t.percent)}% — {formatMetric(t.remaining)} pts remaining</div>
               </div>
+            ))}
 
-              <div style={styles.promptRow}>
-                <input
-                  type="text"
-                  value={coachPrompt}
-                  onChange={(event) => {
-                    setCoachPrompt(event.target.value);
-                    resetNudgeTimer();
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') handleAskCoach();
-                  }}
-                  style={styles.input}
-                  placeholder="Ask Astra something specific... (Enter to send)"
-                />
-                <button onClick={handleAskCoach} style={styles.secondaryButton} disabled={saving}>Ask</button>
-              </div>
-
-              <div style={styles.formActions}>
-                <button onClick={handleSaveEntry} style={styles.primaryButton} disabled={saving}>{saving ? 'Saving...' : 'Save day + get advice'}</button>
-                <button
-                  onClick={() => {
-                    setForm({ ...DEFAULT_FORM, date: new Date().toISOString().slice(0, 10) });
-                    setTranscript('');
-                    localStorage.setItem(STORAGE_LAST_FORM_KEY, JSON.stringify(DEFAULT_FORM));
-                  }}
-                  style={styles.secondaryButton}
-                >
-                  Reset
-                </button>
-              </div>
+            <div style={{ ...s.cardTitle, marginTop: 20 }}>Today&apos;s Breakdown</div>
+            <div style={s.breakdownGrid}>
+              <div style={s.breakdownItem}><span style={{ fontSize: 12, opacity: 0.7 }}>Physical</span><span style={{ fontWeight: 800 }}>{formatMetric(todayScores.physicalScore)}</span></div>
+              <div style={s.breakdownItem}><span style={{ fontSize: 12, opacity: 0.7 }}>Mental</span><span style={{ fontWeight: 800 }}>{formatMetric(todayScores.mentalScore)}</span></div>
+              <div style={s.breakdownItem}><span style={{ fontSize: 12, opacity: 0.7 }}>Workout mins</span><span style={{ fontWeight: 800 }}>{formatMetric(todayScores.workoutMinutes)}</span></div>
+              <div style={s.breakdownItem}><span style={{ fontSize: 12, opacity: 0.7 }}>Sleep effect</span><span style={{ fontWeight: 800, color: todayScores.sleepPhysical > 0 ? '#4ade80' : todayScores.sleepPhysical < 0 ? '#f87171' : '#94a3b8' }}>{todayScores.sleepPhysical > 0 ? '+' : ''}{formatMetric(todayScores.sleepPhysical)}</span></div>
             </div>
+          </div>
+        </div>
 
-            <div style={styles.card}>
-              <div style={styles.cardTitle}>Astra's recommendations</div>
-              <div style={styles.recommendationGrid}>
-                {(coachPayload?.suggestions || []).map((suggestion) => (
-                  <div
-                    key={suggestion.title}
-                    style={{ ...styles.recommendationCard, cursor: 'pointer' }}
-                    onClick={() => speakCoach(`${suggestion.title}. ${suggestion.detail}`)}
-                    title="Tap to hear"
-                  >
-                    <div style={styles.recommendationTitle}>{suggestion.title}</div>
-                    <div style={styles.recommendationBody}>{suggestion.detail}</div>
-                    <div style={styles.recommendationPriority}>Priority: {suggestion.priority}</div>
+        {/* ---- Charts Section ---- */}
+        <div style={s.dashSection}>
+          <div style={s.dashGrid} className="dash-grid">
+            {/* Weekly Score Bar Chart */}
+            <div style={s.card}>
+              <div style={s.cardTitle}>📊 Weekly Score Trend</div>
+              <div style={s.chartWrap}>
+                {(() => {
+                  const maxScore = Math.max(1, ...weekChartData.map((d) => Math.abs(d.totalScore)));
+                  const barW = 100 / 7;
+                  const chartH = 140;
+                  const zeroY = weekChartData.some((d) => d.totalScore < 0) ? chartH * 0.75 : chartH;
+                  return (
+                    <svg viewBox={`0 0 320 ${chartH + 28}`} style={{ width: '100%', height: chartH + 28 }}>
+                      {/* grid lines */}
+                      {[0.25, 0.5, 0.75, 1].map((f) => (
+                        <line key={f} x1="0" x2="320" y1={zeroY - zeroY * f} y2={zeroY - zeroY * f} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
+                      ))}
+                      {weekChartData.map((d, i) => {
+                        const barH = (Math.abs(d.totalScore) / maxScore) * (d.totalScore >= 0 ? zeroY : chartH - zeroY);
+                        const x = i * (320 / 7) + (320 / 7 - 28) / 2;
+                        const y = d.totalScore >= 0 ? zeroY - barH : zeroY;
+                        const isToday = d.date === todayDate();
+                        return (
+                          <g key={d.date}>
+                            <rect x={x} y={y} width="28" height={Math.max(barH, 2)} rx="6"
+                              fill={d.totalScore < 0 ? '#f87171' : isToday ? 'url(#barGrad)' : 'rgba(255,255,255,0.18)'}
+                            />
+                            <text x={x + 14} y={y - 4} textAnchor="middle" fill="#fff" fontSize="10" fontWeight="700" opacity="0.9">
+                              {d.totalScore !== 0 ? formatMetric(d.totalScore) : ''}
+                            </text>
+                            <text x={x + 14} y={chartH + 18} textAnchor="middle" fill="#fff" fontSize="10" fontWeight={isToday ? '800' : '500'} opacity={isToday ? 1 : 0.55}>
+                              {d.dayLabel}
+                            </text>
+                          </g>
+                        );
+                      })}
+                      {/* zero line */}
+                      {weekChartData.some((d) => d.totalScore < 0) && (
+                        <line x1="0" x2="320" y1={zeroY} y2={zeroY} stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeDasharray="4" />
+                      )}
+                      <defs>
+                        <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#fb7185" />
+                          <stop offset="100%" stopColor="#f97316" />
+                        </linearGradient>
+                      </defs>
+                    </svg>
+                  );
+                })()}
+              </div>
+              {/* Physical vs Mental mini bars */}
+              <div style={{ display: 'flex', gap: 16, marginTop: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, opacity: 0.6, fontWeight: 600, marginBottom: 4 }}>Physical (7 days)</div>
+                  <div style={s.progressTrack}>
+                    <div style={{ ...s.progressBar, width: `${Math.min(100, Math.max(2, (stats.totalPhysicalScore / Math.max(1, stats.totalBodyScore)) * 100))}%`, background: '#fb7185' }} />
                   </div>
-                ))}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, opacity: 0.6, fontWeight: 600, marginBottom: 4 }}>Mental (7 days)</div>
+                  <div style={s.progressTrack}>
+                    <div style={{ ...s.progressBar, width: `${Math.min(100, Math.max(2, (stats.totalMentalScore / Math.max(1, stats.totalBodyScore)) * 100))}%`, background: '#38bdf8' }} />
+                  </div>
+                </div>
               </div>
             </div>
 
-            <div style={styles.card}>
-              <div style={styles.cardTitle}>Recent logs</div>
-              <div style={styles.timelineList}>
-                {(entries.length ? entries : [form]).slice(0, 6).map((entry) => (
-                  <div key={entry.date} style={styles.timelineRow}>
-                    <div style={styles.timelineDate}>{entry.date}</div>
-                    <div style={styles.timelineSummary}>
-                      {Number(entry.runningMinutes || 0) + Number(entry.exerciseMinutes || 0) + Number(entry.badmintonMinutes || 0) + Number(entry.cricketMinutes || 0) + Number(entry.footballMinutes || 0) + Number(entry.swimmingMinutes || 0)} mins active · {entry.waterLiters}L water · headache {entry.headacheLevel}/10 · mood {entry.moodScore}/10
-                    </div>
+            {/* Activity Breakdown Donut */}
+            <div style={s.card}>
+              <div style={s.cardTitle}>🎯 Activity Breakdown <span style={{ fontWeight: 400, fontSize: 12, opacity: 0.6 }}>(7 days)</span></div>
+              {activityBreakdown.activities.length > 0 ? (
+                <div style={{ display: 'flex', gap: 20, alignItems: 'center', marginTop: 8 }}>
+                  {/* Donut Chart */}
+                  <div style={{ flexShrink: 0 }}>
+                    <svg viewBox="0 0 120 120" style={{ width: 120, height: 120 }}>
+                      {(() => {
+                        const cx = 60, cy = 60, r = 46, circumference = 2 * Math.PI * r;
+                        let offset = 0;
+                        return activityBreakdown.activities.map((a) => {
+                          const pct = a.mins / activityBreakdown.totalMins;
+                          const dashLen = pct * circumference;
+                          const gap = circumference - dashLen;
+                          const el = (
+                            <circle key={a.label} cx={cx} cy={cy} r={r}
+                              fill="none" stroke={a.color} strokeWidth="14"
+                              strokeDasharray={`${dashLen} ${gap}`}
+                              strokeDashoffset={-offset}
+                              strokeLinecap="round"
+                              transform={`rotate(-90 ${cx} ${cy})`}
+                              style={{ transition: 'stroke-dasharray .4s' }}
+                            />
+                          );
+                          offset += dashLen;
+                          return el;
+                        });
+                      })()}
+                      <text x="60" y="56" textAnchor="middle" fill="#fff" fontSize="18" fontWeight="900">{activityBreakdown.totalMins}</text>
+                      <text x="60" y="72" textAnchor="middle" fill="#fff" fontSize="10" opacity="0.6">mins</text>
+                    </svg>
                   </div>
-                ))}
-              </div>
+                  {/* Legend */}
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {activityBreakdown.activities.map((a) => (
+                      <div key={a.label} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                        <div style={{ width: 10, height: 10, borderRadius: 3, background: a.color, flexShrink: 0 }} />
+                        <span style={{ flex: 1, opacity: 0.85 }}>{a.icon} {a.label}</span>
+                        <span style={{ fontWeight: 700 }}>{a.mins}<span style={{ opacity: 0.5, fontWeight: 400 }}> min</span></span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div style={s.metaText}>No activities logged this week yet.</div>
+              )}
             </div>
+          </div>
+        </div>
+
+        {/* running + walking dashboards */}
+        <div style={s.dashSection}>
+          <div style={s.dashGrid} className="dash-grid">
+            <div style={s.card}>
+              <div style={s.cardTitle}>🏃 Running</div>
+              <div style={s.statRow}>
+                <div style={s.statBox}><div style={s.statLabel}>Weekly km</div><div style={s.statVal}>{formatMetric(stats.weeklyRunningKm)}</div></div>
+                <div style={s.statBox}><div style={s.statLabel}>Avg pace</div><div style={s.statVal}>{stats.averagePace == null ? '--' : `${formatMetric(stats.averagePace)} min/km`}</div></div>
+                <div style={s.statBox}><div style={s.statLabel}>Workout mins</div><div style={s.statVal}>{formatMetric(stats.weeklyWorkoutMinutes)}</div></div>
+              </div>
+              <div style={s.loggedTitle}>Recent runs</div>
+              {recentRunning.length ? recentRunning.map((e) => (
+                <div key={e.date} style={s.logRow}>
+                  <span>{e.date}</span><span>{formatMetric(e.runningDistanceKm)} km</span><span>{formatMetric(e.runningMinutes)} min</span>
+                </div>
+              )) : <div style={s.metaText}>No runs yet.</div>}
+            </div>
+
+            <div style={s.card}>
+              <div style={s.cardTitle}>🚶 Walking</div>
+              <div style={s.statRow}>
+                <div style={s.statBox}>
+                  <div style={s.statLabel}>Weekly km</div>
+                  <div style={s.statVal}>{formatMetric(entries.slice(0, 7).reduce((sum, e) => sum + Number(e.walkingDistanceKm || 0), 0))}</div>
+                </div>
+                <div style={s.statBox}>
+                  <div style={s.statLabel}>Weekly mins</div>
+                  <div style={s.statVal}>{formatMetric(entries.slice(0, 7).reduce((sum, e) => sum + Number(e.walkingMinutes || 0), 0))}</div>
+                </div>
+              </div>
+              <div style={s.loggedTitle}>Recent walks</div>
+              {recentWalking.length ? recentWalking.map((e) => (
+                <div key={e.date} style={s.logRow}>
+                  <span>{e.date}</span><span>{formatMetric(e.walkingDistanceKm)} km</span><span>{formatMetric(e.walkingMinutes)} min</span>
+                </div>
+              )) : <div style={s.metaText}>No walks yet.</div>}
+            </div>
+          </div>
+        </div>
+
+        {/* Scoring Rules */}
+        <div style={{ ...s.card, marginTop: 14 }}>
+          <div style={s.cardTitle}>📐 Scoring Rules</div>
+          <div style={{ overflowX: 'auto', marginTop: 10 }}>
+            <table style={s.rulesTable}>
+              <thead>
+                <tr>
+                  <th style={s.rulesTh}>Activity</th>
+                  <th style={s.rulesTh}>Physical</th>
+                  <th style={s.rulesTh}>Mental</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td style={s.rulesTd}>🏃 Running</td><td style={s.rulesTd}>distance × 0.9</td><td style={s.rulesTd}>distance × 0.4</td></tr>
+                <tr><td style={s.rulesTd}>🚶 Walking</td><td style={s.rulesTd}>distance × 0.3</td><td style={s.rulesTd}>(mins / 30) × 0.25</td></tr>
+                <tr><td style={s.rulesTd}>💪 Workout</td><td style={s.rulesTd}>(mins / 30) × 0.8</td><td style={s.rulesTd}>(mins / 30) × 0.5</td></tr>
+                <tr><td style={s.rulesTd}>🏸 Badminton</td><td style={s.rulesTd}>(mins / 60) × 1.2</td><td style={s.rulesTd}>(mins / 30) × 0.5</td></tr>
+                <tr><td style={s.rulesTd}>⚽ Football</td><td style={s.rulesTd}>(mins / 60) × 2</td><td style={s.rulesTd}>(mins / 30) × 0.5</td></tr>
+                <tr><td style={s.rulesTd}>🏏 Cricket</td><td style={s.rulesTd}>(mins / 60) × 1.5</td><td style={s.rulesTd}>(mins / 30) × 0.5</td></tr>
+                <tr><td style={s.rulesTd}>🏊 Swimming</td><td style={s.rulesTd}>(mins / 30) × 0.7</td><td style={s.rulesTd}>(mins / 30) × 1</td></tr>
+                <tr><td style={s.rulesTd}>🧘 Meditation</td><td style={s.rulesTd}>(mins / 30) × 0.2</td><td style={s.rulesTd}>(mins / 30) × 1.5</td></tr>
+                <tr style={{ borderTop: '1px solid rgba(255,255,255,0.1)' }}><td style={s.rulesTd}>😴 Sleep</td><td style={{ ...s.rulesTd, colSpan: 2 }} colSpan={2}>6.5 hrs = 0. Every ±30 min → ±0.5 physical &amp; ±0.5 mental</td></tr>
+                <tr style={{ borderTop: '1px solid rgba(255,255,255,0.1)' }}><td style={s.rulesTd}>🥃 Whisky</td><td style={{ ...s.rulesTd, color: '#f87171' }}>pegs × -1.1</td><td style={s.rulesTd}>—</td></tr>
+                <tr><td style={s.rulesTd}>🍔 Fast food</td><td style={{ ...s.rulesTd, color: '#f87171' }}>count × -0.9</td><td style={s.rulesTd}>—</td></tr>
+                <tr><td style={s.rulesTd}>🍬 Sugar</td><td style={{ ...s.rulesTd, color: '#f87171' }}>count × -2</td><td style={s.rulesTd}>—</td></tr>
+                <tr style={{ borderTop: '1px solid rgba(255,255,255,0.12)' }}><td style={{ ...s.rulesTd, fontWeight: 700 }}>📉 Daily drain</td><td style={{ ...s.rulesTd, color: '#f87171', fontWeight: 700 }}>-2.7</td><td style={{ ...s.rulesTd, color: '#f87171', fontWeight: 700 }}>-1.0</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div style={{ fontSize: 12, opacity: 0.55, marginTop: 10, lineHeight: 1.6 }}>
+            Daily drain always applies (body decay + office/life). Activities and sleep offset it. Score accumulates over 14 days.
           </div>
         </div>
       </div>
@@ -829,262 +900,105 @@ export default function WellnessPage() {
   );
 }
 
-const loadingKeyframes = `
-  @keyframes floaty {
-    0%, 100% { transform: translateY(0px); }
-    50% { transform: translateY(-12px); }
-  }
-`;
-
+/* ===================== STYLES ===================== */
 const pageKeyframes = `
-  @keyframes floaty {
-    0%, 100% { transform: translateY(0px); }
-    50% { transform: translateY(-10px); }
+  @keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+  .henna-page *{box-sizing:border-box}
+  .henna-page button{transition:transform .12s,box-shadow .15s}
+  .henna-page button:hover{transform:translateY(-1px)}
+  .henna-page button:active{transform:scale(0.97)}
+  @media(max-width:840px){
+    .main-grid{grid-template-columns:1fr!important}
+    .score-strip{grid-template-columns:1fr 1fr!important}
+    .dash-grid{grid-template-columns:1fr!important}
+    .activity-grid{grid-template-columns:repeat(4,1fr)!important}
+    .field-row{flex-direction:column!important}
   }
-  @keyframes blink {
-    0%, 90%, 100% { opacity: 1; }
-    95% { opacity: 0; }
+  @media(max-width:480px){
+    .score-strip{grid-template-columns:1fr 1fr!important;gap:8px!important}
+    .activity-grid{grid-template-columns:repeat(3,1fr)!important}
   }
-  @keyframes pulse-ring {
-    0% { box-shadow: 0 0 0 0 rgba(251,191,36,0.7); }
-    100% { box-shadow: 0 0 0 22px rgba(251,191,36,0); }
-  }
-  @keyframes subtitleIn {
-    from { opacity: 0; transform: translateY(6px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-  @keyframes cloudDrift {
-    0% { transform: translateX(-5%); }
-    100% { transform: translateX(5%); }
-  }
-  @keyframes starTwinkle {
-    0%, 100% { opacity: 0.35; }
-    50% { opacity: 1; }
-  }
-  @keyframes sunRise {
-    0% { transform: translate(-50%, -50%) scale(0.7); opacity: 0.5; }
-    100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
-  }
-  .astra-eye { animation: blink 4s ease-in-out infinite; }
-  .astra-speaking { animation: pulse-ring 1.2s ease-out infinite; }
-  @media (max-width: 900px) {
-    .wellness-layout { grid-template-columns: 1fr !important; }
-    .wellness-form-grid { grid-template-columns: 1fr 1fr !important; }
-    .wellness-hero { grid-template-columns: 1fr 1fr !important; }
-  }
-  @media (max-width: 600px) {
-    .wellness-page { padding: 12px !important; }
-    .wellness-form-grid { grid-template-columns: 1fr 1fr !important; }
-    .wellness-stage { height: 220px !important; }
-    .wellness-hero { grid-template-columns: 1fr !important; }
-    .wellness-chat { max-height: 220px !important; }
-  }
+  input[type=date]::-webkit-calendar-picker-indicator{filter:invert(1)}
 `;
 
-const styles = {
-  mountainBgFixed: {
-    position: 'fixed', inset: 0, zIndex: 0, overflow: 'hidden', pointerEvents: 'none',
-  },
-  mountainSky: {
-    position: 'absolute', inset: 0,
-    background: 'linear-gradient(180deg, #0f0721 0%, #1e1b4b 18%, #312e81 32%, #1d4ed8 48%, #0369a1 60%, #f97316 74%, #fbbf24 84%, #fef3c7 100%)',
-  },
-  starField: {
-    position: 'absolute', inset: 0,
-    backgroundImage: [
-      'radial-gradient(1px 1px at 5% 6%, rgba(255,255,255,0.9) 0%, transparent 100%)',
-      'radial-gradient(1px 1px at 12% 3%, rgba(255,255,255,0.7) 0%, transparent 100%)',
-      'radial-gradient(1.5px 1.5px at 20% 8%, rgba(255,255,255,0.85) 0%, transparent 100%)',
-      'radial-gradient(1px 1px at 28% 4%, rgba(255,255,255,0.6) 0%, transparent 100%)',
-      'radial-gradient(1px 1px at 38% 9%, rgba(255,255,255,0.8) 0%, transparent 100%)',
-      'radial-gradient(1.5px 1.5px at 47% 2%, rgba(255,255,255,0.9) 0%, transparent 100%)',
-      'radial-gradient(1px 1px at 57% 7%, rgba(255,255,255,0.7) 0%, transparent 100%)',
-      'radial-gradient(1px 1px at 66% 4%, rgba(255,255,255,0.8) 0%, transparent 100%)',
-      'radial-gradient(1.5px 1.5px at 75% 10%, rgba(255,255,255,0.85) 0%, transparent 100%)',
-      'radial-gradient(1px 1px at 83% 5%, rgba(255,255,255,0.6) 0%, transparent 100%)',
-      'radial-gradient(1px 1px at 91% 2%, rgba(255,255,255,0.75) 0%, transparent 100%)',
-      'radial-gradient(1px 1px at 96% 8%, rgba(255,255,255,0.7) 0%, transparent 100%)',
-      'radial-gradient(1px 1px at 9% 14%, rgba(255,255,255,0.5) 0%, transparent 100%)',
-      'radial-gradient(1px 1px at 43% 16%, rgba(255,255,255,0.6) 0%, transparent 100%)',
-      'radial-gradient(1px 1px at 71% 14%, rgba(255,255,255,0.55) 0%, transparent 100%)',
-    ].join(', '),
-    animation: 'starTwinkle 4s ease-in-out infinite alternate',
-  },
-  sunGlow: {
-    position: 'absolute', top: '62%', left: '50%', transform: 'translate(-50%, -50%)',
-    width: '200px', height: '90px', borderRadius: '50%',
-    background: 'radial-gradient(ellipse, rgba(251,191,36,0.55) 0%, rgba(249,115,22,0.3) 40%, transparent 70%)',
-    animation: 'sunRise 3s ease-out forwards', filter: 'blur(5px)',
-  },
-  mountainSvgLayer: {
-    position: 'absolute', inset: 0, width: '100%', height: '100%',
-  },
-  loading: {
-    position: 'relative', minHeight: '100vh', overflow: 'hidden',
-    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '16px',
-  },
-  loadingDot: {
-    width: '48px', height: '48px', borderRadius: '50%',
-    background: 'linear-gradient(135deg, #38bdf8, #ec4899)',
-    animation: 'floaty 1.4s ease-in-out infinite', boxShadow: '0 0 32px rgba(56,189,248,0.6)',
-  },
-  page: {
-    position: 'relative', zIndex: 1, minHeight: '100vh', padding: '20px', color: '#f8fafc',
-    fontFamily: '"Inter", "Segoe UI", system-ui, sans-serif', boxSizing: 'border-box',
-  },
-  header: {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '14px', flexWrap: 'wrap', marginBottom: '14px',
-  },
-  eyebrow: {
-    color: '#fbbf24', textTransform: 'uppercase', letterSpacing: '0.12em', fontSize: '11px', marginBottom: '6px', fontWeight: 700,
-  },
-  title: {
-    margin: 0, fontSize: 'clamp(22px,5vw,34px)', fontWeight: 900, lineHeight: 1.1, color: '#f8fafc', textShadow: '0 2px 14px rgba(0,0,0,0.55)',
-  },
-  subtitle: {
-    marginTop: '8px', fontSize: '14px', lineHeight: 1.6, maxWidth: '680px', color: 'rgba(248,250,252,0.72)',
-  },
-  weatherWidget: {
-    display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 18px', borderRadius: '20px', background: 'rgba(255,255,255,0.12)',
-    backdropFilter: 'blur(14px)', border: '1px solid rgba(255,255,255,0.22)', boxShadow: '0 4px 24px rgba(0,0,0,0.25)',
-  },
-  weatherTemp: { fontWeight: 900, fontSize: '22px', color: '#f8fafc', lineHeight: 1 },
-  weatherCity: { fontWeight: 700, fontSize: '12px', color: 'rgba(248,250,252,0.88)', marginTop: '3px' },
-  weatherDesc: { fontSize: '11px', color: 'rgba(248,250,252,0.6)', marginTop: '2px' },
-  quoteCard: {
-    display: 'flex', alignItems: 'flex-start', gap: '12px', padding: '14px 18px', borderRadius: '18px', marginBottom: '14px',
-    background: 'rgba(255,255,255,0.09)', backdropFilter: 'blur(12px)', border: '1px solid rgba(255,255,255,0.16)', boxShadow: '0 4px 24px rgba(0,0,0,0.18)',
-  },
-  quoteIcon: { fontSize: '30px', flexShrink: 0, marginTop: '2px' },
-  quoteText: { fontSize: '14px', fontStyle: 'italic', color: 'rgba(248,250,252,0.9)', lineHeight: 1.65, fontWeight: 500 },
-  quoteAuthor: { marginTop: '6px', fontSize: '12px', color: '#fbbf24', fontWeight: 700 },
-  heroGrid: {
-    display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: '12px', marginBottom: '14px',
-  },
-  heroCard: {
-    borderRadius: '20px', padding: '16px', background: 'rgba(255,255,255,0.1)', backdropFilter: 'blur(14px)', boxShadow: '0 4px 24px rgba(0,0,0,0.22)', border: '1px solid rgba(255,255,255,0.16)',
-  },
-  heroMetricLabel: {
-    fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'rgba(248,250,252,0.62)', fontWeight: 600,
-  },
-  heroMetricValue: { fontSize: 'clamp(22px,4vw,28px)', fontWeight: 900, marginTop: '8px', color: '#f8fafc' },
-  heroUnit: { fontSize: '14px', fontWeight: 400, color: 'rgba(248,250,252,0.55)' },
-  heroMetricHint: { marginTop: '6px', color: 'rgba(248,250,252,0.55)', lineHeight: 1.5, fontSize: '12px' },
-  layout: {
-    display: 'grid', gridTemplateColumns: '360px minmax(0,1fr)', gap: '16px', alignItems: 'start',
-  },
-  leftColumn: { display: 'grid', gap: '14px' },
-  rightColumn: { display: 'grid', gap: '14px' },
-  card: {
-    background: 'rgba(15,23,42,0.62)', backdropFilter: 'blur(18px)', border: '1px solid rgba(255,255,255,0.11)', borderRadius: '22px', padding: '16px', boxShadow: '0 8px 32px rgba(0,0,0,0.28)', color: '#f8fafc',
-  },
-  robotCard: {
-    background: 'rgba(14,165,233,0.13)', backdropFilter: 'blur(18px)', border: '1px solid rgba(56,189,248,0.28)', borderRadius: '26px', padding: '16px', boxShadow: '0 8px 40px rgba(14,165,233,0.22)', color: '#f8fafc',
-  },
-  robotHeaderRow: {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px', flexWrap: 'wrap', marginBottom: '12px',
-  },
-  robotTitle: { fontWeight: 900, fontSize: '22px', color: '#e0f2fe' },
-  robotHint: { marginTop: '4px', fontSize: '11px', color: 'rgba(224,242,254,0.65)', lineHeight: 1.5 },
-  voiceBadge: {
-    padding: '5px 10px', borderRadius: '999px', background: 'rgba(56,189,248,0.16)', color: '#bae6fd', fontSize: '10px', fontWeight: 700, border: '1px solid rgba(56,189,248,0.28)', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-  },
-  robotStage: {
-    position: 'relative', height: '280px', borderRadius: '22px', overflow: 'hidden', background: 'linear-gradient(180deg,rgba(30,27,75,0.65) 0%,rgba(14,165,233,0.12) 100%)', border: '1px solid rgba(56,189,248,0.18)',
-  },
-  robotAvatar: {
-    position: 'absolute', width: '110px', height: '140px', cursor: 'grab', userSelect: 'none', touchAction: 'none', animation: 'floaty 3.4s ease-in-out infinite',
-  },
-  robotHead: {
-    width: '100px', height: '74px', borderRadius: '24px', background: 'linear-gradient(160deg,#1e293b,#0f172a)', border: '3px solid #38bdf8', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '14px', margin: '0 auto', boxShadow: '0 8px 30px rgba(56,189,248,0.35)',
-  },
-  robotEye: {
-    width: '13px', height: '13px', borderRadius: '50%', background: '#38bdf8', boxShadow: '0 0 10px rgba(56,189,248,0.9)',
-  },
-  robotBody: {
-    width: '78px', height: '56px', margin: '-4px auto 0', borderRadius: '20px', background: 'linear-gradient(180deg,#075985,#0c4a6e)', border: '3px solid #0ea5e9', display: 'flex', alignItems: 'center', justifyContent: 'center',
-  },
-  robotCore: {
-    width: '22px', height: '22px', borderRadius: '50%', background: 'linear-gradient(180deg,#f472b6,#ec4899)', boxShadow: '0 0 18px rgba(244,114,182,0.65)', transition: 'box-shadow 0.3s',
-  },
-  speechBubble: {
-    position: 'absolute', right: '12px', top: '14px', width: 'min(210px,56%)', padding: '12px', borderRadius: '16px 16px 16px 4px', background: 'rgba(15,23,42,0.88)', backdropFilter: 'blur(10px)', border: '1px solid rgba(56,189,248,0.28)', boxShadow: '0 8px 20px rgba(0,0,0,0.35)',
-  },
-  speechLabel: { fontSize: '10px', color: '#38bdf8', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '5px', fontWeight: 700 },
-  speechText: { color: '#e2e8f0', fontSize: '12px', lineHeight: 1.55, maxHeight: '160px', overflow: 'hidden' },
-  subtitleBar: {
-    marginTop: '10px', padding: '10px 14px', borderRadius: '14px', background: 'rgba(14,165,233,0.14)', backdropFilter: 'blur(8px)', border: '1px solid rgba(56,189,248,0.24)', animation: 'subtitleIn 0.2s ease',
-  },
-  subtitleText: { fontSize: '15px', fontWeight: 700, color: '#bae6fd', letterSpacing: '0.01em' },
-  robotControls: { display: 'flex', gap: '10px', marginTop: '12px', flexWrap: 'wrap' },
-  micButton: {
-    flex: 1, background: 'linear-gradient(135deg,#0369a1,#0891b2)', border: 'none', color: '#fff', fontWeight: 800, padding: '14px 16px', borderRadius: '999px', cursor: 'pointer', fontSize: '14px', minWidth: '120px', boxShadow: '0 4px 12px rgba(3,105,161,0.45)',
-  },
-  micButtonActive: {
-    flex: 1, background: 'linear-gradient(135deg,#be123c,#e11d48)', border: 'none', color: '#fff', fontWeight: 800, padding: '14px 16px', borderRadius: '999px', cursor: 'pointer', fontSize: '14px', minWidth: '120px', boxShadow: '0 4px 12px rgba(190,18,60,0.45)', animation: 'pulse-ring 1s ease-out infinite',
-  },
-  primaryButton: {
-    background: 'linear-gradient(135deg,#7c3aed,#4f46e5)', color: '#f8fafc', border: 'none', borderRadius: '999px', padding: '14px 20px', fontWeight: 800, cursor: 'pointer', fontSize: '14px', boxShadow: '0 4px 14px rgba(124,58,237,0.45)',
-  },
-  secondaryButton: {
-    background: 'rgba(255,255,255,0.1)', backdropFilter: 'blur(8px)', color: '#f8fafc', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '999px', padding: '12px 18px', fontWeight: 700, cursor: 'pointer', fontSize: '14px',
-  },
-  voiceTranscriptCard: {
-    marginTop: '12px', padding: '12px', borderRadius: '16px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(56,189,248,0.14)',
-  },
-  voiceTranscriptTitle: { fontWeight: 700, marginBottom: '4px', fontSize: '12px', color: 'rgba(248,250,252,0.55)' },
-  voiceTranscriptText: { color: '#e2e8f0', fontSize: '13px', lineHeight: 1.55 },
-  chatScroll: {
-    maxHeight: '280px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', paddingRight: '4px',
-  },
-  chatEmpty: { color: 'rgba(248,250,252,0.38)', fontSize: '13px', textAlign: 'center', padding: '20px 0' },
-  chatBubbleAstra: {
-    padding: '10px 14px', borderRadius: '18px 18px 18px 4px', background: 'rgba(56,189,248,0.14)', border: '1px solid rgba(56,189,248,0.2)', fontSize: '13px', lineHeight: 1.55, maxWidth: '92%', color: '#e0f2fe',
-  },
-  chatBubbleUser: {
-    padding: '10px 14px', borderRadius: '18px 18px 4px 18px', background: 'rgba(124,58,237,0.18)', border: '1px solid rgba(124,58,237,0.22)', fontSize: '13px', lineHeight: 1.55, alignSelf: 'flex-end', maxWidth: '92%', color: '#e9d5ff',
-  },
-  chatRole: { fontSize: '11px', fontWeight: 700, color: 'rgba(248,250,252,0.48)', marginBottom: '4px' },
-  cardTitle: { fontSize: '17px', fontWeight: 800, marginBottom: '12px', color: '#f8fafc' },
-  formGrid: {
-    display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: '10px', marginBottom: '10px',
-  },
-  metricInputCard: {
-    display: 'flex', flexDirection: 'column', gap: '5px', padding: '10px', borderRadius: '16px', border: '1.5px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)',
-  },
-  metricInputLabel: { fontSize: '11px', fontWeight: 700, color: 'rgba(248,250,252,0.78)' },
-  metricInputUnit: { fontSize: '10px', color: 'rgba(248,250,252,0.42)' },
-  input: {
-    width: '100%', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.08)', padding: '10px 12px', fontSize: '14px', color: '#f8fafc', boxSizing: 'border-box', outline: 'none',
-  },
-  textarea: {
-    width: '100%', minHeight: '80px', borderRadius: '14px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.08)', padding: '10px 12px', fontSize: '14px', color: '#f8fafc', resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box',
-  },
-  promptRow: { display: 'grid', gridTemplateColumns: '1fr auto', gap: '10px', marginTop: '12px' },
-  formActions: { display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '12px' },
-  recommendationGrid: { display: 'grid', gap: '10px' },
-  recommendationCard: {
-    borderRadius: '16px', padding: '12px', background: 'rgba(124,58,237,0.12)', border: '1px solid rgba(124,58,237,0.22)',
-  },
-  recommendationTitle: { fontWeight: 800, marginBottom: '5px', fontSize: '14px', color: '#e9d5ff' },
-  recommendationBody: { color: 'rgba(248,250,252,0.68)', fontSize: '13px', lineHeight: 1.55 },
-  recommendationPriority: { marginTop: '7px', color: '#c084fc', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 700 },
-  goalList: { display: 'grid', gap: '10px' },
-  goalCard: {
-    borderRadius: '18px', padding: '12px', background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.22)',
-  },
-  goalTop: { display: 'flex', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' },
-  goalTitle: { fontWeight: 800, fontSize: '14px', color: '#fef3c7' },
-  goalMeta: { fontSize: '12px', color: 'rgba(248,250,252,0.52)', marginTop: '3px' },
-  goalBudget: { fontWeight: 800, color: '#fbbf24', fontSize: '14px' },
-  goalVibe: { marginTop: '8px', color: 'rgba(248,250,252,0.68)', fontSize: '12px' },
-  goalProgress: { marginTop: '8px', fontWeight: 700, color: '#34d399', fontSize: '13px' },
-  goalAction: { marginTop: '6px', color: 'rgba(248,250,252,0.62)', fontSize: '12px', lineHeight: 1.5 },
-  goalBudgetHint: { marginTop: '6px', color: '#fde68a', fontSize: '12px', fontWeight: 700 },
-  timelineList: { display: 'grid', gap: '8px' },
-  timelineRow: {
-    padding: '10px 12px', borderRadius: '14px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)',
-  },
-  timelineDate: { fontWeight: 800, marginBottom: '3px', fontSize: '13px', color: '#f8fafc' },
-  timelineSummary: { color: 'rgba(248,250,252,0.52)', fontSize: '12px', lineHeight: 1.45 },
+const glass = {
+  borderRadius: 20,
+  background: 'rgba(255,255,255,0.10)',
+  backdropFilter: 'blur(18px)',
+  border: '1px solid rgba(255,255,255,0.12)',
+};
+
+const s = {
+  bgWrap: { position: 'fixed', inset: 0, zIndex: 0, overflow: 'hidden', pointerEvents: 'none' },
+  bgSky: { position: 'absolute', inset: 0, background: 'linear-gradient(180deg,#1a1032 0%,#2d1548 22%,#6b2f5b 48%,#d97a52 74%,#f8d8b8 100%)' },
+  bgGlow: { position: 'absolute', top: '8%', left: '60%', width: 340, height: 340, borderRadius: '50%', background: 'radial-gradient(circle,rgba(255,223,186,0.40),transparent 68%)', filter: 'blur(10px)' },
+  bgMountains: { position: 'absolute', inset: 0, width: '100%', height: '100%' },
+  loadingPage: { position: 'relative', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  loadingCard: { position: 'relative', zIndex: 1, padding: '28px 34px', borderRadius: 28, background: 'rgba(255,255,255,0.14)', backdropFilter: 'blur(20px)', color: '#fff', textAlign: 'center' },
+  loadingOrb: { width: 46, height: 46, borderRadius: '50%', background: 'linear-gradient(135deg,#fb7185,#f59e0b)', animation: 'floaty 1.5s ease-in-out infinite', margin: '0 auto 12px' },
+  loadingTitle: { fontWeight: 800, fontSize: 20 },
+  page: { position: 'relative', zIndex: 1, minHeight: '100vh', padding: '16px', color: '#fff', fontFamily: '"Segoe UI","Inter",system-ui,sans-serif', boxSizing: 'border-box', maxWidth: 1100, margin: '0 auto' },
+  header: { display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 },
+  eyebrow: { fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.16em', color: '#ffe6c7', fontWeight: 700, marginBottom: 4 },
+  title: { margin: 0, fontSize: 'clamp(24px,4vw,34px)', fontWeight: 900, lineHeight: 1.1 },
+  headerRight: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  weatherPill: { display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 999, ...glass, fontSize: 13 },
+  chipBtn: { border: '1px solid rgba(255,255,255,0.18)', borderRadius: 999, padding: '8px 16px', background: 'rgba(255,255,255,0.10)', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: 13 },
+  scoreStrip: { display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 10 },
+  scoreCard: { display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', ...glass, borderRadius: 16, transition: 'transform .15s', cursor: 'default' },
+  scoreIcon: { fontSize: 26 },
+  scoreLabel: { fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', opacity: 0.7, fontWeight: 700 },
+  scoreNum: { fontSize: 22, fontWeight: 900, lineHeight: 1.2 },
+  weeklySummary: { display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 14 },
+  weeklyItem: { display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', borderRadius: 12, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)' },
+  weeklyIcon: { fontSize: 16 },
+  weeklyLabel: { fontSize: 11, opacity: 0.6, fontWeight: 600, flex: 1 },
+  weeklyVal: { fontSize: 16, fontWeight: 800 },
+  mainGrid: { display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: 14, alignItems: 'start' },
+  card: { ...glass, padding: '18px 20px' },
+  cardHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 },
+  cardTitle: { fontSize: 17, fontWeight: 800 },
+  dateInput: { borderRadius: 10, border: '1px solid rgba(255,255,255,0.18)', padding: '8px 12px', background: 'rgba(36,18,47,0.30)', color: '#fff', fontSize: 13, outline: 'none' },
+  toggleRow: { display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 },
+  toggleBtn: { border: '1px solid rgba(255,255,255,0.14)', borderRadius: 999, padding: '7px 14px', background: 'transparent', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer' },
+  toggleActive: { border: 'none', borderRadius: 999, padding: '7px 14px', background: 'linear-gradient(135deg,#fb7185,#f97316)', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer' },
+  trackingOn: { border: 'none', borderRadius: 999, padding: '7px 14px', background: 'linear-gradient(135deg,#ef4444,#dc2626)', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer' },
+  activityGrid: { display: 'grid', gridTemplateColumns: 'repeat(6,1fr)', gap: 8 },
+  actBtn: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '12px 4px', borderRadius: 14, border: '1px solid rgba(255,255,255,0.10)', background: 'rgba(255,255,255,0.06)', color: '#fff', cursor: 'pointer', transition: 'all .15s' },
+  actBtnActive: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '12px 4px', borderRadius: 14, border: '2px solid #fb7185', background: 'rgba(251,113,133,0.18)', color: '#fff', cursor: 'pointer', boxShadow: '0 0 12px rgba(251,113,133,0.25)' },
+  fieldRow: { display: 'flex', gap: 10, alignItems: 'flex-end', marginTop: 14, animation: 'fadeIn .2s ease-out' },
+  fieldGroup: { flex: 1 },
+  fieldLabel: { display: 'block', fontSize: 11, fontWeight: 700, marginBottom: 4, opacity: 0.7, textTransform: 'uppercase' },
+  fieldInput: { width: '100%', boxSizing: 'border-box', borderRadius: 10, border: '1px solid rgba(255,255,255,0.18)', padding: '10px 12px', background: 'rgba(36,18,47,0.30)', color: '#fff', fontSize: 15, outline: 'none' },
+  addBtn: { border: 'none', borderRadius: 12, padding: '10px 22px', background: 'linear-gradient(135deg,#fb7185,#f97316)', color: '#fff', fontWeight: 800, cursor: 'pointer', fontSize: 14, whiteSpace: 'nowrap', boxShadow: '0 2px 8px rgba(251,113,133,0.25)' },
+  textRow: { display: 'flex', gap: 8 },
+  textInput: { flex: 1, borderRadius: 12, border: '1px solid rgba(255,255,255,0.18)', padding: '10px 14px', background: 'rgba(36,18,47,0.26)', color: '#fff', fontSize: 14, outline: 'none' },
+  voiceRow: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' },
+  micBtn: { border: 'none', borderRadius: 999, padding: '8px 16px', background: 'linear-gradient(135deg,#0ea5e9,#2563eb)', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: 13 },
+  micActive: { border: 'none', borderRadius: 999, padding: '8px 16px', background: 'linear-gradient(135deg,#f43f5e,#e11d48)', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: 13 },
+  langSelect: { borderRadius: 10, border: '1px solid rgba(255,255,255,0.18)', padding: '8px 10px', background: 'rgba(36,18,47,0.26)', color: '#fff', outline: 'none', fontSize: 12 },
+  replyBubble: { marginTop: 12, padding: '12px 16px', borderRadius: 14, background: 'linear-gradient(135deg,rgba(251,113,133,0.12),rgba(249,115,22,0.10))', border: '1px solid rgba(251,113,133,0.15)', fontSize: 14, lineHeight: 1.5, animation: 'fadeIn .25s ease-out' },
+  warnText: { marginTop: 8, fontSize: 12, color: '#fde68a', lineHeight: 1.5 },
+  metaText: { marginTop: 6, fontSize: 12, opacity: 0.7 },
+  loggedSection: { marginTop: 16, paddingTop: 14, borderTop: '1px solid rgba(255,255,255,0.10)' },
+  loggedTitle: { fontSize: 13, fontWeight: 700, marginBottom: 8, opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em' },
+  loggedList: { display: 'flex', flexWrap: 'wrap', gap: 8 },
+  loggedItem: { display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 12, background: 'rgba(255,255,255,0.08)', fontSize: 13, border: '1px solid rgba(255,255,255,0.06)' },
+  targetCard: { padding: '14px 16px', borderRadius: 14, background: 'rgba(255,255,255,0.06)', marginTop: 10, border: '1px solid rgba(255,255,255,0.06)', transition: 'background .15s' },
+  progressTrack: { height: 7, borderRadius: 4, background: 'rgba(255,255,255,0.12)', marginTop: 8, marginBottom: 6, overflow: 'hidden' },
+  progressBar: { height: '100%', borderRadius: 4, transition: 'width .4s ease-out' },
+  breakdownGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 },
+  breakdownItem: { display: 'flex', flexDirection: 'column', gap: 2, padding: '10px 12px', borderRadius: 12, background: 'rgba(255,255,255,0.06)' },
+  dashSection: { marginTop: 14 },
+  dashGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 },
+  chartWrap: { marginTop: 8, padding: '8px 0', overflow: 'hidden' },
+  statRow: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(90px,1fr))', gap: 8, marginBottom: 12 },
+  statBox: { padding: '10px 12px', borderRadius: 12, background: 'rgba(255,255,255,0.06)' },
+  statLabel: { fontSize: 11, textTransform: 'uppercase', opacity: 0.7, fontWeight: 700 },
+  statVal: { fontSize: 18, fontWeight: 900, marginTop: 2 },
+  logRow: { display: 'grid', gridTemplateColumns: '1fr 80px 80px', gap: 8, padding: '8px 10px', borderRadius: 10, background: 'rgba(255,255,255,0.06)', fontSize: 13, marginTop: 4 },
+  rulesTable: { width: '100%', borderCollapse: 'collapse', fontSize: 13, lineHeight: 1.6 },
+  rulesTh: { textAlign: 'left', padding: '8px 10px', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', opacity: 0.6, borderBottom: '1px solid rgba(255,255,255,0.12)' },
+  rulesTd: { padding: '7px 10px', borderBottom: '1px solid rgba(255,255,255,0.05)', whiteSpace: 'nowrap' },
 };

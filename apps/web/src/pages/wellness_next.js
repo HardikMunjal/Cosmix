@@ -54,7 +54,6 @@ function weatherDesc(code) {
 const ACTIVITY_FIELDS = [
   { key: 'runningMinutes',    label: 'Running',        unit: 'mins',     color: '#fb7185' },
   { key: 'meditationMinutes', label: 'Meditation',     unit: 'mins',     color: '#38bdf8' },
-  { key: 'waterLiters',       label: 'Drinking water', unit: 'L',        color: '#2dd4bf', step: 0.25 },
   { key: 'headacheLevel',     label: 'Headache',       unit: '/10',      color: '#f59e0b' },
   { key: 'exerciseMinutes',   label: 'Exercise',       unit: 'mins',     color: '#f97316' },
   { key: 'fastFoodServings',  label: 'Fast food',      unit: 'servings', color: '#f87171' },
@@ -66,7 +65,7 @@ const ACTIVITY_FIELDS = [
 
 const DEFAULT_FORM = {
   date: new Date().toISOString().slice(0, 10),
-  runningMinutes: 0, meditationMinutes: 10, waterLiters: 2.5,
+  runningMinutes: 0, meditationMinutes: 10,
   headacheLevel: 0,  exerciseMinutes: 20,   fastFoodServings: 0,
   cricketMinutes: 0, footballMinutes: 0,    badmintonMinutes: 0,
   swimmingMinutes: 0, moodScore: 7, notes: '',
@@ -121,7 +120,6 @@ function parseTranscriptIntoForm(form, transcript) {
   const patterns = [
     ['runningMinutes',    /(run|running)\s+(for\s+)?(\d+(?:\.\d+)?)\s*(minutes|mins|min)?/i],
     ['meditationMinutes', /(meditat(?:e|ed|ion))\s+(for\s+)?(\d+(?:\.\d+)?)\s*(minutes|mins|min)?/i],
-    ['waterLiters',       /(drank|drink|water)\s+(\d+(?:\.\d+)?)\s*(litres|liters|l|glass|glasses)?/i],
     ['exerciseMinutes',   /(exercise|workout|gym)\s+(for\s+)?(\d+(?:\.\d+)?)\s*(minutes|mins|min)?/i],
     ['headacheLevel',     /(headache)\s+(level\s+)?(\d+(?:\.\d+)?)\s*(out of 10|\/10)?/i],
     ['fastFoodServings',  /(fast food|burger|pizza)\s+(\d+(?:\.\d+)?)\s*(times|servings)?/i],
@@ -806,7 +804,7 @@ export default function WellnessPage() {
                   <div key={entry.date} style={styles.timelineRow}>
                     <div style={styles.timelineDate}>{entry.date}</div>
                     <div style={styles.timelineSummary}>
-                      {Number(entry.runningMinutes || 0) + Number(entry.exerciseMinutes || 0) + Number(entry.badmintonMinutes || 0) + Number(entry.cricketMinutes || 0) + Number(entry.footballMinutes || 0) + Number(entry.swimmingMinutes || 0)}&nbsp;mins active &middot; {entry.waterLiters}L water &middot; headache {entry.headacheLevel}/10 &middot; mood {entry.moodScore}/10
+                      {Number(entry.runningMinutes || 0) + Number(entry.exerciseMinutes || 0) + Number(entry.badmintonMinutes || 0) + Number(entry.cricketMinutes || 0) + Number(entry.footballMinutes || 0) + Number(entry.swimmingMinutes || 0)}&nbsp;mins active &middot; headache {entry.headacheLevel}/10 &middot; mood {entry.moodScore}/10
                     </div>
                   </div>
                 ))}
