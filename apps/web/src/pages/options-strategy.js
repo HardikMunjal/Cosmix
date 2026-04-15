@@ -251,6 +251,7 @@ function PayoffChart({ points, minY, maxY, currentSpot, breakEvens = [] }) {
     <div>
       <div ref={containerRef} style={{ position: 'relative' }} onMouseMove={handleMouseMove} onMouseLeave={() => setHover(null)}>
         <svg
+          className="strategy-payoff-chart"
           viewBox={`0 0 ${W} ${H}`}
           preserveAspectRatio="none"
           style={{ width: '100%', height: '280px', borderRadius: '12px', background: 'linear-gradient(180deg, #031525, #020617)', display: 'block' }}
@@ -1212,10 +1213,25 @@ export default function OptionsStrategy() {
           h1 { font-size: 18px !important; }
           h2 { font-size: 15px !important; }
           input, select { font-size: 12px !important; }
+          .strategy-page { padding: 14px !important; }
+          .strategy-header { flex-direction: column !important; align-items: stretch !important; }
+          .strategy-top-grid { grid-template-columns: 1fr !important; }
+          .strategy-controls-row { grid-template-columns: 1fr !important; gap: 6px !important; }
+          .strategy-legs-shell { overflow-x: auto; padding-bottom: 4px; }
+          .strategy-legs-header,
+          .strategy-leg-row { min-width: 760px; }
+          .strategy-payoff-chart { height: 240px !important; }
+        }
+        @media (max-width: 520px) {
+          .strategy-page { padding: 10px !important; }
+          .strategy-card { padding: 14px !important; }
+          .strategy-hero-card { padding: 14px !important; }
+          .strategy-payoff-chart { height: 220px !important; }
+          .strategy-chart-meta { flex-direction: column !important; align-items: flex-start !important; }
         }
       `}</style>
-      <div style={styles.container}>
-        <div style={styles.header}>
+      <div style={styles.container} className="strategy-page">
+        <div style={styles.header} className="strategy-header">
           <div>
             <h1 style={styles.title}>Nifty Options Strategy</h1>
             <div style={styles.subTitle}>Live Nifty spot from {liveSource}</div>
@@ -1223,8 +1239,8 @@ export default function OptionsStrategy() {
           <button onClick={() => router.push('/dashboard')} style={styles.back}>← Back</button>
         </div>
 
-        <div style={styles.topGrid}>
-          <div style={styles.heroCard}>
+        <div style={styles.topGrid} className="strategy-top-grid">
+          <div style={styles.heroCard} className="strategy-hero-card">
             <div style={styles.heroLabel}>Nifty Live Price</div>
             <div style={styles.heroPrice}>Rs. {spotPrice.toFixed(2)}</div>
             <div style={{ fontSize: 11, marginTop: 4, color: ['nse', 'angel-one'].includes(liveSource) ? '#22c55e' : '#f59e0b' }}>
@@ -1241,24 +1257,24 @@ export default function OptionsStrategy() {
             ) : null}
             {sourceWarning ? <div style={styles.warningText}>{sourceWarning}</div> : null}
           </div>
-          <div style={styles.heroCard}>
-            <div style={styles.controlsRow}>
+          <div style={styles.heroCard} className="strategy-hero-card">
+            <div style={styles.controlsRow} className="strategy-controls-row">
               <label style={styles.label}>Spot Price</label>
               <input type="number" value={spotPrice} onChange={(e) => setSpotPrice(parseFloat(e.target.value || 0))} style={styles.input} />
             </div>
-            <div style={styles.controlsRow}>
+            <div style={styles.controlsRow} className="strategy-controls-row">
               <label style={styles.label}>Lot Size</label>
               <input type="number" value={lotSize} onChange={(e) => setLotSize(parseInt(e.target.value || 0, 10) || 1)} style={styles.input} />
             </div>
-            <div style={styles.controlsRow}>
+            <div style={styles.controlsRow} className="strategy-controls-row">
               <label style={styles.label}>Base IV %</label>
               <input type="number" value={ivInput} onChange={(e) => setIvInput(e.target.value)} style={styles.input} />
             </div>
-            <div style={styles.controlsRow}>
+            <div style={styles.controlsRow} className="strategy-controls-row">
               <label style={styles.label}>Rate %</label>
               <input type="number" value={rateInput} onChange={(e) => setRateInput(e.target.value)} style={styles.input} />
             </div>
-            <div style={styles.controlsRow}>
+            <div style={styles.controlsRow} className="strategy-controls-row">
               <label style={styles.label}>Premium Source</label>
               <select value={pricingSource} onChange={(e) => setPricingSource(e.target.value)} style={styles.input}>
                 {PRICING_SOURCE_OPTIONS.map((option) => (
@@ -1273,9 +1289,10 @@ export default function OptionsStrategy() {
           </div>
         </div>
 
-        <div style={styles.card}>
+        <div style={styles.card} className="strategy-card">
           <h2 style={styles.sectionTitle}>Strategy Legs</h2>
-          <div style={styles.legsHeader}>
+          <div className="strategy-legs-shell">
+          <div style={styles.legsHeader} className="strategy-legs-header">
             <span>Side</span>
             <span>Type</span>
             <span>Strike</span>
@@ -1299,7 +1316,7 @@ export default function OptionsStrategy() {
           </div>
           {legs.map((leg) => (
             <div key={leg.id} style={styles.legWrap}>
-              <div style={styles.legRow}>
+              <div style={styles.legRow} className="strategy-leg-row">
                 <select value={leg.side} disabled={leg.locked} onChange={(e) => updateLeg(leg.id, 'side', e.target.value)} style={styles.input}>
                   <option value="SELL">SELL</option>
                   <option value="BUY">BUY</option>
@@ -1347,6 +1364,7 @@ export default function OptionsStrategy() {
               </div>
             </div>
           ))}
+          </div>
         </div>
 
         <div style={styles.metricsGrid}>

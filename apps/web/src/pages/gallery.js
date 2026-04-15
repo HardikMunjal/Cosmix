@@ -85,6 +85,17 @@ export default function Gallery() {
 
     return (
         <div style={styles.container}>
+            <style>{`
+                @media (max-width: 700px) {
+                    .gallery-header { flex-direction: column !important; align-items: stretch !important; }
+                    .gallery-actions { display: grid !important; grid-template-columns: 1fr !important; gap: 8px !important; width: 100%; }
+                    .gallery-grid { grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)) !important; }
+                }
+                @media (max-width: 420px) {
+                    .gallery-page { padding: 12px !important; }
+                }
+            `}</style>
+            <div className="gallery-page">
             <h1>📂 Gallery</h1>
 
             {Object.keys(folders).length === 0 && <p>No files found</p>}
@@ -95,40 +106,43 @@ export default function Gallery() {
 
                     {Object.keys(folders[date]).map(user => (
                         <div key={user} style={styles.userBlock}>
-                            <div style={styles.header}>
+                            <div style={styles.header} className="gallery-header">
                                 <h3>👤 {user}</h3>
-                                <button
-                                    onClick={() =>
-                                        downloadFolder(
-                                            folders[date][user].files,
-                                            `${date}_${user}`
-                                        )
-                                    }
-                                    style={styles.downloadBtn}
-                                >
-                                    ⬇️ Download Folder
-                                </button>
-                                <button
-                                    onClick={() => deleteFolder(`${date}/${user}`)}
-                                    style={styles.deleteBtn}
-                                >
-                                    🗑 Delete Folder
-                                </button>
+                                <div className="gallery-actions">
+                                    <button
+                                        onClick={() =>
+                                            downloadFolder(
+                                                folders[date][user].files,
+                                                `${date}_${user}`
+                                            )
+                                        }
+                                        style={styles.downloadBtn}
+                                    >
+                                        ⬇️ Download Folder
+                                    </button>
+                                    <button
+                                        onClick={() => deleteFolder(`${date}/${user}`)}
+                                        style={styles.deleteBtn}
+                                    >
+                                        🗑 Delete Folder
+                                    </button>
+                                </div>
                             </div>
 
                             <p style={styles.size}>
                                 📦 {(folders[date][user].totalSize / (1024 * 1024)).toFixed(2)} MB
                             </p>
 
-                            <div style={styles.grid}>
+                            <div style={styles.grid} className="gallery-grid">
                                 {folders[date][user].files.map((url, i) => (
-                                    <img key={i} src={url} style={styles.img} />
+                                    <img key={i} src={url} alt="gallery item" style={styles.img} />
                                 ))}
                             </div>
                         </div>
                     ))}
                 </div>
             ))}
+            </div>
         </div>
     );
 }
@@ -154,6 +168,8 @@ const styles = {
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
+        gap: '10px',
+        flexWrap: 'wrap',
     },
 
     size: {

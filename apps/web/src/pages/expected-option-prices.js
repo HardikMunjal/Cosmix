@@ -216,10 +216,10 @@ export default function ExpectedOptionPrices() {
           <table style={styles.table} className="expected-prices-table">
             <thead>
               <tr>
-                <th style={{ ...styles.tableHead, ...getStickyHeadStyle(0, 7), ...styles.strikeHead }}>Strike</th>
-                <th style={{ ...styles.tableHead, ...getStickyHeadStyle(116, 7), ...styles.typeHead }}>Type</th>
-                <th style={{ ...styles.tableHead, ...getStickyHeadStyle(188, 7), ...styles.liveHead }}>Live</th>
-                <th style={{ ...styles.tableHead, ...getStickyHeadStyle(304, 7), ...styles.ivHead }}>IV</th>
+                <th className="expected-sticky-head expected-sticky-strike" style={{ ...styles.tableHead, ...getStickyHeadStyle(0, 7), ...styles.strikeHead }}>Strike</th>
+                <th className="expected-sticky-head expected-sticky-type" style={{ ...styles.tableHead, ...getStickyHeadStyle(116, 7), ...styles.typeHead }}>Type</th>
+                <th className="expected-sticky-head expected-sticky-live" style={{ ...styles.tableHead, ...getStickyHeadStyle(188, 7), ...styles.liveHead }}>Live</th>
+                <th className="expected-sticky-head expected-sticky-iv" style={{ ...styles.tableHead, ...getStickyHeadStyle(304, 7), ...styles.ivHead }}>IV</th>
                 {payload.formulas.map((formula) => (
                   <th key={`${expiryLabel}-${optionType}-${formula.key}`} style={styles.tableHead}>
                     <div
@@ -254,15 +254,15 @@ export default function ExpectedOptionPrices() {
 
                 return (
                   <tr key={`${contract.expiryUnix}-${contract.strike}-${contract.type}`} style={{ ...rowStyle, ...bandRowStyle }}>
-                    <td style={{ ...styles.tableCellStrong, ...styles.strikeCell, ...styles[`strike${strikeBand}`], ...getStickyColumnStyle(0, stickyBackground, 6) }}>
+                    <td className="expected-sticky-cell expected-sticky-strike" style={{ ...styles.tableCellStrong, ...styles.strikeCell, ...styles[`strike${strikeBand}`], ...getStickyColumnStyle(0, stickyBackground, 6) }}>
                       <div style={styles.strikeCellContent}>
                         <span>{contract.strike}</span>
                         {strikeBadge ? <span style={strikeBadge === 'ATM' ? styles.strikeBadgeAtm : styles.strikeBadgeNear}>{strikeBadge}</span> : null}
                       </div>
                     </td>
-                    <td style={{ ...getTypeCellStyle(contract.type), ...styles.typeCell, ...getStickyColumnStyle(116, stickyBackground, 6) }}>{contract.type}</td>
-                    <td style={{ ...styles.tableCell, ...styles.liveCell, ...styles[`tone${liveTone ? liveTone.charAt(0).toUpperCase() + liveTone.slice(1) : 'Flat'}`], ...getStickyColumnStyle(188, stickyBackground, 6) }}>{currency(contract.livePremium)}</td>
-                    <td style={{ ...styles.tableCell, ...styles.ivCell, ...styles[`tone${ivTone ? ivTone.charAt(0).toUpperCase() + ivTone.slice(1) : 'Flat'}`], ...getStickyColumnStyle(304, stickyBackground, 6) }}>{contract.appliedVolatility}%</td>
+                    <td className="expected-sticky-cell expected-sticky-type" style={{ ...getTypeCellStyle(contract.type), ...styles.typeCell, ...getStickyColumnStyle(116, stickyBackground, 6) }}>{contract.type}</td>
+                    <td className="expected-sticky-cell expected-sticky-live" style={{ ...styles.tableCell, ...styles.liveCell, ...styles[`tone${liveTone ? liveTone.charAt(0).toUpperCase() + liveTone.slice(1) : 'Flat'}`], ...getStickyColumnStyle(188, stickyBackground, 6) }}>{currency(contract.livePremium)}</td>
+                    <td className="expected-sticky-cell expected-sticky-iv" style={{ ...styles.tableCell, ...styles.ivCell, ...styles[`tone${ivTone ? ivTone.charAt(0).toUpperCase() + ivTone.slice(1) : 'Flat'}`], ...getStickyColumnStyle(304, stickyBackground, 6) }}>{contract.appliedVolatility}%</td>
                     {payload.formulas.map((formula) => {
                       const result = contract.formulaResults.find((entry) => entry.key === formula.key);
                       const tone = flashMap[`${baseKey}-${formula.key}`] || null;
@@ -329,10 +329,37 @@ export default function ExpectedOptionPrices() {
             border-radius: 12px !important;
           }
           .expected-prices-table {
-            min-width: 920px !important;
+            min-width: 760px !important;
           }
           .expected-prices-expiry {
             padding: 12px !important;
+          }
+          .expected-sticky-head,
+          .expected-sticky-cell {
+            position: static !important;
+            left: auto !important;
+            box-shadow: none !important;
+          }
+          .expected-prices-actions {
+            flex-wrap: wrap !important;
+          }
+          .expected-prices-actions button {
+            width: 100%;
+          }
+        }
+
+        @media (max-width: 520px) {
+          .expected-prices-table {
+            min-width: 680px !important;
+          }
+          .expected-prices-title {
+            font-size: 22px !important;
+          }
+          .expected-prices-panel {
+            padding: 12px !important;
+          }
+          .expected-prices-option-grid {
+            gap: 10px !important;
           }
         }
       `}</style>

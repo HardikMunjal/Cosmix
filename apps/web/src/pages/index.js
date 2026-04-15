@@ -23,7 +23,8 @@ export default function Home() {
       justifyContent: 'center', 
       alignItems: 'center', 
       height: '100vh',
-      backgroundColor: '#f5f5f5'
+      backgroundColor: '#f5f5f5',
+      padding: '16px'
     }}>
       <div style={{ 
         backgroundColor: 'white', 

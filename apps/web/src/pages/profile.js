@@ -112,6 +112,17 @@ export default function Profile() {
 
   return (
     <div style={{ padding: '20px' }}>
+      <style>{`
+        @media (max-width: 700px) {
+          .profile-page { padding: 14px !important; }
+          .profile-layout { flex-direction: column !important; }
+          .profile-card { max-width: none !important; width: 100%; }
+        }
+        @media (max-width: 420px) {
+          .profile-avatar { width: 128px !important; height: 128px !important; }
+        }
+      `}</style>
+      <div className="profile-page">
       <button 
         onClick={() => router.push('/dashboard')}
         style={{ padding: '8px 15px', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: '4px', marginBottom: '20px' }}
@@ -120,10 +131,10 @@ export default function Profile() {
       </button>
 
       <h1>User Profile</h1>
-      <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
+      <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }} className="profile-layout">
         <div>
           <div style={{ marginBottom: '8px' }}><strong>Avatar (cartoonized)</strong></div>
-          <div style={{ width: 160, height: 160, borderRadius: 12, overflow: 'hidden', background: '#eee', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ width: 160, height: 160, borderRadius: 12, overflow: 'hidden', background: '#eee', display: 'flex', alignItems: 'center', justifyContent: 'center' }} className="profile-avatar">
             {preview ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={preview} alt="avatar" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
@@ -154,12 +165,13 @@ export default function Profile() {
           padding: '20px', 
           borderRadius: '4px',
           maxWidth: '520px'
-        }}>
+        }} className="profile-card">
           <p><strong>Username:</strong> {user.username}</p>
           <p><strong>Status:</strong> Active</p>
           <p><strong>Member Since:</strong> 2026</p>
           <p style={{ color: '#666' }}>Upload a photo and click <strong>Save Avatar</strong>. The image will be converted to a cartoon-style avatar and used in chat messages.</p>
         </div>
+      </div>
       </div>
     </div>
   );
