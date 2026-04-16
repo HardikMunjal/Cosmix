@@ -1,288 +1,301 @@
 import { useRouter } from 'next/router';
 import { useEffect, useMemo, useState } from 'react';
+import { clearClientUser, persistClientUser } from '../lib/auth-client';
 
-function createUserSession(payload) {
-  const username = payload.username?.trim() || payload.email?.split('@')[0] || `User ${String(payload.mobile || '').slice(-4)}`;
-  return {
-    username,
-    mobile: payload.mobile || '',
-    email: payload.email || '',
-    authMethod: payload.authMethod,
-    quote: payload.quote || 'Building better decisions, one signal at a time.',
-    avatar: payload.avatar || '',
-  };
-}
+const AUTH_MODES = {
+  signup: 'signup',
+  login: 'login',
+};
 
 export default function Home() {
   const router = useRouter();
-  const [loginMode, setLoginMode] = useState('mobile');
-  const [mobile, setMobile] = useState('');
-  const [otp, setOtp] = useState('');
-  const [generatedOtp, setGeneratedOtp] = useState('');
-  const [otpSent, setOtpSent] = useState(false);
-  const [gmailName, setGmailName] = useState('');
-  const [gmailAddress, setGmailAddress] = useState('');
+  const [authMode, setAuthMode] = useState(AUTH_MODES.signup);
+  const [signupUsername, setSignupUsername] = useState('');
+  const [signupEmail, setSignupEmail] = useState('');
+  const [signupPassword, setSignupPassword] = useState('');
+  const [gmailEmail, setGmailEmail] = useState('');
+  const [loginIdentifier, setLoginIdentifier] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const storedUser = localStorage.getItem('user');
-    if (storedUser) {
-      router.push('/dashboard');
-    }
+    let active = true;
+
+    (async () => {
+      try {
+        const response = await fetch('/api/auth/session');
+        const data = await response.json();
+        if (!active) return;
+        if (response.ok && data.user) {
+          persistClientUser(data.user);
+          router.push('/dashboard');
+          return;
+        }
+      } catch (_) {
+        // Ignore bootstrap session failures.
+      }
+
+      if (active) {
+        clearClientUser();
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
   }, [router]);
 
-  const loginCardTitle = useMemo(() => (
-    loginMode === 'mobile' ? 'Sign in with mobile number' : 'Sign in with Gmail'
-  ), [loginMode]);
+  const formTitle = useMemo(() => {
+    if (authMode === AUTH_MODES.signup) return 'Create your account';
+    return 'Login';
+  }, [authMode]);
 
-  const persistUser = (payload) => {
-    localStorage.setItem('user', JSON.stringify(createUserSession(payload)));
+  const formSubtitle = useMemo(() => {
+    if (authMode === AUTH_MODES.signup) return 'Username is required. Gmail is optional. Set a password now for future logins.';
+    return 'Use your username and password, or log in with the Gmail already linked to your account.';
+  }, [authMode]);
+
+  const resetMessages = (mode) => {
+    setAuthMode(mode);
+    setError('');
+    setInfo('');
+  };
+
+  const completeLogin = (user) => {
+    persistClientUser(user);
     router.push('/dashboard');
   };
 
-  const handleSendOtp = (event) => {
+  const handleSignup = async (event) => {
     event.preventDefault();
-    const normalizedMobile = mobile.replace(/\D/g, '');
-    if (normalizedMobile.length !== 10) {
-      setError('Enter a valid 10-digit mobile number.');
-      return;
-    }
-
-    const nextOtp = String(Math.floor(100000 + (Math.random() * 900000)));
-    setGeneratedOtp(nextOtp);
-    setOtpSent(true);
-    setOtp('');
-    setError('');
-    setInfo(`OTP sent to +91 ${normalizedMobile}. Demo OTP: ${nextOtp}`);
-  };
-
-  const handleVerifyOtp = (event) => {
-    event.preventDefault();
-    const normalizedMobile = mobile.replace(/\D/g, '');
-    if (!otpSent || !generatedOtp) {
-      setError('Send the OTP first.');
-      return;
-    }
-    if (otp.trim() !== generatedOtp) {
-      setError('Invalid OTP. Please try again.');
-      return;
-    }
-
-    persistUser({
-      username: `User ${normalizedMobile.slice(-4)}`,
-      mobile: normalizedMobile,
-      authMethod: 'mobile-otp',
-    });
-  };
-
-  const handleGmailSignIn = (event) => {
-    event.preventDefault();
-    const normalizedEmail = gmailAddress.trim().toLowerCase();
-    const normalizedName = gmailName.trim();
-
-    if (!normalizedName) {
-      setError('Enter your name to continue with Gmail.');
-      return;
-    }
-    if (!/^[^\s@]+@gmail\.com$/i.test(normalizedEmail)) {
-      setError('Enter a valid Gmail address.');
-      return;
-    }
-
+    setLoading(true);
     setError('');
     setInfo('');
-    persistUser({
-      username: normalizedName,
-      email: normalizedEmail,
-      authMethod: 'gmail',
-    });
+
+    try {
+      const response = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: signupUsername,
+          email: signupEmail,
+          password: signupPassword,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.user) {
+        throw new Error(data.error || 'Unable to create account.');
+      }
+      completeLogin(data.user);
+    } catch (signupError) {
+      setError(signupError.message || 'Unable to create account.');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const resetMode = (mode) => {
-    setLoginMode(mode);
+  const handleGmailLogin = async (event) => {
+    event.preventDefault();
+    setLoading(true);
     setError('');
     setInfo('');
+
+    try {
+      const response = await fetch('/api/auth/gmail', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: gmailEmail }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.user) {
+        throw new Error(data.error || 'Unable to log in with Gmail.');
+      }
+      completeLogin(data.user);
+    } catch (loginError) {
+      setError(loginError.message || 'Unable to log in with Gmail.');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  useEffect(() => {
-    if (!otpSent || loginMode !== 'mobile' || typeof window === 'undefined') return undefined;
-    if (!('OTPCredential' in window) || !navigator.credentials?.get) return undefined;
+  const handlePasswordLogin = async (event) => {
+    event.preventDefault();
+    setLoading(true);
+    setError('');
+    setInfo('');
 
-    const controller = new AbortController();
-
-    navigator.credentials.get({
-      otp: { transport: ['sms'] },
-      signal: controller.signal,
-    }).then((otpCredential) => {
-      const code = String(otpCredential?.code || '').replace(/\D/g, '').slice(0, 6);
-      if (!code) return;
-      setOtp(code);
-      setError('');
-      setInfo('OTP picked automatically from your SMS inbox.');
-    }).catch(() => {
-      // Web OTP is best-effort only.
-    });
-
-    return () => controller.abort();
-  }, [otpSent, loginMode]);
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          identifier: loginIdentifier,
+          password: loginPassword,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.user) {
+        throw new Error(data.error || 'Unable to log in.');
+      }
+      completeLogin(data.user);
+    } catch (loginError) {
+      setError(loginError.message || 'Unable to log in.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div style={styles.page}>
       <style>{`
-        @media (max-width: 860px) {
-          .login-shell { grid-template-columns: 1fr !important; }
-        }
         @media (max-width: 560px) {
           .login-page { padding: 14px !important; }
           .login-panel { padding: 22px !important; }
           .login-tab-row { grid-template-columns: 1fr !important; }
-          .login-action-row { flex-direction: column !important; }
         }
       `}</style>
 
-      <div style={styles.shell} className="login-shell login-page">
-        <section style={styles.heroPanel} className="login-panel">
-          <div style={styles.eyebrow}>Sunlit workspace</div>
-          <h1 style={styles.heroTitle}>Cosmix access, tuned for mobile and trading flow.</h1>
-          <p style={styles.heroText}>
-            Use your mobile number with OTP or continue with Gmail. Your profile, theme, and workspace preferences will follow you after sign-in.
-          </p>
-
-          <div style={styles.heroHighlights}>
-            <div style={styles.highlightCard}>
-              <div style={styles.highlightLabel}>Fast access</div>
-              <div style={styles.highlightValue}>Mobile OTP</div>
-            </div>
-            <div style={styles.highlightCard}>
-              <div style={styles.highlightLabel}>Alternate sign-in</div>
-              <div style={styles.highlightValue}>Gmail</div>
-            </div>
-            <div style={styles.highlightCard}>
-              <div style={styles.highlightLabel}>Default look</div>
-              <div style={styles.highlightValue}>Sunlit</div>
-            </div>
-          </div>
-        </section>
-
+      <div style={styles.shell} className="login-page">
         <section style={styles.formPanel} className="login-panel">
+          <div style={styles.topMeta}>Free signup and login</div>
+
           <div style={styles.tabRow} className="login-tab-row">
             <button
               type="button"
-              onClick={() => resetMode('mobile')}
-              style={{ ...styles.tabButton, ...(loginMode === 'mobile' ? styles.activeTabButton : {}) }}
+              onClick={() => resetMessages(AUTH_MODES.signup)}
+              style={{ ...styles.tabButton, ...(authMode === AUTH_MODES.signup ? styles.activeTabButton : {}) }}
             >
-              Mobile no. + OTP
+              Sign up
             </button>
             <button
               type="button"
-              onClick={() => resetMode('gmail')}
-              style={{ ...styles.tabButton, ...(loginMode === 'gmail' ? styles.activeTabButton : {}) }}
+              onClick={() => resetMessages(AUTH_MODES.login)}
+              style={{ ...styles.tabButton, ...(authMode === AUTH_MODES.login ? styles.activeTabButton : {}) }}
             >
-              Gmail
+              Login
             </button>
           </div>
 
           <div style={styles.formHeader}>
-            <h2 style={styles.formTitle}>{loginCardTitle}</h2>
-            <p style={styles.formSubtitle}>
-              {loginMode === 'mobile'
-                ? 'Use your number to receive a one-time passcode.'
-                : 'Use your Gmail identity for quick workspace access.'}
-            </p>
+            <h1 style={styles.formTitle}>{formTitle}</h1>
+            <p style={styles.formSubtitle}>{formSubtitle}</p>
           </div>
 
-          {loginMode === 'mobile' ? (
-            <form onSubmit={otpSent ? handleVerifyOtp : handleSendOtp}>
-              <label style={styles.label} htmlFor="mobile-number">Mobile number</label>
+          {authMode === AUTH_MODES.signup ? (
+            <form onSubmit={handleSignup}>
+              <label style={styles.label} htmlFor="signup-username">Username</label>
               <input
-                id="mobile-number"
-                type="tel"
-                inputMode="numeric"
-                maxLength={10}
-                placeholder="9876543210"
-                value={mobile}
-                onChange={(event) => {
-                  setMobile(event.target.value.replace(/\D/g, '').slice(0, 10));
-                  setError('');
-                }}
-                style={styles.input}
-              />
-
-              {otpSent ? (
-                <>
-                  <label style={styles.label} htmlFor="otp-code">Enter OTP</label>
-                  <input
-                    id="otp-code"
-                    type="text"
-                    inputMode="numeric"
-                    autoComplete="one-time-code"
-                    maxLength={6}
-                    placeholder="6-digit OTP"
-                    value={otp}
-                    onChange={(event) => {
-                      setOtp(event.target.value.replace(/\D/g, '').slice(0, 6));
-                      setError('');
-                    }}
-                    style={styles.input}
-                  />
-                </>
-              ) : null}
-
-              <div style={styles.actionRow} className="login-action-row">
-                <button type="submit" style={styles.primaryButton}>
-                  {otpSent ? 'Verify OTP' : 'Send OTP'}
-                </button>
-                {otpSent ? (
-                  <button type="button" onClick={handleSendOtp} style={styles.secondaryButton}>
-                    Resend OTP
-                  </button>
-                ) : null}
-              </div>
-
-              {otpSent ? (
-                <div style={styles.otpAssistText}>
-                  On supported mobile browsers, the OTP will be auto-detected from SMS when it arrives.
-                </div>
-              ) : null}
-            </form>
-          ) : (
-            <form onSubmit={handleGmailSignIn}>
-              <label style={styles.label} htmlFor="gmail-name">Full name</label>
-              <input
-                id="gmail-name"
+                id="signup-username"
                 type="text"
-                placeholder="Your name"
-                value={gmailName}
+                placeholder="Choose a unique username"
+                value={signupUsername}
                 onChange={(event) => {
-                  setGmailName(event.target.value);
+                  setSignupUsername(event.target.value);
                   setError('');
                 }}
                 style={styles.input}
               />
 
-              <label style={styles.label} htmlFor="gmail-address">Gmail address</label>
+              <label style={styles.label} htmlFor="signup-email">Gmail address (optional)</label>
               <input
-                id="gmail-address"
+                id="signup-email"
                 type="email"
                 placeholder="name@gmail.com"
-                value={gmailAddress}
+                value={signupEmail}
                 onChange={(event) => {
-                  setGmailAddress(event.target.value);
+                  setSignupEmail(event.target.value);
                   setError('');
                 }}
                 style={styles.input}
               />
 
-              <button type="submit" style={styles.googleButton}>Continue with Gmail</button>
+              <label style={styles.label} htmlFor="signup-password">Password</label>
+              <input
+                id="signup-password"
+                type="password"
+                placeholder="Set your password"
+                value={signupPassword}
+                onChange={(event) => {
+                  setSignupPassword(event.target.value);
+                  setError('');
+                }}
+                style={styles.input}
+              />
+
+              <button type="submit" style={styles.primaryButton} disabled={loading}>
+                {loading ? 'Creating account...' : 'Create account'}
+              </button>
             </form>
-          )}
+          ) : null}
+
+          {authMode === AUTH_MODES.login ? (
+            <div>
+              <form onSubmit={handlePasswordLogin}>
+                <label style={styles.label} htmlFor="login-identifier">Username or Gmail</label>
+                <input
+                  id="login-identifier"
+                  type="text"
+                  placeholder="Enter your username or Gmail"
+                  value={loginIdentifier}
+                  onChange={(event) => {
+                    setLoginIdentifier(event.target.value);
+                    setError('');
+                  }}
+                  style={styles.input}
+                />
+
+                <label style={styles.label} htmlFor="login-password">Password</label>
+                <input
+                  id="login-password"
+                  type="password"
+                  placeholder="Enter your password"
+                  value={loginPassword}
+                  onChange={(event) => {
+                    setLoginPassword(event.target.value);
+                    setError('');
+                  }}
+                  style={styles.input}
+                />
+
+                <button type="submit" style={styles.primaryButton} disabled={loading}>
+                  {loading ? 'Logging in...' : 'Login with password'}
+                </button>
+              </form>
+
+              <div style={styles.dividerRow}>
+                <span style={styles.dividerLine} />
+                <span style={styles.dividerText}>or</span>
+                <span style={styles.dividerLine} />
+              </div>
+
+              <form onSubmit={handleGmailLogin}>
+                <label style={styles.label} htmlFor="gmail-email">Linked Gmail address</label>
+              <input
+                id="gmail-email"
+                type="email"
+                placeholder="name@gmail.com"
+                value={gmailEmail}
+                onChange={(event) => {
+                  setGmailEmail(event.target.value);
+                  setError('');
+                }}
+                style={styles.input}
+              />
+
+              <button type="submit" style={styles.googleButton} disabled={loading}>
+                {loading ? 'Logging in...' : 'Login with Gmail'}
+              </button>
+              </form>
+            </div>
+          ) : null}
 
           {error ? <div style={styles.errorBanner}>{error}</div> : null}
           {info ? <div style={styles.infoBanner}>{info}</div> : null}
 
           <div style={styles.helperText}>
-            By continuing, you keep your profile photo, quote, and workspace preferences on this device.
+            Sessions stay active for 30 days and extend automatically while you keep using the app.
           </div>
         </section>
       </div>
@@ -302,17 +315,8 @@ const styles = {
   },
   shell: {
     width: '100%',
-    maxWidth: '1120px',
-    display: 'grid',
-    gridTemplateColumns: '1.1fr 0.9fr',
-    gap: '18px',
-  },
-  heroPanel: {
-    padding: '34px',
-    borderRadius: '28px',
-    background: 'linear-gradient(145deg, rgba(255,253,248,0.96), rgba(255,242,221,0.95))',
-    border: '1px solid #f3d2b1',
-    boxShadow: '0 24px 70px rgba(217, 119, 6, 0.12)',
+    maxWidth: '560px',
+    margin: '0 auto',
   },
   formPanel: {
     padding: '30px',
@@ -321,7 +325,7 @@ const styles = {
     border: '1px solid #f3d2b1',
     boxShadow: '0 24px 70px rgba(217, 119, 6, 0.12)',
   },
-  eyebrow: {
+  topMeta: {
     display: 'inline-flex',
     padding: '6px 12px',
     borderRadius: '999px',
@@ -333,48 +337,11 @@ const styles = {
     letterSpacing: '0.08em',
     textTransform: 'uppercase',
   },
-  heroTitle: {
-    margin: '18px 0 12px',
-    fontSize: '40px',
-    lineHeight: '1.08',
-    color: '#111827',
-  },
-  heroText: {
-    margin: 0,
-    color: '#5b6472',
-    fontSize: '15px',
-    lineHeight: '1.8',
-    maxWidth: '560px',
-  },
-  heroHighlights: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-    gap: '12px',
-    marginTop: '26px',
-  },
-  highlightCard: {
-    padding: '16px',
-    borderRadius: '18px',
-    background: '#fff7ed',
-    border: '1px solid #fdba74',
-  },
-  highlightLabel: {
-    color: '#8b98ab',
-    fontSize: '11px',
-    letterSpacing: '0.08em',
-    textTransform: 'uppercase',
-    fontWeight: '700',
-    marginBottom: '8px',
-  },
-  highlightValue: {
-    color: '#1f2937',
-    fontSize: '18px',
-    fontWeight: '800',
-  },
   tabRow: {
     display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
     gap: '10px',
+    marginTop: '20px',
     marginBottom: '24px',
   },
   tabButton: {
@@ -385,7 +352,8 @@ const styles = {
     color: '#7c5b3b',
     cursor: 'pointer',
     fontWeight: '700',
-    fontSize: '14px',
+    fontSize: '13px',
+    padding: '0 12px',
   },
   activeTabButton: {
     background: '#f97316',
@@ -398,7 +366,7 @@ const styles = {
   },
   formTitle: {
     margin: 0,
-    fontSize: '28px',
+    fontSize: '30px',
     color: '#111827',
   },
   formSubtitle: {
@@ -427,14 +395,10 @@ const styles = {
     outline: 'none',
     boxSizing: 'border-box',
   },
-  actionRow: {
-    display: 'flex',
-    gap: '12px',
-    marginTop: '22px',
-  },
   primaryButton: {
-    flex: 1,
+    width: '100%',
     minHeight: '50px',
+    marginTop: '22px',
     borderRadius: '14px',
     border: 'none',
     background: 'linear-gradient(135deg, #f97316, #ea580c)',
@@ -443,21 +407,10 @@ const styles = {
     fontWeight: '800',
     cursor: 'pointer',
   },
-  secondaryButton: {
-    minHeight: '50px',
-    borderRadius: '14px',
-    border: '1px solid #fdba74',
-    background: '#fff7ed',
-    color: '#9a3412',
-    fontSize: '14px',
-    fontWeight: '700',
-    cursor: 'pointer',
-    padding: '0 16px',
-  },
   googleButton: {
     width: '100%',
     minHeight: '52px',
-    marginTop: '22px',
+    marginTop: '18px',
     borderRadius: '14px',
     border: '1px solid #f3d2b1',
     background: '#fff',
@@ -466,6 +419,24 @@ const styles = {
     fontWeight: '800',
     cursor: 'pointer',
     boxShadow: '0 14px 24px rgba(15, 23, 42, 0.05)',
+  },
+  dividerRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+    marginTop: '20px',
+  },
+  dividerLine: {
+    flex: 1,
+    height: '1px',
+    background: '#f3d2b1',
+  },
+  dividerText: {
+    color: '#8b98ab',
+    fontSize: '12px',
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: '0.08em',
   },
   errorBanner: {
     marginTop: '18px',
@@ -492,11 +463,5 @@ const styles = {
     color: '#8b98ab',
     fontSize: '12px',
     lineHeight: '1.7',
-  },
-  otpAssistText: {
-    marginTop: '12px',
-    color: '#7c5b3b',
-    fontSize: '12px',
-    lineHeight: '1.6',
   },
 };

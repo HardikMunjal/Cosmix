@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
+import { restoreUserSession } from '../lib/auth-client';
 
 const ZIP_FILES_PER_PART = 100;
 const ZIP_BUILD_BATCH_SIZE = 50;
@@ -234,12 +235,7 @@ export default function Media() {
   const folderInputRef = useRef(null);
 
   useEffect(() => {
-    const storedUser = localStorage.getItem('user');
-    if (!storedUser) {
-      router.push('/');
-    } else {
-      setUser(JSON.parse(storedUser));
-    }
+    restoreUserSession(router, setUser);
   }, []);
 
   useEffect(() => {

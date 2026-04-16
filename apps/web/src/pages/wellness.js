@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
+import { restoreUserSession } from '../lib/auth-client';
 
 import {
   DEFAULT_FORM,
@@ -116,104 +117,95 @@ export default function WellnessPage() {
   /* ---- init (runs once) ---- */
   useEffect(() => {
     if (typeof window === 'undefined' || initDoneRef.current) return;
-    const storedUser = localStorage.getItem('user');
-    if (!storedUser) { router.push('/'); return; }
-    const parsed = JSON.parse(storedUser);
-    const uid = parsed.id || parsed.email || parsed.username || 'default';
-    userIdRef.current = uid;
-    setUser(parsed);
+    restoreUserSession(router, setUser).then((parsed) => {
+      if (!parsed) return;
+      const uid = parsed.id || parsed.email || parsed.username || 'default';
+      userIdRef.current = uid;
 
-    // Load from localStorage first (instant)
-    const localEntries = parseStoredJson(storageKey(uid, 'entries'), []);
-    const localForm = parseStoredJson(storageKey(uid, 'form'), DEFAULT_FORM);
-    const today = todayDate();
-    const todayEntry = localEntries.find((e) => e.date === today);
-    const resolvedForm = todayEntry || { ...DEFAULT_FORM, ...localForm, date: today };
-    setEntries(localEntries);
-    setForm(resolvedForm);
-    setSelectedDate(today);
-    const storedLanguage = localStorage.getItem(STORAGE_LANG_KEY);
-    if (storedLanguage && LANGUAGE_OPTIONS.some((o) => o.value === storedLanguage)) setVoiceLanguage(storedLanguage);
-    initDoneRef.current = true;
-    setLoading(false);
+      const localEntries = parseStoredJson(storageKey(uid, 'entries'), []);
+      const localForm = parseStoredJson(storageKey(uid, 'form'), DEFAULT_FORM);
+      const today = todayDate();
+      const todayEntry = localEntries.find((e) => e.date === today);
+      const resolvedForm = todayEntry || { ...DEFAULT_FORM, ...localForm, date: today };
+      setEntries(localEntries);
+      setForm(resolvedForm);
+      setSelectedDate(today);
+      const storedLanguage = localStorage.getItem(STORAGE_LANG_KEY);
+      if (storedLanguage && LANGUAGE_OPTIONS.some((o) => o.value === storedLanguage)) setVoiceLanguage(storedLanguage);
+      initDoneRef.current = true;
+      setLoading(false);
 
-    // Then try loading from server (overrides if server has data)
-    fetch(`${API_BASE}/wellness/data/${encodeURIComponent(uid)}`)
-      .then((r) => r.ok ? r.json() : null)
-      .then((serverData) => {
-        if (!serverData) return;
-        const sEntries = serverData.entries || [];
-        const sForm = serverData.form || null;
-        if (sEntries.length > 0) {
-          // Merge: server entries take priority by date
-          const merged = [...sEntries];
-          const serverDates = new Set(sEntries.map((e) => e.date));
-          localEntries.forEach((e) => { if (!serverDates.has(e.date)) merged.push(e); });
-          setEntries(merged);
-          localStorage.setItem(storageKey(uid, 'entries'), JSON.stringify(merged));
-          const sTodayEntry = merged.find((e) => e.date === today);
-          if (sTodayEntry) setForm(sTodayEntry);
-        }
-        if (sForm && sEntries.length === 0 && localEntries.length === 0) {
-          setForm({ ...DEFAULT_FORM, ...sForm, date: today });
-        }
-      })
-      .catch(() => { /* server offline, localStorage is fine */ });
+      fetch(`${API_BASE}/wellness/data/${encodeURIComponent(uid)}`)
+        .then((r) => r.ok ? r.json() : null)
+        .then((serverData) => {
+          if (!serverData) return;
+          const sEntries = serverData.entries || [];
+          const sForm = serverData.form || null;
+          if (sEntries.length > 0) {
+            const merged = [...sEntries];
+            const serverDates = new Set(sEntries.map((e) => e.date));
+            localEntries.forEach((e) => { if (!serverDates.has(e.date)) merged.push(e); });
+            setEntries(merged);
+            localStorage.setItem(storageKey(uid, 'entries'), JSON.stringify(merged));
+            const sTodayEntry = merged.find((e) => e.date === today);
+            if (sTodayEntry) setForm(sTodayEntry);
+          }
+          if (sForm && sEntries.length === 0 && localEntries.length === 0) {
+            setForm({ ...DEFAULT_FORM, ...sForm, date: today });
+          }
+        })
+        .catch(() => {});
 
-    // Handle Strava OAuth result (server-side callback redirects here with ?strava=ok)
-    const urlParams = new URLSearchParams(window.location.search);
-    const stravaResult = urlParams.get('strava');
-    if (stravaResult) {
-      window.history.replaceState({}, '', window.location.pathname);
-      if (stravaResult === 'ok') {
-        setStravaConnected(true);
-        setStravaMsg('Strava connected! Syncing activities...');
-        // Immediately fetch activities after connect
-        fetch(`${API_BASE}/wellness/strava/activities/${encodeURIComponent(uid)}`)
-          .then((r) => r.ok ? r.json() : null)
-          .then((actData) => {
-            if (!actData?.fields || Object.keys(actData.fields).length === 0) {
-              setStravaMsg('Strava connected! No activities found today.');
-              return;
-            }
-            setStravaMsg(`Strava connected! Synced ${actData.activities} activities`);
-            setForm((prev) => {
-              const updated = { ...prev };
-              for (const [key, val] of Object.entries(actData.fields)) {
-                if (!updated[key] || updated[key] === 0) updated[key] = val;
+      const urlParams = new URLSearchParams(window.location.search);
+      const stravaResult = urlParams.get('strava');
+      if (stravaResult) {
+        window.history.replaceState({}, '', window.location.pathname);
+        if (stravaResult === 'ok') {
+          setStravaConnected(true);
+          setStravaMsg('Strava connected! Syncing activities...');
+          fetch(`${API_BASE}/wellness/strava/activities/${encodeURIComponent(uid)}`)
+            .then((r) => r.ok ? r.json() : null)
+            .then((actData) => {
+              if (!actData?.fields || Object.keys(actData.fields).length === 0) {
+                setStravaMsg('Strava connected! No activities found today.');
+                return;
               }
-              return updated;
-            });
-          })
-          .catch(() => setStravaMsg('Strava connected but sync failed'));
-      } else {
-        setStravaMsg('Strava authorization failed. Try again.');
+              setStravaMsg(`Strava connected! Synced ${actData.activities} activities`);
+              setForm((prev) => {
+                const updated = { ...prev };
+                for (const [key, val] of Object.entries(actData.fields)) {
+                  if (!updated[key] || updated[key] === 0) updated[key] = val;
+                }
+                return updated;
+              });
+            })
+            .catch(() => setStravaMsg('Strava connected but sync failed'));
+        } else {
+          setStravaMsg('Strava authorization failed. Try again.');
+        }
       }
-    }
 
-    // Check Strava connection status & auto-fill
-    fetch(`${API_BASE}/wellness/strava/status/${encodeURIComponent(uid)}`)
-      .then((r) => r.ok ? r.json() : null)
-      .then((d) => {
-        if (!d?.connected) return;
-        setStravaConnected(true);
-        // Auto-fetch today's activities
-        return fetch(`${API_BASE}/wellness/strava/activities/${encodeURIComponent(uid)}`)
-          .then((r) => r.ok ? r.json() : null)
-          .then((actData) => {
-            if (!actData?.fields || Object.keys(actData.fields).length === 0) return;
-            setStravaMsg(`Strava: ${actData.activities} activities synced`);
-            // Auto-fill only empty fields in current form
-            setForm((prev) => {
-              const updated = { ...prev };
-              for (const [key, val] of Object.entries(actData.fields)) {
-                if (!updated[key] || updated[key] === 0) updated[key] = val;
-              }
-              return updated;
+      fetch(`${API_BASE}/wellness/strava/status/${encodeURIComponent(uid)}`)
+        .then((r) => r.ok ? r.json() : null)
+        .then((d) => {
+          if (!d?.connected) return;
+          setStravaConnected(true);
+          return fetch(`${API_BASE}/wellness/strava/activities/${encodeURIComponent(uid)}`)
+            .then((r) => r.ok ? r.json() : null)
+            .then((actData) => {
+              if (!actData?.fields || Object.keys(actData.fields).length === 0) return;
+              setStravaMsg(`Strava: ${actData.activities} activities synced`);
+              setForm((prev) => {
+                const updated = { ...prev };
+                for (const [key, val] of Object.entries(actData.fields)) {
+                  if (!updated[key] || updated[key] === 0) updated[key] = val;
+                }
+                return updated;
+              });
             });
-          });
-      })
-      .catch(() => {});
+        })
+        .catch(() => {});
+    });
   }, [API_BASE, router]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---- sync to server (debounced) ---- */

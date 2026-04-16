@@ -1,5 +1,6 @@
 import { useRouter } from 'next/router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { logoutClientSession, restoreUserSession } from '../lib/auth-client';
 import { useTheme } from '../lib/ThemePicker';
 import { applyTheme } from '../lib/themes';
 
@@ -156,12 +157,7 @@ export default function Dashboard() {
   const [strategies, setStrategies] = useState([]);
 
   useEffect(() => {
-    const storedUser = localStorage.getItem('user');
-    if (!storedUser) {
-      router.push('/');
-      return;
-    }
-    setUser(JSON.parse(storedUser));
+    restoreUserSession(router, setUser);
   }, [router]);
 
   const loadStrategies = useCallback(async () => {
@@ -215,9 +211,8 @@ export default function Dashboard() {
     };
   }, [strategies]);
 
-  const handleLogout = () => {
-    localStorage.removeItem('user');
-    router.push('/');
+  const handleLogout = async () => {
+    await logoutClientSession(router);
   };
 
   const styles = useMemo(() => applyTheme(baseStyles, themeId, theme), [theme, themeId]);

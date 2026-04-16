@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
+import { restoreUserSession } from '../lib/auth-client';
 
 // ── Storage keys ──────────────────────────────────────────────
 const STORAGE_ENTRIES_KEY  = 'cosmix-wellness-entries';
@@ -232,10 +233,10 @@ export default function WellnessPage() {
 
   // ── Auth ─────────────────────────────────────────────────────
   useEffect(() => {
-    const storedUser = localStorage.getItem('user');
-    if (!storedUser) { router.push('/'); return; }
-    setUser(JSON.parse(storedUser));
-    setChatHistory(parseStoredJson(STORAGE_CONV_KEY, []));
+    restoreUserSession(router, setUser).then((sessionUser) => {
+      if (!sessionUser) return;
+      setChatHistory(parseStoredJson(STORAGE_CONV_KEY, []));
+    });
   }, [router]);
 
   // ── Weather — Open-Meteo (free, no API key) ──────────────────

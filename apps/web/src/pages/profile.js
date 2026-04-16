@@ -1,5 +1,6 @@
 import { useRouter } from 'next/router';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { persistClientUser, restoreUserSession } from '../lib/auth-client';
 import { ThemePicker, useTheme } from '../lib/ThemePicker';
 
 function readFileAsDataUrl(file) {
@@ -26,19 +27,20 @@ export default function Profile() {
   const styles = useMemo(() => getStyles(theme), [theme]);
 
   useEffect(() => {
-    const storedUser = localStorage.getItem('user');
-    if (!storedUser) {
-      router.push('/');
-      return;
-    }
+    let active = true;
 
-    const parsedUser = JSON.parse(storedUser);
-    setUser(parsedUser);
-    setProfileForm({
-      username: parsedUser.username || '',
-      quote: parsedUser.quote || 'Building better decisions, one signal at a time.',
-      avatar: parsedUser.avatar || '',
+    restoreUserSession(router, setUser).then((sessionUser) => {
+      if (!active || !sessionUser) return;
+      setProfileForm({
+        username: sessionUser.username || '',
+        quote: sessionUser.quote || 'Building better decisions, one signal at a time.',
+        avatar: sessionUser.avatar || '',
+      });
     });
+
+    return () => {
+      active = false;
+    };
   }, [router]);
 
   const updateForm = (key, value) => {
@@ -60,7 +62,7 @@ export default function Profile() {
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const nextUsername = profileForm.username.trim();
     const nextQuote = profileForm.quote.trim();
 
@@ -75,31 +77,44 @@ export default function Profile() {
     }
 
     setSaving(true);
-    const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
-    const nextUser = {
-      ...storedUser,
-      username: nextUsername,
-      quote: nextQuote,
-      avatar: profileForm.avatar || '',
-    };
-    localStorage.setItem('user', JSON.stringify(nextUser));
-    setUser(nextUser);
-    setProfileForm({
-      username: nextUser.username,
-      quote: nextUser.quote,
-      avatar: nextUser.avatar || '',
-    });
-    setSaving(false);
-    setStatus('Profile updated successfully.');
+    try {
+      const response = await fetch('/api/auth/profile', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          username: nextUsername,
+          quote: nextQuote,
+          avatar: profileForm.avatar || '',
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data.user) {
+        throw new Error(data.error || 'Could not update profile.');
+      }
+
+      persistClientUser(data.user);
+      setUser(data.user);
+      setProfileForm({
+        username: data.user.username,
+        quote: data.user.quote || '',
+        avatar: data.user.avatar || '',
+      });
+      setStatus('Profile updated successfully.');
+    } catch (error) {
+      setStatus(error.message || 'Could not update profile.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   if (!user) return <div style={{ padding: '24px', fontFamily: 'Inter, system-ui, sans-serif' }}>Loading...</div>;
 
   const authLabel = user.authMethod === 'gmail'
     ? 'Gmail sign-in'
-    : user.authMethod === 'mobile-otp'
-      ? 'Mobile OTP'
-      : 'Local account';
+    : 'Username and password';
 
   return (
     <div style={styles.page} className="profile-page">

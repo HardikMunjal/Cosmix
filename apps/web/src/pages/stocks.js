@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
+import { restoreUserSession } from '../lib/auth-client';
 
 const niftyStocks = [
   { symbol: 'ADANIENT', name: 'Adani Enterprises', sector: 'Conglomerate' },
@@ -64,6 +65,10 @@ const defaultStrategy = {
   type: 'swing',
 };
 
+function getStrategiesStorageKey(userId) {
+  return `strategies:${userId || 'default'}`;
+}
+
 function Sparkline({ points, color = '#00ff9f' }) {
   const values = (points || []).filter((point) => Number.isFinite(point));
 
@@ -109,22 +114,21 @@ export default function Stocks() {
   const selectedStock = niftyStocks.find((stock) => stock.symbol === strategyForm.symbol) || niftyStocks[0];
 
   useEffect(() => {
-    const storedUser = localStorage.getItem('user');
-    if (!storedUser) {
-      router.push('/');
-    } else {
-      setUser(JSON.parse(storedUser));
-      loadStrategies();
-    }
+    restoreUserSession(router, setUser).then((sessionUser) => {
+      if (!sessionUser) return;
+      const ownerKey = sessionUser.id || sessionUser.email || sessionUser.username;
+      loadStrategies(ownerKey);
+    });
   }, [router]);
 
   useEffect(() => {
     fetchSelectedQuote(strategyForm.symbol);
   }, [strategyForm.symbol]);
 
-  const loadStrategies = () => {
+  const loadStrategies = (ownerKey) => {
     try {
-      const stored = localStorage.getItem('strategies');
+      const scopedKey = getStrategiesStorageKey(ownerKey);
+      const stored = localStorage.getItem(scopedKey) || localStorage.getItem('strategies');
       if (stored) {
         const parsed = JSON.parse(stored).map((strategy) => ({
           ...strategy,
@@ -134,6 +138,9 @@ export default function Stocks() {
           history: strategy.history ?? [],
           source: strategy.source ?? 'saved-local',
         }));
+        if (!localStorage.getItem(scopedKey)) {
+          localStorage.setItem(scopedKey, JSON.stringify(parsed));
+        }
         setStrategies(parsed);
       }
     } catch (e) {
@@ -143,7 +150,8 @@ export default function Stocks() {
 
   const saveStrategies = (newStrategies) => {
     try {
-      localStorage.setItem('strategies', JSON.stringify(newStrategies));
+      const ownerKey = user?.id || user?.email || user?.username;
+      localStorage.setItem(getStrategiesStorageKey(ownerKey), JSON.stringify(newStrategies));
       setStrategies(newStrategies);
     } catch (e) {
       console.error('Save error:', e);

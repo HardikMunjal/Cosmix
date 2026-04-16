@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
+import { restoreUserSession } from '../lib/auth-client';
 import { useTheme } from '../lib/ThemePicker';
 import { applyTheme } from '../lib/themes';
 
@@ -1328,12 +1329,7 @@ export default function NiftyStrategiesPage() {
   }, [enrichStrategies]);
 
   useEffect(() => {
-    const storedUser = localStorage.getItem('user');
-    if (!storedUser) {
-      router.push('/');
-      return;
-    }
-    setUser(JSON.parse(storedUser));
+    restoreUserSession(router, setUser);
 
     const storedValuationSource = localStorage.getItem('nifty-current-valuation-source');
     if (storedValuationSource && CURRENT_VALUATION_OPTIONS.includes(storedValuationSource)) {

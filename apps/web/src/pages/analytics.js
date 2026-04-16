@@ -1,5 +1,6 @@
 import { useRouter } from 'next/router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { restoreUserSession } from '../lib/auth-client';
 import { useTheme } from '../lib/ThemePicker';
 import { applyTheme } from '../lib/themes';
 
@@ -125,9 +126,7 @@ export default function Analytics() {
   const [indices, setIndices] = useState([]);
 
   useEffect(() => {
-    const storedUser = localStorage.getItem('user');
-    if (!storedUser) { router.push('/'); return; }
-    setUser(JSON.parse(storedUser));
+    restoreUserSession(router, setUser);
   }, [router]);
 
   const loadData = useCallback(async () => {

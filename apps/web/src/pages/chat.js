@@ -1,6 +1,7 @@
 import { useRouter } from 'next/router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import io from 'socket.io-client';
+import { restoreUserSession } from '../lib/auth-client';
 import { useTheme } from '../lib/ThemePicker';
 
 let socket = null;
@@ -500,51 +501,49 @@ export default function Chat() {
   }, [visibleMessages, activeChat.type]);
 
   useEffect(() => {
-    const storedUser = localStorage.getItem('user');
-    if (!storedUser) {
-      router.push('/');
-      return;
-    }
+    let active = true;
 
-    const userData = JSON.parse(storedUser);
-    setUser(userData);
+    restoreUserSession(router, setUser).then((userData) => {
+      if (!active || !userData) return;
 
-    const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-    const isLocalHost = host === 'localhost' || host === '127.0.0.1';
-    const socketUrl = isLocalHost ? `http://${host}:3002` : undefined;
-    const socketOptions = isLocalHost
-      ? { transports: ['websocket', 'polling'] }
-      : { path: '/chat-socket/socket.io', transports: ['websocket', 'polling'] };
+      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      const isLocalHost = host === 'localhost' || host === '127.0.0.1';
+      const socketUrl = isLocalHost ? `http://${host}:3002` : undefined;
+      const socketOptions = isLocalHost
+        ? { transports: ['websocket', 'polling'] }
+        : { path: '/chat-socket/socket.io', transports: ['websocket', 'polling'] };
 
-    socket = io(socketUrl, socketOptions);
+      socket = io(socketUrl, socketOptions);
 
-    socket.on('connect', () => {
-      socket.emit('join', { username: userData.username });
-    });
+      socket.on('connect', () => {
+        socket.emit('join', { username: userData.username });
+      });
 
-    socket.on('message', (data) => {
-      setMessages((previous) => [...previous, data]);
-      setSmartReplies(buildSmartReplies(data.text));
-    });
+      socket.on('message', (data) => {
+        setMessages((previous) => [...previous, data]);
+        setSmartReplies(buildSmartReplies(data.text));
+      });
 
-    socket.on('online_users', (users) => {
-      const cleaned = Array.from(new Set((users || []).filter(Boolean)));
-      setOnlineUsers(cleaned);
-    });
+      socket.on('online_users', (users) => {
+        const cleaned = Array.from(new Set((users || []).filter(Boolean)));
+        setOnlineUsers(cleaned);
+      });
 
-    socket.on('typing', (data) => {
-      if (!data?.user) return;
-      setTypingUsers((previous) => (previous.includes(data.user) ? previous : [...previous, data.user]));
-      setTimeout(() => {
-        setTypingUsers((previous) => previous.filter((item) => item !== data.user));
-      }, 1500);
-    });
+      socket.on('typing', (data) => {
+        if (!data?.user) return;
+        setTypingUsers((previous) => (previous.includes(data.user) ? previous : [...previous, data.user]));
+        setTimeout(() => {
+          setTypingUsers((previous) => previous.filter((item) => item !== data.user));
+        }, 1500);
+      });
 
-    socket.on('connect_error', (error) => {
-      console.error('Socket connect error', error);
+      socket.on('connect_error', (error) => {
+        console.error('Socket connect error', error);
+      });
     });
 
     return () => {
+      active = false;
       socket?.disconnect();
       socket = null;
     };

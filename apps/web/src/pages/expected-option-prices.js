@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
+import { restoreUserSession } from '../lib/auth-client';
 
 const DEFAULT_STRIKES = '';
 const DEFAULT_STRIKE_GAP = '100';
@@ -132,12 +133,7 @@ export default function ExpectedOptionPrices() {
   const flashTimeoutRef = useRef(null);
 
   useEffect(() => {
-    const storedUser = localStorage.getItem('user');
-    if (!storedUser) {
-      router.push('/');
-      return;
-    }
-    setUser(JSON.parse(storedUser));
+    restoreUserSession(router, setUser);
   }, [router]);
 
   const loadData = async (isRefresh = false) => {

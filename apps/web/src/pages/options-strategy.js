@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import dynamic from 'next/dynamic';
+import { restoreUserSession } from '../lib/auth-client';
 
 const RechartsComponents = dynamic(
   () => import('recharts').then((mod) => ({
@@ -675,12 +676,7 @@ export default function OptionsStrategy() {
   }, [lastUpdated]);
 
   useEffect(() => {
-    const storedUser = localStorage.getItem('user');
-    if (!storedUser) {
-      router.push('/');
-      return;
-    }
-    setUser(JSON.parse(storedUser));
+    restoreUserSession(router, setUser);
   }, [router]);
 
   useEffect(() => {

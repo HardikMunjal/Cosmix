@@ -34,6 +34,7 @@ async function initDb() {
     await db.autoloadPromise;
   }
 
+  await db.ensureIndexAsync({ fieldName: 'ownerId' });
   await db.ensureIndexAsync({ fieldName: 'id', unique: true });
 
   const existingCount = await db.countAsync({}).execAsync();
@@ -54,24 +55,25 @@ async function getDb() {
   return dbPromise;
 }
 
-export async function listStrategies() {
+export async function listStrategies(ownerId) {
   const db = await getDb();
-  return db.findAsync({}).sort({ updatedAt: -1, createdAt: -1 }).execAsync();
+  return db.findAsync({ ownerId: String(ownerId) }).sort({ updatedAt: -1, createdAt: -1 }).execAsync();
 }
 
-export async function getStrategyById(id) {
+export async function getStrategyById(id, ownerId) {
   const db = await getDb();
-  return db.findOneAsync({ id: String(id) }).execAsync();
+  return db.findOneAsync({ id: String(id), ownerId: String(ownerId) }).execAsync();
 }
 
-export async function upsertStrategy(input) {
+export async function upsertStrategy(input, ownerId) {
   const db = await getDb();
   const now = new Date().toISOString();
-  const existing = input?.id ? await getStrategyById(input.id) : null;
+  const existing = input?.id ? await getStrategyById(input.id, ownerId) : null;
 
   const strategy = {
     ...existing,
     ...input,
+    ownerId: String(ownerId),
     id: input.id || existing?.id || `opt-${Date.now()}`,
     name: input.name || existing?.name || 'Strategy',
     createdAt: existing?.createdAt || input.createdAt || now,
@@ -87,9 +89,18 @@ export async function upsertStrategy(input) {
   return strategy;
 }
 
-export async function deleteStrategyById(id) {
+export async function deleteStrategyById(id, ownerId) {
   const db = await getDb();
-  await db.removeAsync({ id: String(id) }, {});
+  await db.removeAsync({ id: String(id), ownerId: String(ownerId) }, {});
+}
+
+export async function assignOrphanStrategiesToOwner(ownerId) {
+  const db = await getDb();
+  await db.updateAsync(
+    { $or: [{ ownerId: { $exists: false } }, { ownerId: null }, { ownerId: '' }] },
+    { $set: { ownerId: String(ownerId) } },
+    { multi: true },
+  );
 }
 
 export { DB_FILE, LEGACY_JSON_FILE };

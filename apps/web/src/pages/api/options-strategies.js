@@ -1,12 +1,18 @@
+import { getAuthenticatedUser } from '../../server/authStore';
 import { deleteStrategyById, getStrategyById, listStrategies, upsertStrategy } from '../../server/strategyStore';
 
 export default async function handler(req, res) {
   try {
+    const user = await getAuthenticatedUser(req, res);
+    if (!user) {
+      return res.status(401).json({ error: 'Session expired.' });
+    }
+
     if (req.method === 'GET') {
-      const strategies = await listStrategies();
+      const strategies = await listStrategies(user.id);
       const id = req.query?.id;
       if (id) {
-        const strategy = await getStrategyById(id);
+        const strategy = await getStrategyById(id, user.id);
         if (!strategy) {
           return res.status(404).json({ error: 'Strategy not found.' });
         }
@@ -24,8 +30,8 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'A strategy needs at least one leg.' });
       }
 
-      const strategy = await upsertStrategy(body);
-      const strategies = await listStrategies();
+      const strategy = await upsertStrategy(body, user.id);
+      const strategies = await listStrategies(user.id);
       return res.status(200).json({ ok: true, strategy, strategies });
     }
 
@@ -36,8 +42,8 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'Strategy id is required.' });
       }
 
-      await deleteStrategyById(id);
-      const strategies = await listStrategies();
+      await deleteStrategyById(id, user.id);
+      const strategies = await listStrategies(user.id);
       return res.status(200).json({ ok: true, strategies });
     }
 
