@@ -5,11 +5,14 @@ import { applyTheme } from '../lib/themes';
 
 const TRANSACTION_COST_PER_ORDER = 30;
 
-const modules = [
+const marketModules = [
   { icon: 'NT', title: 'Nifty Tracker', desc: 'Track saved strategies, live MTM, transactions, and payoff snapshots.', path: '/nifty-strategies', accent: '#22c55e' },
   { icon: 'SB', title: 'Strategy Builder', desc: 'Build and save new Nifty option structures with live chain inputs.', path: '/options-strategy', accent: '#3b82f6' },
   { icon: 'AN', title: 'Analytics', desc: 'Portfolio and market analysis in one focused workspace.', path: '/analytics', accent: '#f59e0b' },
   { icon: 'OP', title: 'Option Pricing', desc: 'Compare expected option prices across pricing models and expiries.', path: '/expected-option-prices', accent: '#ec4899' },
+];
+
+const modules = [
   { icon: 'WL', title: 'Wellness Tracker', desc: 'Daily routines, recovery signals, and wellness prompts.', path: '/wellness', accent: '#34d399' },
   { icon: 'CH', title: 'Chat', desc: 'Theme-aware realtime chat for fast coordination and direct messages.', path: '/chat', accent: '#818cf8' },
   { icon: 'MD', title: 'Media Manager', desc: 'Upload, sort, and browse image and video collections.', path: '/media', accent: '#fb923c' },
@@ -232,6 +235,7 @@ export default function Dashboard() {
           .dash-page { padding: 22px !important; }
           .dash-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
           .dash-chart-grid { grid-template-columns: 1fr !important; }
+          .dash-market-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
         }
         @media (max-width: 820px) {
           .dash-page { padding: 16px !important; }
@@ -240,6 +244,7 @@ export default function Dashboard() {
           .dash-summary { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
           .dash-grid { grid-template-columns: 1fr !important; }
           .dash-hero { grid-template-columns: 1fr !important; }
+          .dash-market-grid { grid-template-columns: 1fr !important; }
         }
         @media (max-width: 560px) {
           .dash-page { padding: 12px !important; }
@@ -263,11 +268,11 @@ export default function Dashboard() {
       <div style={styles.hero} className="dash-hero">
         <div style={{ ...styles.heroMain, background: `linear-gradient(135deg, ${theme.cardBg}, ${theme.cyan}18, ${theme.orange}18)` }} className="dash-hero-card">
           <div style={styles.heroLabel}>Market workspace</div>
-          <div style={styles.heroTitle}>Track live structures, jump into the builder, and watch strategy health from the home screen.</div>
-          <div style={styles.heroText}>The dashboard now surfaces the Nifty tracker, strategy builder, and live portfolio summaries without forcing you into Analytics first.</div>
+          <div style={styles.heroTitle}>The market stack now lives in one grouped toolkit instead of scattered menu cards.</div>
+          <div style={styles.heroText}>Open Nifty Tracker, Strategy Builder, Analytics, and Option Pricing from one shared market section, while keeping the rest of the dashboard focused on your broader workspace.</div>
           <div style={styles.heroActions}>
-            <button onClick={() => router.push('/nifty-strategies')} style={{ ...styles.primaryBtn, background: theme.blue, color: '#fff' }}>Open Tracker</button>
-            <button onClick={() => router.push('/options-strategy')} style={styles.secondaryBtn}>Open Builder</button>
+            <button onClick={() => document.getElementById('market-toolkit')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} style={{ ...styles.primaryBtn, background: theme.blue, color: '#fff' }}>Open Market Toolkit</button>
+            <button onClick={() => router.push('/chat')} style={styles.secondaryBtn}>Open Chat</button>
           </div>
         </div>
 
@@ -301,6 +306,30 @@ export default function Dashboard() {
           <div style={{ ...styles.summaryValue, color: summary.totalPnl >= 0 ? theme.green : theme.red }}>{formatCurrency(summary.totalPnl)}</div>
         </div>
       </div>
+
+      <section id="market-toolkit" style={styles.marketToolkit}>
+        <div style={styles.marketToolkitHeader}>
+          <div>
+            <div style={styles.chartEyebrow}>Grouped market tools</div>
+            <div style={styles.marketToolkitTitle}>Market Toolkit</div>
+            <div style={styles.marketToolkitText}>One place for Nifty tracking, strategy building, analytics, and option pricing.</div>
+          </div>
+        </div>
+        <div style={styles.marketToolkitGrid} className="dash-market-grid">
+          {marketModules.map((module) => (
+            <button
+              key={module.path}
+              type="button"
+              onClick={() => router.push(module.path)}
+              style={{ ...styles.marketActionCard, borderColor: `${module.accent}55`, background: `linear-gradient(135deg, ${theme.cardBg}, ${module.accent}14)` }}
+            >
+              <div style={{ ...styles.marketActionIcon, color: module.accent, background: `${module.accent}16` }}>{module.icon}</div>
+              <div style={styles.marketActionTitle}>{module.title}</div>
+              <div style={styles.marketActionDesc}>{module.desc}</div>
+            </button>
+          ))}
+        </div>
+      </section>
 
       <div style={styles.chartGrid} className="dash-chart-grid">
         <div style={{ ...styles.chartCard, background: `linear-gradient(180deg, ${theme.cardBg}, ${theme.cyan}10)` }} className="dash-chart-card">
@@ -521,6 +550,64 @@ const baseStyles = {
     color: '#f8fafc',
     fontSize: '24px',
     fontWeight: '800',
+  },
+  marketToolkit: {
+    marginBottom: '24px',
+    padding: '22px',
+    borderRadius: '24px',
+    border: '1px solid #1e293b',
+    background: 'linear-gradient(145deg, rgba(15,23,42,0.95), rgba(30,41,59,0.72))',
+    boxShadow: '0 20px 38px rgba(0,0,0,0.18)',
+  },
+  marketToolkitHeader: {
+    marginBottom: '18px',
+  },
+  marketToolkitTitle: {
+    fontSize: '24px',
+    fontWeight: '800',
+    color: '#f8fafc',
+    marginBottom: '8px',
+  },
+  marketToolkitText: {
+    color: '#94a3b8',
+    fontSize: '14px',
+    lineHeight: '1.7',
+  },
+  marketToolkitGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+    gap: '14px',
+  },
+  marketActionCard: {
+    textAlign: 'left',
+    padding: '18px',
+    borderRadius: '18px',
+    border: '1px solid #1e293b',
+    cursor: 'pointer',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px',
+  },
+  marketActionIcon: {
+    fontSize: '13px',
+    fontWeight: '900',
+    width: '44px',
+    height: '44px',
+    borderRadius: '12px',
+    display: 'grid',
+    placeItems: 'center',
+    background: '#08111f',
+    letterSpacing: '0.08em',
+  },
+  marketActionTitle: {
+    fontSize: '17px',
+    fontWeight: '800',
+    color: '#f8fafc',
+  },
+  marketActionDesc: {
+    fontSize: '13px',
+    color: '#94a3b8',
+    lineHeight: '1.6',
   },
   chartGrid: {
     display: 'grid',
