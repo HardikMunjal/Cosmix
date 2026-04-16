@@ -136,8 +136,16 @@ export class ChatGateway
       const targetSocketId = this.userSockets.get(targetUsername);
 
       if (targetSocketId) {
+        const receiverPayload = {
+          ...payload,
+          chat: {
+            ...data.chat,
+            name: sender,
+          },
+        };
+
         // send to receiver
-        this.server.to(targetSocketId).emit('message', payload);
+        this.server.to(targetSocketId).emit('message', receiverPayload);
 
         // send back to sender (so UI updates)
         socket.emit('message', payload);

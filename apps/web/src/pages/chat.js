@@ -3,34 +3,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import io from 'socket.io-client';
 import { restoreUserSession } from '../lib/auth-client';
 import { useTheme } from '../lib/ThemePicker';
+import { readKnownChatContacts, rememberChatContacts } from '../lib/chatPresence';
 
 let socket = null;
 
-const ROOMS = [
-  {
-    name: 'general',
-    title: 'General lounge',
-    description: 'Fast-moving team updates, shipping notes, and casual check-ins.',
-    accent: '#22c55e',
-    prompts: ['Morning sync in 3 bullets', 'What is blocked?', 'Ship it today'],
-  },
-  {
-    name: 'dev',
-    title: 'Build room',
-    description: 'Debugging, implementation details, and release coordination.',
-    accent: '#38bdf8',
-    prompts: ['Post logs here', 'Share reproduction steps', 'What changed in this build?'],
-  },
-  {
-    name: 'ideas',
-    title: 'Ideas deck',
-    description: 'Rough concepts, experiments, and product sparks worth testing.',
-    accent: '#f59e0b',
-    prompts: ['Pitch the idea in one line', 'What is the smallest experiment?', 'Who owns next step?'],
-  },
-];
-
-const QUICK_TEMPLATES = ['On it', 'Need 10 minutes', 'Ship the diff', 'Can you clarify?', 'Looks good'];
+const GENERAL_CHAT = { type: 'group', name: 'general' };
 
 function getUserColor(username, theme) {
   const colors = [theme.green, theme.blue, theme.orange, theme.purple, theme.cyan, theme.red];
@@ -41,25 +18,16 @@ function getUserColor(username, theme) {
   return colors[Math.abs(hash) % colors.length];
 }
 
-function ensureAvatar(message, theme) {
-  return message.avatar || `linear-gradient(135deg, ${getUserColor(message.user || 'user', theme)}, ${theme.cardBorderHover})`;
+function resolveDmPartner(message, currentUsername) {
+  if (message?.chat?.type !== 'dm') return message?.chat?.name || '';
+  return message.user === currentUsername ? message.chat?.name : message.user;
 }
 
-function buildSmartReplies(text) {
-  const replies = [];
-  const normalized = String(text || '').trim();
-  if (!normalized) return [];
-  if (normalized.length > 18) {
-    replies.push('Summarize that');
-    replies.push('What is the next action?');
+function messageMatchesChat(message, activeChat, currentUsername) {
+  if (activeChat.type === 'group') {
+    return message.chat?.type === 'group' && message.chat?.name === activeChat.name;
   }
-  if (/bug|issue|error|fail/i.test(normalized)) {
-    replies.push('Share the logs');
-    replies.push('What changed recently?');
-  }
-  replies.push('Looks good');
-  replies.push('Working on it');
-  return replies.slice(0, 4);
+  return message.chat?.type === 'dm' && resolveDmPartner(message, currentUsername) === activeChat.name;
 }
 
 function createStyles(theme) {
@@ -69,185 +37,143 @@ function createStyles(theme) {
       background: theme.pageBg,
       color: theme.textPrimary,
       fontFamily: theme.font,
-      position: 'relative',
-      overflow: 'hidden',
-    },
-    backgroundGlow: {
-      position: 'absolute',
-      inset: 0,
-      background: `radial-gradient(circle at 10% 10%, ${theme.cyan}18, transparent 28%), radial-gradient(circle at 80% 0%, ${theme.orange}14, transparent 25%), radial-gradient(circle at 50% 100%, ${theme.purple}16, transparent 30%)`,
-      pointerEvents: 'none',
+      padding: '24px',
     },
     shell: {
-      position: 'relative',
-      zIndex: 1,
-      padding: '24px',
+      maxWidth: '1280px',
+      margin: '0 auto',
       display: 'grid',
       gap: '18px',
-      minHeight: '100vh',
     },
     header: {
       display: 'flex',
       justifyContent: 'space-between',
       alignItems: 'center',
-      gap: '14px',
+      gap: '16px',
       flexWrap: 'wrap',
-      padding: '18px 20px',
-      borderRadius: '22px',
+      borderRadius: '24px',
       border: `1px solid ${theme.cardBorder}`,
-      background: `linear-gradient(135deg, ${theme.cardBg}, ${theme.cardBorder}55)`,
-      boxShadow: `0 18px 60px ${theme.shadow}`,
+      background: theme.panelBg,
+      padding: '20px 22px',
+      boxShadow: `0 20px 56px ${theme.shadow}`,
     },
     eyebrow: {
       fontSize: '11px',
       textTransform: 'uppercase',
-      letterSpacing: '0.14em',
+      letterSpacing: '0.12em',
+      fontWeight: 800,
       color: theme.textMuted,
       marginBottom: '8px',
     },
     title: {
       margin: 0,
-      fontSize: '30px',
+      fontSize: '32px',
       fontWeight: 800,
       color: theme.textHeading,
     },
     subtitle: {
-      margin: '6px 0 0',
+      margin: '8px 0 0',
+      maxWidth: '620px',
       color: theme.textSecondary,
+      lineHeight: 1.6,
       fontSize: '14px',
-      maxWidth: '640px',
-      lineHeight: 1.5,
-    },
-    headerControls: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: '10px',
-      flexWrap: 'wrap',
     },
     ghostButton: {
+      borderRadius: '14px',
+      border: `1px solid ${theme.cardBorder}`,
       background: theme.btnSecondaryBg,
       color: theme.btnSecondaryText,
-      border: `1px solid ${theme.btnSecondaryBorder}`,
-      borderRadius: '12px',
-      padding: '10px 14px',
+      padding: '12px 16px',
       cursor: 'pointer',
       fontSize: '13px',
       fontWeight: 700,
     },
     layout: {
       display: 'grid',
-      gridTemplateColumns: '280px minmax(0, 1fr) 280px',
+      gridTemplateColumns: '280px minmax(0, 1fr)',
       gap: '18px',
-      alignItems: 'stretch',
-      minHeight: 'calc(100vh - 168px)',
+      minHeight: 'calc(100vh - 180px)',
     },
     panel: {
-      background: theme.panelBg,
+      borderRadius: '24px',
       border: `1px solid ${theme.cardBorder}`,
-      borderRadius: '22px',
-      boxShadow: `0 18px 60px ${theme.shadow}`,
-      backdropFilter: 'blur(18px)',
+      background: theme.panelBg,
+      boxShadow: `0 20px 56px ${theme.shadow}`,
     },
-    sidePanel: {
+    sidebar: {
       padding: '18px',
       display: 'grid',
-      gap: '16px',
+      gap: '18px',
       alignContent: 'start',
     },
-    panelTitle: {
+    sectionTitle: {
       margin: 0,
-      fontSize: '12px',
-      letterSpacing: '0.12em',
+      fontSize: '11px',
       textTransform: 'uppercase',
-      color: theme.textMuted,
+      letterSpacing: '0.12em',
       fontWeight: 800,
+      color: theme.textMuted,
     },
-    roomCard: {
-      padding: '14px',
-      borderRadius: '16px',
+    laneButton: {
+      width: '100%',
+      textAlign: 'left',
+      padding: '14px 16px',
+      borderRadius: '18px',
       border: `1px solid ${theme.cardBorder}`,
       background: theme.cardBg,
       cursor: 'pointer',
+      color: theme.textPrimary,
       display: 'grid',
       gap: '6px',
     },
-    roomTitle: {
+    laneTitle: {
       fontSize: '15px',
       fontWeight: 800,
       color: theme.textHeading,
     },
-    roomDesc: {
+    laneDesc: {
       fontSize: '12px',
-      lineHeight: 1.5,
       color: theme.textSecondary,
+      lineHeight: 1.5,
     },
     onlineDot: {
       width: '8px',
       height: '8px',
       borderRadius: '50%',
       background: theme.green,
-      boxShadow: `0 0 14px ${theme.green}`,
+      boxShadow: `0 0 12px ${theme.green}`,
       flexShrink: 0,
     },
-    userRow: {
+    contactButton: {
+      width: '100%',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'space-between',
-      gap: '8px',
+      gap: '12px',
       padding: '12px 14px',
-      borderRadius: '14px',
+      borderRadius: '16px',
       border: `1px solid ${theme.cardBorder}`,
       background: theme.cardBg,
+      color: theme.textPrimary,
       cursor: 'pointer',
       fontSize: '13px',
       fontWeight: 700,
-      color: theme.textPrimary,
     },
-    chipRow: {
-      display: 'flex',
-      gap: '8px',
-      flexWrap: 'wrap',
-    },
-    chip: {
-      borderRadius: '999px',
-      padding: '8px 12px',
-      border: `1px solid ${theme.cardBorderHover}`,
-      background: theme.btnSecondaryBg,
-      color: theme.btnSecondaryText,
-      fontSize: '12px',
-      cursor: 'pointer',
-      fontWeight: 700,
-    },
-    centerPanel: {
+    main: {
       display: 'grid',
-      gridTemplateRows: 'auto minmax(0, 1fr) auto auto',
+      gridTemplateRows: 'auto minmax(0, 1fr) auto',
       minHeight: 0,
       overflow: 'hidden',
     },
-    conversationHero: {
-      padding: '20px 22px 14px',
+    hero: {
+      padding: '20px 22px',
       borderBottom: `1px solid ${theme.cardBorder}`,
-      display: 'grid',
-      gap: '12px',
-      background: `linear-gradient(135deg, ${theme.cardBg}, ${theme.cardBorder}45)`,
-    },
-    heroTop: {
       display: 'flex',
-      alignItems: 'center',
       justifyContent: 'space-between',
-      gap: '12px',
+      gap: '16px',
       flexWrap: 'wrap',
-    },
-    heroTitle: {
-      margin: 0,
-      fontSize: '24px',
-      fontWeight: 800,
-      color: theme.textHeading,
-    },
-    heroMeta: {
-      color: theme.textSecondary,
-      fontSize: '13px',
-      lineHeight: 1.6,
+      alignItems: 'center',
+      background: `linear-gradient(135deg, ${theme.cardBg}, ${theme.cardBorder}50)`,
     },
     statusPill: {
       display: 'inline-flex',
@@ -255,32 +181,37 @@ function createStyles(theme) {
       gap: '8px',
       borderRadius: '999px',
       padding: '8px 12px',
-      background: `${theme.green}18`,
-      border: `1px solid ${theme.green}66`,
-      color: theme.green,
-      fontWeight: 800,
+      border: `1px solid ${theme.cardBorder}`,
+      background: theme.cardBg,
+      color: theme.textPrimary,
       fontSize: '12px',
+      fontWeight: 800,
+      textTransform: 'uppercase',
+      letterSpacing: '0.08em',
     },
-    metricsRow: {
+    metricRow: {
       display: 'grid',
       gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
       gap: '10px',
+      width: '100%',
     },
     metricCard: {
-      padding: '12px 14px',
       borderRadius: '16px',
-      background: theme.inputBg,
+      padding: '14px',
       border: `1px solid ${theme.cardBorder}`,
+      background: theme.inputBg,
+      display: 'grid',
+      gap: '6px',
     },
     metricLabel: {
       fontSize: '11px',
-      color: theme.textMuted,
       textTransform: 'uppercase',
-      letterSpacing: '0.08em',
-      marginBottom: '8px',
+      letterSpacing: '0.1em',
+      color: theme.textMuted,
+      fontWeight: 800,
     },
     metricValue: {
-      fontSize: '20px',
+      fontSize: '22px',
       fontWeight: 800,
       color: theme.textHeading,
     },
@@ -292,20 +223,14 @@ function createStyles(theme) {
       gap: '14px',
       background: `linear-gradient(180deg, ${theme.panelDarkBg}, ${theme.cardBg})`,
     },
-    emptyState: {
+    empty: {
       minHeight: '320px',
       display: 'grid',
       placeItems: 'center',
       textAlign: 'center',
-      padding: '20px',
       color: theme.textSecondary,
-    },
-    emptyCard: {
-      maxWidth: '420px',
-      padding: '28px',
-      borderRadius: '22px',
-      border: `1px dashed ${theme.cardBorderHover}`,
-      background: `${theme.cardBg}aa`,
+      lineHeight: 1.7,
+      padding: '20px',
     },
     messageRow: {
       display: 'flex',
@@ -317,35 +242,34 @@ function createStyles(theme) {
       width: '40px',
       height: '40px',
       borderRadius: '14px',
-      overflow: 'hidden',
-      flexShrink: 0,
       display: 'grid',
       placeItems: 'center',
       color: '#fff',
       fontSize: '14px',
       fontWeight: 800,
       border: `1px solid ${theme.cardBorder}`,
+      overflow: 'hidden',
+      flexShrink: 0,
     },
     messageCard: {
-      maxWidth: 'min(78%, 680px)',
+      maxWidth: 'min(78%, 720px)',
       borderRadius: '20px',
       border: `1px solid ${theme.cardBorder}`,
       padding: '14px 16px',
       display: 'grid',
       gap: '8px',
       wordBreak: 'break-word',
-      boxShadow: `0 10px 30px ${theme.shadow}`,
+      boxShadow: `0 12px 32px ${theme.shadow}`,
     },
     messageMeta: {
       display: 'flex',
-      alignItems: 'center',
       gap: '10px',
       flexWrap: 'wrap',
       fontSize: '11px',
-      color: theme.textMuted,
       textTransform: 'uppercase',
       letterSpacing: '0.08em',
       fontWeight: 800,
+      color: theme.textMuted,
     },
     messageText: {
       fontSize: '14px',
@@ -353,46 +277,24 @@ function createStyles(theme) {
       color: theme.textPrimary,
       whiteSpace: 'pre-wrap',
     },
-    gif: {
-      width: 'min(260px, 100%)',
-      borderRadius: '16px',
-      border: `1px solid ${theme.cardBorder}`,
-      display: 'block',
-    },
     typingBar: {
       padding: '0 22px 12px',
       color: theme.textSecondary,
       fontSize: '12px',
       fontWeight: 700,
     },
-    replyRow: {
-      padding: '0 22px 14px',
-      display: 'flex',
-      gap: '8px',
-      flexWrap: 'wrap',
-      borderTop: `1px solid ${theme.cardBorder}`,
-      paddingTop: '14px',
-      background: theme.cardBg,
-    },
-    composerShell: {
-      padding: '0 22px 22px',
-      background: theme.cardBg,
-      display: 'grid',
-      gap: '12px',
-    },
     composer: {
+      padding: '18px 22px 22px',
+      borderTop: `1px solid ${theme.cardBorder}`,
+      background: theme.cardBg,
       display: 'grid',
       gap: '12px',
-      padding: '16px',
-      borderRadius: '20px',
-      border: `1px solid ${theme.cardBorder}`,
-      background: theme.inputBg,
     },
     input: {
       width: '100%',
       borderRadius: '16px',
       border: `1px solid ${theme.inputBorder}`,
-      background: theme.pageBgSolid,
+      background: theme.inputBg,
       color: theme.textPrimary,
       padding: '14px 16px',
       fontSize: '14px',
@@ -401,56 +303,26 @@ function createStyles(theme) {
     },
     composerRow: {
       display: 'flex',
-      gap: '10px',
-      alignItems: 'center',
       justifyContent: 'space-between',
+      gap: '10px',
       flexWrap: 'wrap',
+      alignItems: 'center',
+    },
+    helperText: {
+      fontSize: '12px',
+      color: theme.textSecondary,
+      lineHeight: 1.5,
     },
     sendButton: {
-      background: `linear-gradient(135deg, ${theme.blue}, ${theme.purple})`,
-      color: '#fff',
       border: 'none',
       borderRadius: '14px',
       padding: '12px 18px',
       cursor: 'pointer',
+      background: `linear-gradient(135deg, ${theme.blue}, ${theme.orange})`,
+      color: '#fff',
       fontSize: '13px',
       fontWeight: 800,
-      letterSpacing: '0.04em',
-      boxShadow: `0 12px 28px ${theme.shadow}`,
-    },
-    rightPanelStat: {
-      padding: '14px',
-      borderRadius: '16px',
-      border: `1px solid ${theme.cardBorder}`,
-      background: theme.cardBg,
-      display: 'grid',
-      gap: '6px',
-    },
-    statLabel: {
-      fontSize: '11px',
-      color: theme.textMuted,
-      textTransform: 'uppercase',
-      letterSpacing: '0.08em',
-      fontWeight: 800,
-    },
-    statValue: {
-      fontSize: '18px',
-      color: theme.textHeading,
-      fontWeight: 800,
-    },
-    gifGrid: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-      gap: '8px',
-    },
-    gifPreview: {
-      width: '100%',
-      height: '88px',
-      objectFit: 'cover',
-      borderRadius: '14px',
-      border: `1px solid ${theme.cardBorder}`,
-      cursor: 'pointer',
-      display: 'block',
+      boxShadow: `0 14px 28px ${theme.shadow}`,
     },
   };
 }
@@ -463,48 +335,29 @@ export default function Chat() {
   const [user, setUser] = useState(null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
-  const [gifSearch, setGifSearch] = useState('');
-  const [gifResults, setGifResults] = useState([]);
   const [onlineUsers, setOnlineUsers] = useState([]);
+  const [contacts, setContacts] = useState([]);
   const [typingUsers, setTypingUsers] = useState([]);
-  const [smartReplies, setSmartReplies] = useState([]);
-  const [activeChat, setActiveChat] = useState({ type: 'group', name: 'general' });
+  const [activeChat, setActiveChat] = useState(GENERAL_CHAT);
+  const [connectionState, setConnectionState] = useState('connecting');
 
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
 
   const visibleMessages = useMemo(
-    () => messages.filter((message) => message.chat?.name === activeChat.name && message.chat?.type === activeChat.type),
-    [messages, activeChat],
+    () => messages.filter((message) => messageMatchesChat(message, activeChat, user?.username)),
+    [messages, activeChat, user?.username],
   );
 
-  const roomMeta = useMemo(() => {
-    if (activeChat.type === 'dm') {
-      return {
-        title: `Direct with ${activeChat.name}`,
-        description: 'Private lane for decisions, handoffs, and focused back-and-forth.',
-        accent: theme.orange,
-        prompts: ['Give me the short version', 'Need anything from me?', 'Send the final answer'],
-      };
-    }
-    return ROOMS.find((room) => room.name === activeChat.name) || ROOMS[0];
-  }, [activeChat, theme.orange]);
-
-  const conversationStats = useMemo(() => {
-    const gifs = visibleMessages.filter((message) => message.type === 'gif').length;
-    const uniquePeople = new Set(visibleMessages.map((message) => message.user).filter(Boolean)).size;
-    return {
-      totalMessages: visibleMessages.length,
-      gifDrops: gifs,
-      participants: uniquePeople || (activeChat.type === 'dm' ? 2 : 1),
-    };
-  }, [visibleMessages, activeChat.type]);
+  const laneLabel = activeChat.type === 'dm' ? `@${activeChat.name}` : '#general';
 
   useEffect(() => {
     let active = true;
 
-    restoreUserSession(router, setUser).then((userData) => {
-      if (!active || !userData) return;
+    restoreUserSession(router, setUser).then((sessionUser) => {
+      if (!active || !sessionUser) return;
+
+      setContacts(readKnownChatContacts(sessionUser.id));
 
       const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
       const isLocalHost = host === 'localhost' || host === '127.0.0.1';
@@ -516,29 +369,45 @@ export default function Chat() {
       socket = io(socketUrl, socketOptions);
 
       socket.on('connect', () => {
-        socket.emit('join', { username: userData.username });
+        setConnectionState('connected');
+        socket.emit('join', { username: sessionUser.username });
+      });
+
+      socket.on('disconnect', () => {
+        setConnectionState('offline');
       });
 
       socket.on('message', (data) => {
         setMessages((previous) => [...previous, data]);
-        setSmartReplies(buildSmartReplies(data.text));
+        const partner = data.chat?.type === 'dm'
+          ? resolveDmPartner(data, sessionUser.username)
+          : null;
+        const nextContacts = rememberChatContacts(
+          sessionUser.id,
+          [data.user, partner],
+          sessionUser.username,
+        );
+        setContacts(nextContacts);
       });
 
       socket.on('online_users', (users) => {
         const cleaned = Array.from(new Set((users || []).filter(Boolean)));
         setOnlineUsers(cleaned);
+        const nextContacts = rememberChatContacts(sessionUser.id, cleaned, sessionUser.username);
+        setContacts(nextContacts);
       });
 
       socket.on('typing', (data) => {
-        if (!data?.user) return;
+        if (!data?.user || data.user === sessionUser.username) return;
         setTypingUsers((previous) => (previous.includes(data.user) ? previous : [...previous, data.user]));
         setTimeout(() => {
-          setTypingUsers((previous) => previous.filter((item) => item !== data.user));
+          setTypingUsers((previous) => previous.filter((name) => name !== data.user));
         }, 1500);
       });
 
       socket.on('connect_error', (error) => {
         console.error('Socket connect error', error);
+        setConnectionState('offline');
       });
     });
 
@@ -557,45 +426,23 @@ export default function Chat() {
     inputRef.current?.focus();
   }, [activeChat]);
 
-  useEffect(() => {
-    if (!gifSearch.trim()) {
-      setGifResults([]);
-      return undefined;
-    }
-
-    const timer = setTimeout(async () => {
-      try {
-        const response = await fetch(`https://g.tenor.com/v1/search?q=${encodeURIComponent(gifSearch)}&key=LIVDSRZULELA&limit=6`);
-        const data = await response.json();
-        setGifResults(Array.isArray(data.results) ? data.results : []);
-      } catch (error) {
-        console.error('gif search failed', error);
-        setGifResults([]);
-      }
-    }, 350);
-
-    return () => clearTimeout(timer);
-  }, [gifSearch]);
-
-  const sendMessage = (type = 'text', gifUrl = '', overrideText = '') => {
-    if (!socket || !user) return;
-
-    const textToSend = overrideText !== '' ? overrideText : input;
-    if (type === 'text' && !String(textToSend || '').trim()) return;
+  const sendMessage = () => {
+    if (!socket || !user || !String(input || '').trim()) return;
 
     socket.emit('message', {
-      type,
-      text: textToSend,
-      gif: gifUrl,
+      type: 'text',
+      text: input,
       user: user.username,
       avatar: user.avatar || null,
       chat: activeChat,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     });
 
-    if (overrideText === '') {
-      setInput('');
+    if (activeChat.type === 'dm') {
+      setContacts(rememberChatContacts(user.id, [activeChat.name], user.username));
     }
+
+    setInput('');
   };
 
   const handleTyping = () => {
@@ -603,331 +450,176 @@ export default function Chat() {
     socket.emit('typing', { user: user.username, chat: activeChat });
   };
 
+  const contactRows = useMemo(() => {
+    if (!user) return [];
+    const merged = Array.from(new Set([...contacts, ...onlineUsers])).filter((name) => name && name !== user.username);
+    return merged.map((name) => ({ name, live: onlineUsers.includes(name) }));
+  }, [contacts, onlineUsers, user]);
+
   if (!user) {
     return <div style={styles.page} />;
   }
 
   return (
-    <div style={styles.page}>
+    <div style={styles.page} className="chat-page">
       <style>{`
         * { box-sizing: border-box; }
         html, body, #__next { min-height: 100%; margin: 0; }
-        .chat-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
-        .chat-scroll::-webkit-scrollbar-thumb { background: ${theme.cardBorderHover}; border-radius: 999px; }
-        .chat-scroll::-webkit-scrollbar-track { background: transparent; }
-        @keyframes chatFloat {
-          0%, 100% { transform: translateY(0px); }
-          50% { transform: translateY(-6px); }
+        @media (max-width: 980px) {
+          .chat-layout { grid-template-columns: 1fr !important; }
         }
-        .chat-accent-card { animation: chatFloat 7s ease-in-out infinite; }
-        @media (max-width: 1180px) {
-          .chat-layout { grid-template-columns: 240px minmax(0, 1fr); }
-          .chat-right-rail { grid-column: 1 / -1; }
-        }
-        @media (max-width: 820px) {
-          .chat-page-shell { padding: 14px !important; }
-          .chat-header { padding: 16px !important; }
-          .chat-layout { grid-template-columns: 1fr; min-height: auto; }
-          .chat-left-rail, .chat-right-rail { order: 2; }
-          .chat-center { order: 1; min-height: 70vh; }
-          .chat-metrics { grid-template-columns: 1fr; }
-        }
-        @media (max-width: 560px) {
-          .chat-page-shell { padding: 10px !important; }
-          .chat-header { padding: 14px !important; }
-          .chat-message-row { gap: 8px !important; }
-          .chat-message-card { max-width: calc(100% - 52px) !important; padding: 12px !important; }
-          .chat-composer { padding: 12px !important; }
+        @media (max-width: 720px) {
+          .chat-page { padding: 14px !important; }
+          .chat-header { flex-direction: column !important; align-items: flex-start !important; }
+          .chat-metrics { grid-template-columns: 1fr !important; }
           .chat-composer-row { flex-direction: column !important; align-items: stretch !important; }
         }
-        @media (max-width: 400px) {
-          .chat-message-card { max-width: 100% !important; }
-        }
       `}</style>
-      <div style={styles.backgroundGlow} />
 
-      <div style={styles.shell} className="chat-page-shell">
-        <div style={styles.header} className="chat-header">
+      <div style={styles.shell}>
+        <header style={styles.header} className="chat-header">
           <div>
             <div style={styles.eyebrow}>Cosmix realtime</div>
-            <h1 style={styles.title}>Conversation deck</h1>
-            <p style={styles.subtitle}>Theme-aware chat with stronger room identity, faster reply actions, and a cleaner message flow.</p>
+            <h1 style={styles.title}>Chat</h1>
+            <p style={styles.subtitle}>Direct messages and the general lane stay available, but the extra default prompts and template clutter are removed.</p>
           </div>
-          <div style={styles.headerControls}>
-            <button onClick={() => router.push('/dashboard')} style={styles.ghostButton}>Back to dashboard</button>
-          </div>
-        </div>
+          <button type="button" onClick={() => router.push('/dashboard')} style={styles.ghostButton}>Back to dashboard</button>
+        </header>
 
         <div style={styles.layout} className="chat-layout">
-          <aside style={{ ...styles.panel, ...styles.sidePanel }} className="chat-left-rail">
-            <div>
-              <h3 style={styles.panelTitle}>Rooms</h3>
-              <div style={{ display: 'grid', gap: '10px', marginTop: '12px' }}>
-                {ROOMS.map((room) => {
-                  const active = activeChat.type === 'group' && activeChat.name === room.name;
-                  return (
-                    <button
-                      key={room.name}
-                      type="button"
-                      onClick={() => setActiveChat({ type: 'group', name: room.name })}
-                      style={{
-                        ...styles.roomCard,
-                        borderColor: active ? room.accent : theme.cardBorder,
-                        boxShadow: active ? `0 0 0 1px ${room.accent}` : 'none',
-                      }}
-                    >
-                      <div style={{ ...styles.roomTitle, color: active ? room.accent : theme.textHeading }}>{room.title}</div>
-                      <div style={styles.roomDesc}>{room.description}</div>
-                    </button>
-                  );
-                })}
-              </div>
+          <aside style={{ ...styles.panel, ...styles.sidebar }}>
+            <div style={{ display: 'grid', gap: '10px' }}>
+              <h2 style={styles.sectionTitle}>Shared lane</h2>
+              <button
+                type="button"
+                onClick={() => setActiveChat(GENERAL_CHAT)}
+                style={{
+                  ...styles.laneButton,
+                  borderColor: activeChat.type === 'group' ? theme.blue : theme.cardBorder,
+                  boxShadow: activeChat.type === 'group' ? `0 0 0 1px ${theme.blue}` : 'none',
+                }}
+              >
+                <span style={styles.laneTitle}>#general</span>
+                <span style={styles.laneDesc}>Main room for shared updates and quick team messages.</span>
+              </button>
             </div>
 
-            <div>
-              <h3 style={styles.panelTitle}>Direct line</h3>
-              <div style={{ display: 'grid', gap: '8px', marginTop: '12px' }}>
-                {onlineUsers.filter((name) => name !== user.username).map((name) => (
-                  <button
-                    key={name}
-                    type="button"
-                    onClick={() => setActiveChat({ type: 'dm', name })}
-                    style={{
-                      ...styles.userRow,
-                      borderColor: activeChat.type === 'dm' && activeChat.name === name ? theme.orange : theme.cardBorder,
-                    }}
-                  >
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={styles.onlineDot} />
-                      @{name}
-                    </span>
-                    <span style={{ color: theme.textMuted, fontSize: '11px' }}>live</span>
-                  </button>
-                ))}
-                {onlineUsers.filter((name) => name !== user.username).length === 0 && (
-                  <div style={{ ...styles.roomDesc, marginTop: '4px' }}>No other live users yet.</div>
-                )}
-              </div>
-            </div>
-
-            <div>
-              <h3 style={styles.panelTitle}>Prompt sparks</h3>
-              <div style={{ ...styles.chipRow, marginTop: '12px' }}>
-                {roomMeta.prompts.map((prompt) => (
-                  <button key={prompt} type="button" style={styles.chip} onClick={() => setInput(prompt)}>{prompt}</button>
-                ))}
-              </div>
+            <div style={{ display: 'grid', gap: '10px' }}>
+              <h2 style={styles.sectionTitle}>People</h2>
+              {contactRows.length === 0 ? (
+                <div style={styles.laneDesc}>Open the chat from another account to start direct messaging live users.</div>
+              ) : contactRows.map((contact) => (
+                <button
+                  key={contact.name}
+                  type="button"
+                  onClick={() => setActiveChat({ type: 'dm', name: contact.name })}
+                  style={{
+                    ...styles.contactButton,
+                    borderColor: activeChat.type === 'dm' && activeChat.name === contact.name ? theme.orange : theme.cardBorder,
+                    boxShadow: activeChat.type === 'dm' && activeChat.name === contact.name ? `0 0 0 1px ${theme.orange}` : 'none',
+                  }}
+                >
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                    {contact.live ? <span style={styles.onlineDot} /> : <span style={{ ...styles.onlineDot, background: theme.textMuted, boxShadow: 'none' }} />}
+                    @{contact.name}
+                  </span>
+                  <span style={{ fontSize: '11px', color: contact.live ? theme.green : theme.textMuted }}>{contact.live ? 'live' : 'saved'}</span>
+                </button>
+              ))}
             </div>
           </aside>
 
-          <section style={{ ...styles.panel, ...styles.centerPanel }} className="chat-center">
-            <div style={styles.conversationHero}>
-              <div style={styles.heroTop}>
-                <div>
-                  <h2 style={styles.heroTitle}>{roomMeta.title}</h2>
-                  <div style={styles.heroMeta}>{roomMeta.description}</div>
-                </div>
-                <div style={styles.statusPill}>
-                  <span style={styles.onlineDot} />
-                  Live now
-                </div>
+          <section style={{ ...styles.panel, ...styles.main }}>
+            <div style={styles.hero}>
+              <div style={{ display: 'grid', gap: '8px' }}>
+                <div style={styles.sectionTitle}>Current lane</div>
+                <div style={{ fontSize: '26px', fontWeight: 800, color: theme.textHeading }}>{laneLabel}</div>
+                <div style={{ color: theme.textSecondary, fontSize: '14px', lineHeight: 1.6 }}>{activeChat.type === 'dm' ? `Private conversation with ${activeChat.name}.` : 'General room for shared updates.'}</div>
               </div>
 
-              <div style={styles.metricsRow} className="chat-metrics">
-                <div style={styles.metricCard} className="chat-accent-card">
-                  <div style={styles.metricLabel}>Messages in view</div>
-                  <div style={styles.metricValue}>{conversationStats.totalMessages}</div>
+              <div style={{ display: 'grid', gap: '10px', minWidth: 'min(100%, 360px)' }}>
+                <div style={styles.metricRow} className="chat-metrics">
+                  <div style={styles.metricCard}>
+                    <div style={styles.metricLabel}>Connection</div>
+                    <div style={{ ...styles.metricValue, fontSize: '18px', color: connectionState === 'connected' ? theme.green : theme.red }}>{connectionState}</div>
+                  </div>
+                  <div style={styles.metricCard}>
+                    <div style={styles.metricLabel}>Online users</div>
+                    <div style={styles.metricValue}>{onlineUsers.length || 1}</div>
+                  </div>
+                  <div style={styles.metricCard}>
+                    <div style={styles.metricLabel}>Messages here</div>
+                    <div style={styles.metricValue}>{visibleMessages.length}</div>
+                  </div>
                 </div>
-                <div style={styles.metricCard} className="chat-accent-card">
-                  <div style={styles.metricLabel}>Participants</div>
-                  <div style={styles.metricValue}>{conversationStats.participants}</div>
-                </div>
-                <div style={styles.metricCard} className="chat-accent-card">
-                  <div style={styles.metricLabel}>GIF drops</div>
-                  <div style={styles.metricValue}>{conversationStats.gifDrops}</div>
-                </div>
+                <div style={styles.statusPill}><span style={styles.onlineDot} />{activeChat.type === 'dm' ? 'Direct messaging enabled' : 'Group lane ready'}</div>
               </div>
             </div>
 
-            <div style={styles.messages} className="chat-scroll">
+            <div style={styles.messages}>
               {visibleMessages.length === 0 ? (
-                <div style={styles.emptyState}>
-                  <div style={styles.emptyCard}>
-                    <div style={{ ...styles.panelTitle, marginBottom: '10px' }}>Start the thread</div>
-                    <div style={{ fontSize: '22px', fontWeight: 800, color: theme.textHeading, marginBottom: '10px' }}>{roomMeta.title}</div>
-                    <div style={{ lineHeight: 1.7 }}>{roomMeta.description} Drop a short opener, use a room prompt, or send a GIF to set the tone.</div>
-                  </div>
-                </div>
-              ) : (
-                visibleMessages.map((message, index) => {
-                  const mine = message.user === user.username;
-                  const accent = getUserColor(message.user || 'user', theme);
-                  return (
-                    <div
-                      className="chat-message-row"
-                      key={`${message.user || 'user'}-${message.timestamp || index}-${index}`}
-                      style={{
-                        ...styles.messageRow,
-                        justifyContent: mine ? 'flex-end' : 'flex-start',
-                        flexDirection: mine ? 'row-reverse' : 'row',
-                      }}
-                    >
-                      <div
-                        style={{
-                          ...styles.avatar,
-                          background: ensureAvatar(message, theme).startsWith('linear-gradient') ? ensureAvatar(message, theme) : undefined,
-                        }}
-                      >
-                        {message.avatar ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={message.avatar} alt={`${message.user || 'user'} avatar`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                        ) : (
-                          <span>{String(message.user || '?').slice(0, 1).toUpperCase()}</span>
-                        )}
-                      </div>
-
-                      <div
-                        className="chat-message-card"
-                        style={{
-                          ...styles.messageCard,
-                          background: mine ? `${accent}18` : theme.cardBg,
-                          borderColor: mine ? `${accent}77` : theme.cardBorder,
-                        }}
-                      >
-                        <div style={{ ...styles.messageMeta, color: mine ? accent : theme.textMuted }}>
-                          <span>{message.user}</span>
-                          <span>{message.timestamp || ''}</span>
-                          <span>{message.type === 'gif' ? 'gif' : activeChat.type}</span>
-                        </div>
-                        {message.type === 'gif' ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={message.gif} alt="shared gif" style={styles.gif} />
-                        ) : (
-                          <div style={styles.messageText}>{message.text}</div>
-                        )}
-                      </div>
+                <div style={styles.empty}>Start the conversation in {laneLabel}. Messages sent to live users now land in the correct direct thread.</div>
+              ) : visibleMessages.map((message, index) => {
+                const mine = message.user === user.username;
+                const accent = getUserColor(message.user || 'user', theme);
+                return (
+                  <div
+                    key={`${message.user || 'user'}-${message.timestamp || index}-${index}`}
+                    style={{
+                      ...styles.messageRow,
+                      justifyContent: mine ? 'flex-end' : 'flex-start',
+                      flexDirection: mine ? 'row-reverse' : 'row',
+                    }}
+                  >
+                    <div style={{ ...styles.avatar, background: message.avatar ? undefined : `linear-gradient(135deg, ${accent}, ${theme.cardBorderHover})` }}>
+                      {message.avatar ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={message.avatar} alt={`${message.user || 'user'} avatar`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      ) : (
+                        <span>{String(message.user || '?').slice(0, 1).toUpperCase()}</span>
+                      )}
                     </div>
-                  );
-                })
-              )}
+
+                    <div style={{ ...styles.messageCard, background: mine ? `${accent}18` : theme.cardBg, borderColor: mine ? `${accent}77` : theme.cardBorder }}>
+                      <div style={{ ...styles.messageMeta, color: mine ? accent : theme.textMuted }}>
+                        <span>{message.user}</span>
+                        <span>{message.timestamp || ''}</span>
+                        <span>{message.chat?.type === 'dm' ? 'direct' : 'group'}</span>
+                      </div>
+                      <div style={styles.messageText}>{message.text}</div>
+                    </div>
+                  </div>
+                );
+              })}
               <div ref={messagesEndRef} />
             </div>
 
-            {typingUsers.length > 0 && (
-              <div style={styles.typingBar}>{typingUsers.join(', ')} typing...</div>
-            )}
+            {typingUsers.length > 0 ? <div style={styles.typingBar}>{typingUsers.join(', ')} typing...</div> : null}
 
-            {smartReplies.length > 0 && (
-              <div style={styles.replyRow}>
-                {smartReplies.map((reply) => (
-                  <button
-                    key={reply}
-                    type="button"
-                    style={styles.chip}
-                    onClick={() => {
-                      const last = visibleMessages[visibleMessages.length - 1];
-                      if (reply === 'Summarize that' && last?.text) {
-                        sendMessage('text', '', `/summarize ${last.text}`);
-                        return;
-                      }
-                      if (reply === 'What is the next action?' && last?.text) {
-                        sendMessage('text', '', `/next-step ${last.text}`);
-                        return;
-                      }
-                      sendMessage('text', '', reply);
-                    }}
-                  >
-                    {reply}
-                  </button>
-                ))}
-              </div>
-            )}
+            <div style={styles.composer}>
+              <input
+                ref={inputRef}
+                value={input}
+                onChange={(event) => {
+                  setInput(event.target.value);
+                  handleTyping();
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    sendMessage();
+                  }
+                }}
+                placeholder={`Message ${laneLabel}`}
+                style={styles.input}
+              />
 
-            <div style={styles.composerShell}>
-              <div style={styles.composer} className="chat-composer">
-                <input
-                  ref={inputRef}
-                  value={input}
-                  onChange={(event) => {
-                    setInput(event.target.value);
-                    handleTyping();
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' && !event.shiftKey) {
-                      event.preventDefault();
-                      sendMessage();
-                    }
-                  }}
-                  placeholder={`Message ${activeChat.type === 'group' ? `#${activeChat.name}` : `@${activeChat.name}`}`}
-                  style={styles.input}
-                />
-
-                <div style={styles.composerRow} className="chat-composer-row">
-                  <div style={styles.chipRow}>
-                    {QUICK_TEMPLATES.map((template) => (
-                      <button key={template} type="button" style={styles.chip} onClick={() => sendMessage('text', '', template)}>{template}</button>
-                    ))}
-                  </div>
-                  <button type="button" style={styles.sendButton} onClick={() => sendMessage()}>Send message</button>
-                </div>
+              <div style={styles.composerRow} className="chat-composer-row">
+                <div style={styles.helperText}>{activeChat.type === 'dm' ? `Only you and ${activeChat.name} will see this thread.` : 'Everyone in the general room will see this message.'}</div>
+                <button type="button" onClick={sendMessage} style={styles.sendButton}>Send message</button>
               </div>
             </div>
           </section>
-
-          <aside style={{ ...styles.panel, ...styles.sidePanel }} className="chat-right-rail">
-            <div>
-              <h3 style={styles.panelTitle}>Active room</h3>
-              <div style={{ ...styles.rightPanelStat, marginTop: '12px' }}>
-                <div style={styles.statLabel}>Current lane</div>
-                <div style={{ ...styles.statValue, color: roomMeta.accent }}>{activeChat.type === 'group' ? `#${activeChat.name}` : `@${activeChat.name}`}</div>
-              </div>
-              <div style={{ ...styles.rightPanelStat, marginTop: '10px' }}>
-                <div style={styles.statLabel}>Online now</div>
-                <div style={styles.statValue}>{onlineUsers.length || 1}</div>
-              </div>
-            </div>
-
-            <div>
-              <h3 style={styles.panelTitle}>Fast actions</h3>
-              <div style={{ ...styles.chipRow, marginTop: '12px' }}>
-                <button type="button" style={styles.chip} onClick={() => sendMessage('text', '', '@ai Draft a reply')}>AI suggest</button>
-                <button type="button" style={styles.chip} onClick={() => sendMessage('text', '', 'Recap the thread so far')}>Recap</button>
-                <button type="button" style={styles.chip} onClick={() => sendMessage('text', '', 'Who owns the next step?')}>Ownership</button>
-              </div>
-            </div>
-
-            <div>
-              <h3 style={styles.panelTitle}>GIF drawer</h3>
-              <div style={{ display: 'grid', gap: '10px', marginTop: '12px' }}>
-                <input
-                  value={gifSearch}
-                  onChange={(event) => setGifSearch(event.target.value)}
-                  placeholder="Search a reaction GIF"
-                  style={styles.input}
-                />
-                {gifResults.length > 0 ? (
-                  <div style={styles.gifGrid}>
-                    {gifResults.map((gif, index) => (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        key={`${gif.id || 'gif'}-${index}`}
-                        src={gif.media[0].tinygif.url}
-                        alt="gif preview"
-                        style={styles.gifPreview}
-                        onClick={() => {
-                          sendMessage('gif', gif.media[0].gif.url);
-                          setGifSearch('');
-                          setGifResults([]);
-                        }}
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <div style={styles.roomDesc}>Search for a quick reaction and drop it straight into the thread.</div>
-                )}
-              </div>
-            </div>
-          </aside>
         </div>
       </div>
     </div>
