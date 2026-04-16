@@ -13,10 +13,10 @@ const marketModules = [
 ];
 
 const modules = [
+  { icon: 'PF', title: 'Profile', desc: 'Account identity, avatar, and personal preferences.', path: '/profile', accent: '#94a3b8' },
   { icon: 'WL', title: 'Wellness Tracker', desc: 'Daily routines, recovery signals, and wellness prompts.', path: '/wellness', accent: '#34d399' },
   { icon: 'CH', title: 'Chat', desc: 'Theme-aware realtime chat for fast coordination and direct messages.', path: '/chat', accent: '#818cf8' },
   { icon: 'MD', title: 'Media Manager', desc: 'Upload, sort, and browse image and video collections.', path: '/media', accent: '#fb923c' },
-  { icon: 'PF', title: 'Profile', desc: 'Account identity, avatar, and personal preferences.', path: '/profile', accent: '#94a3b8' },
 ];
 
 function formatCurrency(value) {
