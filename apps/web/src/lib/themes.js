@@ -72,53 +72,53 @@ export const themes = {
 
   light: {
     id: 'light',
-    label: '☀️ Light Colorful',
+    label: '☀️ Sunlit',
     // Page
-    pageBg: 'linear-gradient(180deg, #f8fafc, #e2e8f0)',
-    pageBgSolid: '#f8fafc',
-    textPrimary: '#1e293b',
-    textSecondary: '#475569',
-    textMuted: '#94a3b8',
+    pageBg: 'linear-gradient(180deg, #fff8ef, #fff1e6)',
+    pageBgSolid: '#fff8ef',
+    textPrimary: '#1f2937',
+    textSecondary: '#5b6472',
+    textMuted: '#8b98ab',
     textHeading: '#0f172a',
     // Cards & surfaces
-    cardBg: '#ffffff',
-    cardBgGradient: 'linear-gradient(135deg, #ffffff, #f1f5f9)',
-    cardBorder: '#e2e8f0',
-    cardBorderHover: '#cbd5e1',
-    panelBg: '#ffffff',
-    inputBg: '#f8fafc',
-    inputBorder: '#cbd5e1',
+    cardBg: '#fffdf8',
+    cardBgGradient: 'linear-gradient(135deg, #fffdf8, #fff2dd)',
+    cardBorder: '#f3d2b1',
+    cardBorderHover: '#f59e0b',
+    panelBg: 'rgba(255, 253, 248, 0.94)',
+    inputBg: '#fff7ed',
+    inputBorder: '#fdba74',
     // Ticker
-    tickerBg: '#ffffff',
-    tickerBorder: '#e2e8f0',
-    tickerNameColor: '#64748b',
+    tickerBg: '#fffdf8',
+    tickerBorder: '#f3d2b1',
+    tickerNameColor: '#7c5b3b',
     tickerPriceColor: '#0f172a',
     // Buttons
-    btnPrimaryBg: '#f1f5f9',
-    btnPrimaryBorder: '#cbd5e1',
+    btnPrimaryBg: '#fff1e6',
+    btnPrimaryBorder: '#fdba74',
     btnPrimaryText: '#0f172a',
-    btnSecondaryBg: '#f8fafc',
-    btnSecondaryBorder: '#e2e8f0',
+    btnSecondaryBg: '#fff7ed',
+    btnSecondaryBorder: '#f3d2b1',
     btnSecondaryText: '#334155',
     btnDangerBg: '#fef2f2',
     btnDangerBorder: '#fca5a5',
     btnDangerText: '#991b1b',
-    btnSuccessBg: '#f0fdf4',
-    btnSuccessBorder: '#86efac',
+    btnSuccessBg: '#ecfdf5',
+    btnSuccessBorder: '#4ade80',
     btnSuccessText: '#166534',
     // Metrics / analysis
-    analyzerCardBg: 'linear-gradient(135deg, #ffffff, #f1f5f9)',
-    analyzerCardBorder: '#e2e8f0',
-    gaugeBg: '#e2e8f0',
+    analyzerCardBg: 'linear-gradient(135deg, #fffdf8, #eef6ff)',
+    analyzerCardBorder: '#f3d2b1',
+    gaugeBg: '#fde7cf',
     // Graphs
-    graphBg: '#ffffff',
-    graphGridLine: '#e2e8f0',
+    graphBg: '#fffaf5',
+    graphGridLine: '#f3d2b1',
     // Section
-    sectionBg: 'linear-gradient(90deg, #e2e8f040, transparent)',
+    sectionBg: 'linear-gradient(90deg, #fde7cf, transparent)',
     // Misc
-    divider: '#e2e8f0',
-    badgeBg: '#f1f5f9',
-    shadow: 'rgba(0,0,0,0.08)',
+    divider: '#f3d2b1',
+    badgeBg: '#fff1e6',
+    shadow: 'rgba(249, 115, 22, 0.12)',
     // Semantic — keep vibrant for contrast
     green: '#16a34a',
     red: '#dc2626',
@@ -131,7 +131,7 @@ export const themes = {
     greenDim: '#bbf7d0',
     redDim: '#fecaca',
     textMid: '#334155',
-    panelDarkBg: '#f1f5f9',
+    panelDarkBg: '#fff1e6',
     infoText: '#2563eb',
     font: "'Inter', system-ui, -apple-system, sans-serif",
   },
@@ -309,8 +309,8 @@ export const themes = {
 };
 
 export function getThemeId() {
-  if (typeof window === 'undefined') return 'dark';
-  return localStorage.getItem(THEME_KEY) || 'dark';
+  if (typeof window === 'undefined') return 'light';
+  return localStorage.getItem(THEME_KEY) || 'light';
 }
 
 export function setThemeId(id) {
@@ -320,7 +320,7 @@ export function setThemeId(id) {
 }
 
 export function getTheme(id) {
-  return themes[id] || themes.dark;
+  return themes[id] || themes.light;
 }
 
 // ── Runtime theme applicator ──

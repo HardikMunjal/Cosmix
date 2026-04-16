@@ -102,6 +102,18 @@ function nodeGet(url, headers = {}) {
   });
 }
 
+async function fetchYahooPrice(symbol) {
+  const response = await nodeGet(
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=5d&includePrePost=false`,
+    { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' },
+  );
+  if (!response.ok) throw new Error(`Yahoo response ${response.status}`);
+  const payload = response.json();
+  const price = payload?.chart?.result?.[0]?.meta?.regularMarketPrice;
+  if (!Number.isFinite(price)) throw new Error('Yahoo payload missing price');
+  return Number(price);
+}
+
 // ── Parse "27-Mar-2025" (NSE date format) → unix seconds
 function nseToUnix(s) {
   const mo = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
@@ -280,6 +292,7 @@ function mergeCookieStrings(...parts) {
 
 export default async function handler(req, res) {
   const { symbol = 'NIFTY', expiry, iv, rate } = req.query;
+  const manualVolatility = Number(iv) || null;
 
   // ── 1. Try NSE live options chain ────────────────────────────────────────
   try {
@@ -395,14 +408,15 @@ export default async function handler(req, res) {
     // ── 2. Fallback: synthetic premiums based on live Yahoo spot ─────────────
     let spot = 23000;
     try {
-      const yr = await nodeGet(
-        'https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1d&range=1d',
-        { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' },
-      );
-      const yd = yr.json();
-      const p = yd?.chart?.result?.[0]?.meta?.regularMarketPrice;
-      if (p) spot = p;
+      spot = await fetchYahooPrice('^NSEI');
     } catch (_) { /* keep default */ }
+
+    let indiaVix = null;
+    try {
+      indiaVix = await fetchYahooPrice('^INDIAVIX');
+    } catch (_) {
+      indiaVix = null;
+    }
 
     const expiries = nextExpiryDates(4);
     const expirations = expiries.map((t) => t.unix);
@@ -414,7 +428,7 @@ export default async function handler(req, res) {
       if (matched) targetExpiryUnix = matched;
     }
     const syntheticConfig = resolveSyntheticConfig({
-      baseVolatility: iv,
+      baseVolatility: indiaVix ?? manualVolatility,
       riskFreeRate: rate,
     });
     const timeToExpiryDays = Math.max((targetExpiryUnix - Math.floor(Date.now() / 1000)) / 86400, 0);
@@ -429,6 +443,7 @@ export default async function handler(req, res) {
       pricingModel: {
         name: 'black-scholes',
         baseIv: syntheticConfig.baseVolatility,
+        volatilitySource: indiaVix != null ? 'india-vix' : manualVolatility != null ? 'manual-iv-override' : 'config-fallback',
         nearExpiryBoost: syntheticConfig.nearExpiryBoost,
         smileFactor: syntheticConfig.smileFactor,
         putSkewFactor: syntheticConfig.putSkewFactor,

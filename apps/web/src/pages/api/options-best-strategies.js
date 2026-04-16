@@ -10,6 +10,22 @@
  * Body: { ...above, calendar: true, sellExpiry, buyExpiry }
  */
 
+async function fetchYahooPrice(symbol) {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=5d&includePrePost=false`;
+  const response = await fetch(url, {
+    headers: {
+      'user-agent': 'Mozilla/5.0',
+      accept: 'application/json',
+    },
+  });
+  if (!response.ok) throw new Error(`Yahoo response ${response.status}`);
+  const payload = await response.json();
+  const result = payload?.chart?.result?.[0];
+  const price = result?.meta?.regularMarketPrice;
+  if (!Number.isFinite(price)) throw new Error('Yahoo payload missing price');
+  return Number(price);
+}
+
 const LOT_SIZE_DEFAULT = 65;
 const STRIKE_STEP = 50;
 
@@ -485,7 +501,14 @@ export default async function handler(req, res) {
   const lotSize = Number(body.lotSize) || LOT_SIZE_DEFAULT;
   const pricingSource = body.pricingSource || 'blend';
   const riskFreeRate = (Number(body.rate) || 6) / 100;
-  const baseVolatility = Number(body.iv) || 14;
+  const manualVolatility = Number(body.iv) || null;
+  let indiaVix = null;
+  try {
+    indiaVix = await fetchYahooPrice('^INDIAVIX');
+  } catch (_) {
+    indiaVix = null;
+  }
+  const baseVolatility = indiaVix ?? manualVolatility ?? 14;
   const isCalendar = Boolean(body.calendar);
 
   const computeTimeYears = (expiryUnix) => {

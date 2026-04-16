@@ -14,6 +14,7 @@ const WHAT_IF_STEP = 50;
 const WHAT_IF_STEPS_EACH_SIDE = 10;
 const LEG_QUANTITY_OPTIONS = Array.from({ length: 10 }, (_, index) => String(index + 1));
 const TRANSACTION_COST_PER_ORDER = 30;
+const CURRENT_VALUATION_OPTIONS = ['live', 'blend', 'blackScholes', 'binomialCrr', 'bachelier', 'monteCarlo', 'intrinsic'];
 
 function normalizePremium(value) {
   return Number((Number(value) || 0).toFixed(2));
@@ -65,21 +66,30 @@ function buildExpectedPricingUrl(strategy) {
   });
   if (strategy?.selectedExpiry) params.set('expiries', String(strategy.selectedExpiry));
   if (strategy?.rateInput) params.set('rate', String(strategy.rateInput));
-  if (strategy?.savedAtSpot) params.set('spot', String(Number(strategy.savedAtSpot).toFixed(2)));
+  if (strategy?.ivInput) params.set('iv', String(strategy.ivInput));
   return `/api/options-expected-price?${params.toString()}`;
 }
 
 function buildWhatIfBaseSpot(spot) {
   const numericSpot = Number(spot) || 0;
+  return Math.max(0, Number(numericSpot.toFixed(2)));
+}
+
+function buildWhatIfAxisSpot(spot) {
+  const numericSpot = Number(spot) || 0;
   return Math.max(0, Math.round(numericSpot / WHAT_IF_STEP) * WHAT_IF_STEP);
 }
 
 function buildWhatIfSpots(spot) {
-  const baseSpot = buildWhatIfBaseSpot(spot);
-  return Array.from({ length: (WHAT_IF_STEPS_EACH_SIDE * 2) + 1 }, (_, index) => {
+  const currentSpot = buildWhatIfBaseSpot(spot);
+  const axisSpot = buildWhatIfAxisSpot(currentSpot);
+  const steppedSpots = Array.from({ length: (WHAT_IF_STEPS_EACH_SIDE * 2) + 1 }, (_, index) => {
     const offset = (index - WHAT_IF_STEPS_EACH_SIDE) * WHAT_IF_STEP;
-    return Math.max(0, baseSpot + offset);
+    return Math.max(0, axisSpot + offset);
   });
+
+  return [...new Set([...steppedSpots, currentSpot].map((value) => Number(value.toFixed(2))))]
+    .sort((left, right) => left - right);
 }
 
 function buildWhatIfPricingUrl(strategy, referenceSpot) {
@@ -94,11 +104,12 @@ function buildWhatIfPricingUrl(strategy, referenceSpot) {
   });
   if (strategy?.selectedExpiry) params.set('expiries', String(strategy.selectedExpiry));
   if (strategy?.rateInput) params.set('rate', String(strategy.rateInput));
+  if (strategy?.ivInput) params.set('iv', String(strategy.ivInput));
   return `/api/options-expected-price?${params.toString()}`;
 }
 
 function buildLegCatalog(chainMap = { CE: {}, PE: {} }, currentSpot = 0, legs = []) {
-  const referenceSpot = buildWhatIfBaseSpot(currentSpot || 0);
+  const referenceSpot = buildWhatIfAxisSpot(currentSpot || 0);
   const fallbackStrikes = buildWhatIfSpots(referenceSpot);
   const legStrikes = new Set((legs || []).map((leg) => Number(leg.strike)).filter((strike) => Number.isFinite(strike) && strike > 0));
 
@@ -207,7 +218,7 @@ function computeProjectedScenarioValues(legs = [], lotSize = 1, scenarioContract
       offset: Number((Number(scenario.spot || 0) - Number(baseSpot || 0)).toFixed(2)),
       value: Number(projectedMtm.toFixed(2)),
       closeValue: Number(projectedCloseValue.toFixed(2)),
-      isCurrent: Number(scenario.spot) === Number(baseSpot),
+      isCurrent: Math.abs(Number(scenario.spot || 0) - Number(baseSpot || 0)) < 0.01,
     };
   });
 }
@@ -1218,6 +1229,7 @@ export default function NiftyStrategiesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [marketIndices, setMarketIndices] = useState([]);
+  const [currentValuationSource, setCurrentValuationSource] = useState('live');
   const { theme, themeId, setTheme } = useTheme();
   const styles = useMemo(() => applyTheme(darkStyles, themeId, theme), [themeId]);
 
@@ -1225,7 +1237,8 @@ export default function NiftyStrategiesPage() {
     if (!baseStrategies.length) return [];
 
     return Promise.all(baseStrategies.map(async (strategy) => {
-      const pricingSource = strategy.pricingSource || 'blend';
+      const strategyPricingSource = strategy.pricingSource || 'blend';
+      const valuationSource = currentValuationSource || 'live';
       let currentSpot = Number(strategy.savedAtSpot || 0);
       let liveSource = strategy.liveSource || 'saved';
       let chainMap = { CE: {}, PE: {} };
@@ -1240,10 +1253,10 @@ export default function NiftyStrategiesPage() {
         }
 
         currentSpot = Number(formulaData.referenceSpot || formulaData.liveSpot || currentSpot || 0);
-        liveSource = `${getPricingSourceLabel(pricingSource)} / expected formulas`;
+        liveSource = `${getPricingSourceLabel(valuationSource)} / current valuation`;
         (formulaData.contracts || []).forEach((contract) => {
           if (!chainMap[contract.type]) return;
-          chainMap[contract.type][Number(contract.strike)] = resolveExpectedOptionPrice(contract, pricingSource);
+          chainMap[contract.type][Number(contract.strike)] = resolveExpectedOptionPrice(contract, valuationSource);
         });
 
         whatIfBaseSpot = buildWhatIfBaseSpot(currentSpot);
@@ -1257,7 +1270,7 @@ export default function NiftyStrategiesPage() {
             strategy.legs || [],
             Number(strategy.lotSize) || 65,
             scenarioData.scenarioContracts || [],
-            pricingSource,
+            valuationSource,
             whatIfBaseSpot,
           );
         } catch (_) {
@@ -1284,6 +1297,8 @@ export default function NiftyStrategiesPage() {
         ...strategy,
         currentSpot,
         liveSource,
+        currentValuationSource: valuationSource,
+        strategyPricingSource,
         legCatalog: buildLegCatalog(chainMap, currentSpot, strategy.legs || []),
         whatIfBaseSpot,
         whatIfScenarios,
@@ -1291,7 +1306,7 @@ export default function NiftyStrategiesPage() {
         legs: liveLegs,
       };
     }));
-  }, []);
+  }, [currentValuationSource]);
 
   const loadSavedStrategies = useCallback(async () => {
     setLoading(true);
@@ -1319,7 +1334,17 @@ export default function NiftyStrategiesPage() {
       return;
     }
     setUser(JSON.parse(storedUser));
+
+    const storedValuationSource = localStorage.getItem('nifty-current-valuation-source');
+    if (storedValuationSource && CURRENT_VALUATION_OPTIONS.includes(storedValuationSource)) {
+      setCurrentValuationSource(storedValuationSource);
+    }
   }, [router]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem('nifty-current-valuation-source', currentValuationSource);
+  }, [currentValuationSource]);
 
   useEffect(() => {
     if (!user) return;
@@ -1657,6 +1682,28 @@ export default function NiftyStrategiesPage() {
         </div>
       </div>
 
+      <div style={styles.valuationBar}>
+        <div>
+          <div style={styles.valuationTitle}>Current price calculation</div>
+          <div style={styles.valuationHint}>
+            Active MTM now uses a separate live/formula selector. Live / Chain is the most accurate when NSE premiums are available.
+          </div>
+        </div>
+        <div style={styles.valuationControlWrap}>
+          <label htmlFor="current-valuation-source" style={styles.valuationLabel}>Valuation method</label>
+          <select
+            id="current-valuation-source"
+            value={currentValuationSource}
+            onChange={(e) => setCurrentValuationSource(e.target.value)}
+            style={styles.valuationSelect}
+          >
+            {CURRENT_VALUATION_OPTIONS.map((option) => (
+              <option key={option} value={option}>{getPricingSourceLabel(option)}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
       <div style={styles.summaryGrid} className="nifty-summary-grid">
         <div style={{ ...styles.summaryCard, borderTopColor: theme.green }}>
           <div style={styles.summaryLabel}>Active (Bought)</div>
@@ -1725,9 +1772,11 @@ export default function NiftyStrategiesPage() {
                       <span style={{ ...styles.statusBadge, color: statusColor, borderColor: statusColor }}>{statusLabel}</span>
                     </div>
                     <div style={styles.strategyMeta}>
-                      {strategy.expiryLabel || 'No expiry'} · {(strategy.legs || []).length} open legs{(strategy.closedLegs || []).length > 0 ? ` · ${strategy.closedLegs.length} closed` : ''} · {getPricingSourceLabel(strategy.pricingSource || 'blend')}
+                      {strategy.expiryLabel || 'No expiry'} · {(strategy.legs || []).length} open legs{(strategy.closedLegs || []).length > 0 ? ` · ${strategy.closedLegs.length} closed` : ''} · built with {getPricingSourceLabel(strategy.strategyPricingSource || strategy.pricingSource || 'blend')}
                     </div>
-                    <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '4px' }}>Click to {'{expand / collapse}'}</div>
+                    <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '4px' }}>
+                      Current valuation: {getPricingSourceLabel(strategy.currentValuationSource || currentValuationSource)} · {strategy.liveSource || 'saved'}
+                    </div>
                   </div>
                 </div>
                 <div style={styles.summaryBadges}>
@@ -1800,7 +1849,7 @@ export default function NiftyStrategiesPage() {
                       <div style={styles.graphTitle}>2. What-If Portfolio Value</div>
                       <ScenarioBarChart scenarios={strategy.whatIfScenarios?.length ? strategy.whatIfScenarios : metrics.scenarios} styles={styles} theme={theme} />
                       <div style={styles.graphHint}>
-                        Shows projected portfolio MTM in 50-point steps from {Math.round(strategy.whatIfBaseSpot || strategy.currentSpot || 0).toLocaleString('en-IN')} with 10 downside and 10 upside spots.
+                        Shows projected portfolio MTM around live spot {Math.round(strategy.currentSpot || strategy.whatIfBaseSpot || 0).toLocaleString('en-IN')}, with the exact current spot highlighted plus 50-point downside and upside scenarios.
                       </div>
                       <WhatIfScenarioGrid scenarios={strategy.whatIfScenarios || []} styles={styles} theme={theme} />
                     </div>
@@ -2141,6 +2190,53 @@ const darkStyles = {
     gap: '10px',
     flexWrap: 'wrap',
     alignItems: 'flex-start',
+  },
+  valuationBar: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: '16px',
+    flexWrap: 'wrap',
+    marginBottom: '16px',
+    padding: '14px 16px',
+    border: '1px solid #1e293b',
+    borderRadius: '14px',
+    background: 'linear-gradient(135deg, rgba(15,23,42,0.96), rgba(30,41,59,0.52))',
+  },
+  valuationTitle: {
+    fontSize: '14px',
+    fontWeight: '700',
+    color: '#f8fafc',
+    marginBottom: '4px',
+  },
+  valuationHint: {
+    fontSize: '12px',
+    color: '#94a3b8',
+    lineHeight: '1.5',
+    maxWidth: '700px',
+  },
+  valuationControlWrap: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px',
+    minWidth: '220px',
+  },
+  valuationLabel: {
+    fontSize: '11px',
+    fontWeight: '700',
+    letterSpacing: '0.04em',
+    textTransform: 'uppercase',
+    color: '#94a3b8',
+  },
+  valuationSelect: {
+    minHeight: '44px',
+    borderRadius: '10px',
+    border: '1px solid #334155',
+    background: '#0f172a',
+    color: '#f8fafc',
+    padding: '10px 12px',
+    fontSize: '13px',
+    outline: 'none',
   },
   primaryButton: {
     background: '#1e293b',

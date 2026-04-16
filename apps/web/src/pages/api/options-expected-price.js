@@ -401,6 +401,7 @@ function buildContractSnapshot({
   type,
   liveContract,
   indiaVix,
+  manualVolatility,
   config,
   includeLivePremium = true,
 }) {
@@ -409,7 +410,7 @@ function buildContractSnapshot({
   const livePremium = includeLivePremium ? resolvePremiumValue(liveContract) : null;
   const liveIv = liveContract?.iv && liveContract.iv > 0 ? Number(liveContract.iv) : null;
 
-  const baseVolatility = liveIv ?? indiaVix ?? config.baseVolatility;
+  const baseVolatility = liveIv ?? indiaVix ?? manualVolatility ?? config.baseVolatility;
   const derivedVol = getTheoreticalVolatility({
     spot: referenceSpot,
     strike,
@@ -424,7 +425,9 @@ function buildContractSnapshot({
     ? 'nse-implied-volatility'
     : indiaVix != null
       ? 'india-vix-derived-smile'
-      : 'config-fallback-smile';
+      : manualVolatility != null
+        ? 'manual-iv-override-smile'
+        : 'config-fallback-smile';
   const riskFreeRate = config.riskFreeRate / 100;
 
   const results = {
@@ -464,7 +467,7 @@ function buildContractSnapshot({
   };
 }
 
-function buildStrategyPremiumLookup({ strikeUniverse, expiryNameMap, contractMap, referenceSpot, indiaVix, config }) {
+function buildStrategyPremiumLookup({ strikeUniverse, expiryNameMap, contractMap, referenceSpot, indiaVix, manualVolatility, config }) {
   const lookup = new Map();
 
   strikeUniverse.forEach((expiryEntry) => {
@@ -479,7 +482,7 @@ function buildStrategyPremiumLookup({ strikeUniverse, expiryNameMap, contractMap
         const liveContract = resolveLiveContract(contractMap, expiryLabel, expiryUnix, strike, type);
         const livePremium = resolvePremiumValue(liveContract);
         const liveIv = liveContract?.iv && liveContract.iv > 0 ? Number(liveContract.iv) : null;
-        const baseVolatility = liveIv ?? indiaVix ?? config.baseVolatility;
+        const baseVolatility = liveIv ?? indiaVix ?? manualVolatility ?? config.baseVolatility;
         const derivedVol = getTheoreticalVolatility({
           spot: referenceSpot,
           strike,
@@ -899,12 +902,14 @@ export default async function handler(req, res) {
     spot: spotQuery,
     strikes: strikesQuery,
     expiries: expiriesQuery,
+    iv,
     rate,
     strikeGap: strikeGapQuery,
     strikeLevels: strikeLevelsQuery,
     expiryCount: expiryCountQuery,
   } = req.query;
   const config = resolveSyntheticConfig({ riskFreeRate: rate });
+  const manualVolatility = parseOptionalNumber(iv);
   const strikeGap = parseStrikeGap(strikeGapQuery);
   const strikeLevelsEachSide = parsePositiveInteger(strikeLevelsQuery, 3);
   const expiryCount = parsePositiveInteger(expiryCountQuery, 1);
@@ -929,8 +934,8 @@ export default async function handler(req, res) {
     indiaVix = await fetchYahooPrice('^INDIAVIX');
     vixSource = 'yahoo-finance-public:^INDIAVIX';
   } catch (error) {
-    indiaVix = config.baseVolatility;
-    vixSource = 'config-fallback';
+    indiaVix = null;
+    vixSource = manualVolatility != null ? 'manual-iv-override' : 'config-fallback';
     vixWarning = error.message;
   }
 
@@ -965,6 +970,7 @@ export default async function handler(req, res) {
         type,
         liveContract,
         indiaVix,
+        manualVolatility,
         config,
         includeLivePremium: true,
       });
@@ -985,6 +991,7 @@ export default async function handler(req, res) {
           type,
           liveContract,
           indiaVix,
+          manualVolatility,
           config,
           includeLivePremium: false,
         });
@@ -1006,6 +1013,7 @@ export default async function handler(req, res) {
     contractMap,
     referenceSpot,
     indiaVix,
+    manualVolatility,
     config,
   });
   const strategySuggestions = buildStrategySuggestions({
@@ -1043,7 +1051,7 @@ export default async function handler(req, res) {
         warning: spotWarning,
       },
       volatilityIndex: {
-        value: Number(indiaVix.toFixed(2)),
+        value: Number((indiaVix ?? manualVolatility ?? config.baseVolatility).toFixed(2)),
         source: vixSource,
         warning: vixWarning,
       },

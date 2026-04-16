@@ -6,7 +6,7 @@ import { themes, getThemeId, setThemeId, getTheme } from './themes';
  * Pages call this to get the active theme and a setter.
  */
 export function useTheme() {
-  const [themeId, setId] = useState('dark');
+  const [themeId, setId] = useState('light');
   useEffect(() => { setId(getThemeId()); }, []);
   const setTheme = (id) => { setThemeId(id); setId(id); };
   return { theme: getTheme(themeId), themeId, setTheme };

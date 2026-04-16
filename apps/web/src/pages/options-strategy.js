@@ -612,6 +612,7 @@ export default function OptionsStrategy() {
     if (expiryValue) params.set('expiries', String(expiryValue));
     if (Number.isFinite(Number(spotOverride))) params.set('spot', String(Number(spotOverride).toFixed(2)));
     if (pricingInputsRef.current.rateInput) params.set('rate', pricingInputsRef.current.rateInput);
+    if (pricingInputsRef.current.ivInput) params.set('iv', pricingInputsRef.current.ivInput);
     return `/api/options-expected-price?${params.toString()}`;
   };
 
