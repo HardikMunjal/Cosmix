@@ -1,6 +1,6 @@
 import { useRouter } from 'next/router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ThemePicker, useTheme } from '../lib/ThemePicker';
+import { useTheme } from '../lib/ThemePicker';
 import { applyTheme } from '../lib/themes';
 
 const TRANSACTION_COST_PER_ORDER = 30;
@@ -151,7 +151,7 @@ function PnlBarsChart({ items = [], theme, styles }) {
 
 export default function Dashboard() {
   const router = useRouter();
-  const { theme, themeId, setTheme } = useTheme();
+  const { theme, themeId } = useTheme();
   const [user, setUser] = useState(null);
   const [strategies, setStrategies] = useState([]);
 
@@ -260,7 +260,6 @@ export default function Dashboard() {
           <p style={styles.subtitle}>Your tracker, builder, and daily tools are back together on one dashboard.</p>
         </div>
         <div style={styles.headerActions} className="dash-header-actions">
-          <ThemePicker theme={theme} themeId={themeId} setTheme={setTheme} />
           <button onClick={handleLogout} style={styles.logoutBtn}>Logout</button>
         </div>
       </div>

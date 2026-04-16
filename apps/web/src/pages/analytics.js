@@ -1,6 +1,6 @@
 import { useRouter } from 'next/router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useTheme, ThemePicker } from '../lib/ThemePicker';
+import { useTheme } from '../lib/ThemePicker';
 import { applyTheme } from '../lib/themes';
 
 const TRANSACTION_COST_PER_ORDER = 30;
@@ -118,7 +118,7 @@ function CumulativeClosedPnLChart({ items, height = 180, theme }) {
 
 export default function Analytics() {
   const router = useRouter();
-  const { theme, themeId, setTheme } = useTheme();
+  const { theme, themeId } = useTheme();
   const [user, setUser] = useState(null);
   const [strategies, setStrategies] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -235,7 +235,6 @@ export default function Analytics() {
           <p style={s.subtitle}>Portfolio overview, P/L trends, and market data</p>
         </div>
         <div style={{ display: 'flex', gap: '10px' }} className="analytics-header-actions">
-          <ThemePicker theme={theme} themeId={themeId} setTheme={setTheme} />
           <button onClick={loadData} style={s.secondaryBtn}>Refresh</button>
           <button onClick={() => router.push('/dashboard')} style={s.secondaryBtn}>← Dashboard</button>
         </div>

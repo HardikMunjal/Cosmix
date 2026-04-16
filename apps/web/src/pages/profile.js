@@ -1,5 +1,6 @@
 import { useRouter } from 'next/router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ThemePicker, useTheme } from '../lib/ThemePicker';
 
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -13,6 +14,7 @@ function readFileAsDataUrl(file) {
 export default function Profile() {
   const router = useRouter();
   const fileRef = useRef(null);
+  const { theme, themeId, setTheme } = useTheme();
   const [user, setUser] = useState(null);
   const [profileForm, setProfileForm] = useState({
     username: '',
@@ -21,6 +23,7 @@ export default function Profile() {
   });
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState('');
+  const styles = useMemo(() => getStyles(theme), [theme]);
 
   useEffect(() => {
     const storedUser = localStorage.getItem('user');
@@ -191,6 +194,12 @@ export default function Profile() {
             </div>
           </div>
 
+          <div style={styles.themeCard}>
+            <div style={styles.sectionTitle}>Theme settings</div>
+            <div style={styles.themeHint}>Sunlit stays the default, and theme changes now live only inside profile settings.</div>
+            <ThemePicker theme={theme} themeId={themeId} setTheme={setTheme} />
+          </div>
+
           {status ? <div style={styles.status}>{status}</div> : null}
         </section>
       </div>
@@ -198,198 +207,213 @@ export default function Profile() {
   );
 }
 
-const styles = {
-  page: {
-    minHeight: '100vh',
-    padding: '24px',
-    background: 'linear-gradient(180deg, #fff8ef, #fff1e6)',
-    color: '#1f2937',
-    fontFamily: 'Inter, system-ui, sans-serif',
-  },
-  header: {
-    maxWidth: '1180px',
-    margin: '0 auto 22px',
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: '16px',
-    padding: '22px 24px',
-    borderRadius: '24px',
-    background: 'rgba(255, 253, 248, 0.94)',
-    border: '1px solid #f3d2b1',
-    boxShadow: '0 20px 60px rgba(249, 115, 22, 0.12)',
-  },
-  eyebrow: {
-    fontSize: '11px',
-    fontWeight: 800,
-    textTransform: 'uppercase',
-    letterSpacing: '0.14em',
-    color: '#8b98ab',
-    marginBottom: '8px',
-  },
-  title: {
-    margin: 0,
-    fontSize: '32px',
-    fontWeight: 800,
-    color: '#0f172a',
-  },
-  subtitle: {
-    margin: '8px 0 0',
-    maxWidth: '560px',
-    fontSize: '15px',
-    lineHeight: 1.6,
-    color: '#5b6472',
-  },
-  headerActions: {
-    display: 'flex',
-    gap: '12px',
-    alignItems: 'center',
-  },
-  shell: {
-    maxWidth: '1180px',
-    margin: '0 auto',
-    display: 'grid',
-    gridTemplateColumns: '320px minmax(0, 1fr)',
-    gap: '22px',
-  },
-  visualCard: {
-    display: 'grid',
-    gap: '18px',
-    alignContent: 'start',
-    padding: '24px',
-    borderRadius: '24px',
-    background: 'linear-gradient(180deg, #fffdf8, #fff4e7)',
-    border: '1px solid #f3d2b1',
-    boxShadow: '0 20px 60px rgba(249, 115, 22, 0.1)',
-  },
-  avatarWrap: {
-    width: '100%',
-    aspectRatio: '1 / 1',
-    borderRadius: '28px',
-    overflow: 'hidden',
-    background: 'linear-gradient(135deg, #fde7cf, #fff8ef)',
-    border: '1px solid #fdba74',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarImage: {
-    width: '100%',
-    height: '100%',
-    objectFit: 'cover',
-  },
-  avatarFallback: {
-    fontSize: '84px',
-    fontWeight: 800,
-    color: '#ea580c',
-  },
-  visualMeta: {
-    display: 'grid',
-    gap: '8px',
-  },
-  profileName: {
-    fontSize: '28px',
-    fontWeight: 800,
-    color: '#0f172a',
-  },
-  profileQuote: {
-    fontSize: '15px',
-    lineHeight: 1.6,
-    color: '#5b6472',
-  },
-  formCard: {
-    display: 'grid',
-    gap: '18px',
-    padding: '24px',
-    borderRadius: '24px',
-    background: 'rgba(255, 253, 248, 0.94)',
-    border: '1px solid #f3d2b1',
-    boxShadow: '0 20px 60px rgba(249, 115, 22, 0.1)',
-  },
-  sectionTitle: {
-    fontSize: '19px',
-    fontWeight: 800,
-    color: '#0f172a',
-  },
-  label: {
-    display: 'grid',
-    gap: '8px',
-    fontSize: '13px',
-    fontWeight: 700,
-    color: '#475569',
-  },
-  input: {
-    width: '100%',
-    borderRadius: '16px',
-    border: '1px solid #fdba74',
-    background: '#fff7ed',
-    padding: '14px 16px',
-    fontSize: '15px',
-    color: '#0f172a',
-    outline: 'none',
-  },
-  textarea: {
-    minHeight: '120px',
-    resize: 'vertical',
-    fontFamily: 'inherit',
-  },
-  infoGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-    gap: '12px',
-  },
-  infoCard: {
-    padding: '16px',
-    borderRadius: '18px',
-    border: '1px solid #f3d2b1',
-    background: '#fffaf5',
-  },
-  infoLabel: {
-    fontSize: '11px',
-    fontWeight: 800,
-    textTransform: 'uppercase',
-    letterSpacing: '0.12em',
-    color: '#8b98ab',
-    marginBottom: '8px',
-  },
-  infoValue: {
-    fontSize: '15px',
-    fontWeight: 700,
-    color: '#0f172a',
-    wordBreak: 'break-word',
-  },
-  helperText: {
-    fontSize: '13px',
-    lineHeight: 1.6,
-    color: '#5b6472',
-  },
-  status: {
-    padding: '14px 16px',
-    borderRadius: '16px',
-    background: '#fff1e6',
-    border: '1px solid #fdba74',
-    color: '#9a3412',
-    fontSize: '14px',
-    fontWeight: 600,
-  },
-  primaryButton: {
-    border: 'none',
-    borderRadius: '14px',
-    padding: '12px 18px',
-    background: '#ea580c',
-    color: '#fff',
-    fontSize: '14px',
-    fontWeight: 700,
-    cursor: 'pointer',
-  },
-  secondaryButton: {
-    border: '1px solid #fdba74',
-    borderRadius: '14px',
-    padding: '12px 18px',
-    background: '#fff7ed',
-    color: '#0f172a',
-    fontSize: '14px',
-    fontWeight: 700,
-    cursor: 'pointer',
-  },
-};
+function getStyles(theme) {
+  return {
+    page: {
+      minHeight: '100vh',
+      padding: '24px',
+      background: `linear-gradient(180deg, ${theme.pageBgSolid}, ${theme.cardBg})`,
+      color: theme.textPrimary,
+      fontFamily: theme.font,
+    },
+    header: {
+      maxWidth: '1180px',
+      margin: '0 auto 22px',
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      gap: '16px',
+      padding: '22px 24px',
+      borderRadius: '24px',
+      background: theme.panelBg,
+      border: `1px solid ${theme.cardBorder}`,
+      boxShadow: `0 20px 60px ${theme.shadow}`,
+    },
+    eyebrow: {
+      fontSize: '11px',
+      fontWeight: 800,
+      textTransform: 'uppercase',
+      letterSpacing: '0.14em',
+      color: theme.textMuted,
+      marginBottom: '8px',
+    },
+    title: {
+      margin: 0,
+      fontSize: '32px',
+      fontWeight: 800,
+      color: theme.textHeading,
+    },
+    subtitle: {
+      margin: '8px 0 0',
+      maxWidth: '560px',
+      fontSize: '15px',
+      lineHeight: 1.6,
+      color: theme.textSecondary,
+    },
+    headerActions: {
+      display: 'flex',
+      gap: '12px',
+      alignItems: 'center',
+    },
+    shell: {
+      maxWidth: '1180px',
+      margin: '0 auto',
+      display: 'grid',
+      gridTemplateColumns: '320px minmax(0, 1fr)',
+      gap: '22px',
+    },
+    visualCard: {
+      display: 'grid',
+      gap: '18px',
+      alignContent: 'start',
+      padding: '24px',
+      borderRadius: '24px',
+      background: theme.cardBgGradient,
+      border: `1px solid ${theme.cardBorder}`,
+      boxShadow: `0 20px 60px ${theme.shadow}`,
+    },
+    avatarWrap: {
+      width: '100%',
+      aspectRatio: '1 / 1',
+      borderRadius: '28px',
+      overflow: 'hidden',
+      background: `linear-gradient(135deg, ${theme.sectionBg}, ${theme.cardBg})`,
+      border: `1px solid ${theme.inputBorder}`,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    avatarImage: {
+      width: '100%',
+      height: '100%',
+      objectFit: 'cover',
+    },
+    avatarFallback: {
+      fontSize: '84px',
+      fontWeight: 800,
+      color: theme.orange,
+    },
+    visualMeta: {
+      display: 'grid',
+      gap: '8px',
+    },
+    profileName: {
+      fontSize: '28px',
+      fontWeight: 800,
+      color: theme.textHeading,
+    },
+    profileQuote: {
+      fontSize: '15px',
+      lineHeight: 1.6,
+      color: theme.textSecondary,
+    },
+    formCard: {
+      display: 'grid',
+      gap: '18px',
+      padding: '24px',
+      borderRadius: '24px',
+      background: theme.panelBg,
+      border: `1px solid ${theme.cardBorder}`,
+      boxShadow: `0 20px 60px ${theme.shadow}`,
+    },
+    sectionTitle: {
+      fontSize: '19px',
+      fontWeight: 800,
+      color: theme.textHeading,
+    },
+    label: {
+      display: 'grid',
+      gap: '8px',
+      fontSize: '13px',
+      fontWeight: 700,
+      color: theme.textMid,
+    },
+    input: {
+      width: '100%',
+      borderRadius: '16px',
+      border: `1px solid ${theme.inputBorder}`,
+      background: theme.inputBg,
+      padding: '14px 16px',
+      fontSize: '15px',
+      color: theme.textHeading,
+      outline: 'none',
+    },
+    textarea: {
+      minHeight: '120px',
+      resize: 'vertical',
+      fontFamily: 'inherit',
+    },
+    infoGrid: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+      gap: '12px',
+    },
+    infoCard: {
+      padding: '16px',
+      borderRadius: '18px',
+      border: `1px solid ${theme.cardBorder}`,
+      background: theme.cardBg,
+    },
+    infoLabel: {
+      fontSize: '11px',
+      fontWeight: 800,
+      textTransform: 'uppercase',
+      letterSpacing: '0.12em',
+      color: theme.textMuted,
+      marginBottom: '8px',
+    },
+    infoValue: {
+      fontSize: '15px',
+      fontWeight: 700,
+      color: theme.textHeading,
+      wordBreak: 'break-word',
+    },
+    helperText: {
+      fontSize: '13px',
+      lineHeight: 1.6,
+      color: theme.textSecondary,
+    },
+    themeCard: {
+      display: 'grid',
+      gap: '12px',
+      padding: '18px',
+      borderRadius: '18px',
+      border: `1px solid ${theme.cardBorder}`,
+      background: theme.cardBg,
+    },
+    themeHint: {
+      fontSize: '14px',
+      lineHeight: 1.6,
+      color: theme.textSecondary,
+    },
+    status: {
+      padding: '14px 16px',
+      borderRadius: '16px',
+      background: theme.btnSecondaryBg,
+      border: `1px solid ${theme.inputBorder}`,
+      color: theme.textPrimary,
+      fontSize: '14px',
+      fontWeight: 600,
+    },
+    primaryButton: {
+      border: 'none',
+      borderRadius: '14px',
+      padding: '12px 18px',
+      background: theme.orange,
+      color: '#fff',
+      fontSize: '14px',
+      fontWeight: 700,
+      cursor: 'pointer',
+    },
+    secondaryButton: {
+      border: `1px solid ${theme.inputBorder}`,
+      borderRadius: '14px',
+      padding: '12px 18px',
+      background: theme.btnSecondaryBg,
+      color: theme.btnSecondaryText,
+      fontSize: '14px',
+      fontWeight: 700,
+      cursor: 'pointer',
+    },
+  };
+}

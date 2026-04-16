@@ -1,7 +1,7 @@
 import { useRouter } from 'next/router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import io from 'socket.io-client';
-import { ThemePicker, useTheme } from '../lib/ThemePicker';
+import { useTheme } from '../lib/ThemePicker';
 
 let socket = null;
 
@@ -456,7 +456,7 @@ function createStyles(theme) {
 
 export default function Chat() {
   const router = useRouter();
-  const { theme, themeId, setTheme } = useTheme();
+  const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
 
   const [user, setUser] = useState(null);
@@ -655,7 +655,6 @@ export default function Chat() {
             <p style={styles.subtitle}>Theme-aware chat with stronger room identity, faster reply actions, and a cleaner message flow.</p>
           </div>
           <div style={styles.headerControls}>
-            <ThemePicker theme={theme} themeId={themeId} setTheme={setTheme} />
             <button onClick={() => router.push('/dashboard')} style={styles.ghostButton}>Back to dashboard</button>
           </div>
         </div>

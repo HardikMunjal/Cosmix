@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
-import { useTheme, ThemePicker } from '../lib/ThemePicker';
+import { useTheme } from '../lib/ThemePicker';
 import { applyTheme } from '../lib/themes';
 
 const FORMULA_BLEND_WEIGHTS = {
@@ -1230,7 +1230,7 @@ export default function NiftyStrategiesPage() {
   const [error, setError] = useState('');
   const [marketIndices, setMarketIndices] = useState([]);
   const [currentValuationSource, setCurrentValuationSource] = useState('live');
-  const { theme, themeId, setTheme } = useTheme();
+  const { theme, themeId } = useTheme();
   const styles = useMemo(() => applyTheme(darkStyles, themeId, theme), [themeId]);
 
   const enrichStrategies = useCallback(async (baseStrategies = []) => {
@@ -1675,7 +1675,6 @@ export default function NiftyStrategiesPage() {
           <p style={styles.subtitle}>Saved strategies with live P/L, analyzer, and transaction tracking.</p>
         </div>
         <div style={styles.headerActions} className="nifty-header-actions">
-          <ThemePicker theme={theme} themeId={themeId} setTheme={setTheme} />
           <button onClick={loadSavedStrategies} style={styles.secondaryButton}>Refresh</button>
           <button onClick={() => router.push('/options-strategy')} style={styles.primaryButton}>Add / Modify Strategy</button>
           <button onClick={() => router.push('/dashboard')} style={styles.secondaryButton}>Back to Dashboard</button>
