@@ -1,178 +1,395 @@
 import { useRouter } from 'next/router';
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
 
 export default function Profile() {
   const router = useRouter();
-  const [user, setUser] = useState(null);
-  const [preview, setPreview] = useState(null);
   const fileRef = useRef(null);
+  const [user, setUser] = useState(null);
+  const [profileForm, setProfileForm] = useState({
+    username: '',
+    quote: '',
+    avatar: '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState('');
 
   useEffect(() => {
     const storedUser = localStorage.getItem('user');
     if (!storedUser) {
       router.push('/');
-    } else {
-      const u = JSON.parse(storedUser);
-      setUser(u);
-      if (u.avatar) setPreview(u.avatar);
+      return;
     }
+
+    const parsedUser = JSON.parse(storedUser);
+    setUser(parsedUser);
+    setProfileForm({
+      username: parsedUser.username || '',
+      quote: parsedUser.quote || 'Building better decisions, one signal at a time.',
+      avatar: parsedUser.avatar || '',
+    });
   }, [router]);
 
-  const toDataURL = (file) => new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-
-  const cartoonizeDataUrl = async (dataUrl) => {
-    return new Promise((resolve) => {
-      const img = new Image();
-      img.crossOrigin = 'Anonymous';
-      img.onload = () => {
-        const w = 300;
-        const h = Math.round((img.height / img.width) * w);
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d');
-
-        // draw image
-        ctx.drawImage(img, 0, 0, w, h);
-
-        // posterize / quantize colors
-        const imgd = ctx.getImageData(0, 0, w, h);
-        const data = imgd.data;
-        const levels = 6; // fewer levels = more cartoon
-        for (let i = 0; i < data.length; i += 4) {
-          for (let c = 0; c < 3; c++) {
-            data[i + c] = Math.floor((data[i + c] / 255) * levels) * (255 / (levels - 1));
-          }
-        }
-
-        // simple edge detection (Sobel approximation)
-        const gray = new Uint8ClampedArray(w * h);
-        for (let y = 0; y < h; y++) {
-          for (let x = 0; x < w; x++) {
-            const i = (y * w + x) * 4;
-            const v = 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
-            gray[y * w + x] = v;
-          }
-        }
-
-        const edges = new Uint8ClampedArray(w * h);
-        for (let y = 1; y < h - 1; y++) {
-          for (let x = 1; x < w - 1; x++) {
-            const gx = -gray[(y - 1) * w + (x - 1)] - 2 * gray[y * w + (x - 1)] - gray[(y + 1) * w + (x - 1)]
-                      + gray[(y - 1) * w + (x + 1)] + 2 * gray[y * w + (x + 1)] + gray[(y + 1) * w + (x + 1)];
-            const gy = -gray[(y - 1) * w + (x - 1)] - 2 * gray[(y - 1) * w + x] - gray[(y - 1) * w + (x + 1)]
-                      + gray[(y + 1) * w + (x - 1)] + 2 * gray[(y + 1) * w + x] + gray[(y + 1) * w + (x + 1)];
-            const mag = Math.min(255, Math.sqrt(gx * gx + gy * gy));
-            edges[y * w + x] = mag > 60 ? 255 : 0;
-          }
-        }
-
-        // overlay edges as dark lines
-        for (let y = 0; y < h; y++) {
-          for (let x = 0; x < w; x++) {
-            const idx = (y * w + x) * 4;
-            if (edges[y * w + x]) {
-              data[idx] = data[idx + 1] = data[idx + 2] = 20; // dark line
-            }
-          }
-        }
-
-        ctx.putImageData(imgd, 0, 0);
-        const out = canvas.toDataURL('image/png');
-        resolve(out);
-      };
-      img.src = dataUrl;
-    });
+  const updateForm = (key, value) => {
+    setProfileForm((current) => ({ ...current, [key]: value }));
+    setStatus('');
   };
 
-  const handleFile = async (file) => {
+  const handleFile = async (event) => {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+
     try {
-      const dataUrl = await toDataURL(file);
-      const cartoon = await cartoonizeDataUrl(dataUrl);
-      setPreview(cartoon);
-    } catch (e) {
-      console.error('image read error', e);
+      const avatar = await readFileAsDataUrl(file);
+      updateForm('avatar', avatar);
+      setStatus('New profile photo ready to save.');
+    } catch (error) {
+      console.error('Profile image read error', error);
+      setStatus('Could not read that image. Try another file.');
     }
   };
 
-  const saveAvatar = () => {
+  const handleSave = () => {
+    const nextUsername = profileForm.username.trim();
+    const nextQuote = profileForm.quote.trim();
+
+    if (!nextUsername) {
+      setStatus('Username is required.');
+      return;
+    }
+
+    if (!nextQuote) {
+      setStatus('Profile quote is required.');
+      return;
+    }
+
+    setSaving(true);
     const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
-    storedUser.avatar = preview;
-    localStorage.setItem('user', JSON.stringify(storedUser));
-    setUser(storedUser);
-    alert('Avatar saved and cartoonized. It will appear in chat.');
+    const nextUser = {
+      ...storedUser,
+      username: nextUsername,
+      quote: nextQuote,
+      avatar: profileForm.avatar || '',
+    };
+    localStorage.setItem('user', JSON.stringify(nextUser));
+    setUser(nextUser);
+    setProfileForm({
+      username: nextUser.username,
+      quote: nextUser.quote,
+      avatar: nextUser.avatar || '',
+    });
+    setSaving(false);
+    setStatus('Profile updated successfully.');
   };
 
-  if (!user) return <div>Loading...</div>;
+  if (!user) return <div style={{ padding: '24px', fontFamily: 'Inter, system-ui, sans-serif' }}>Loading...</div>;
+
+  const authLabel = user.authMethod === 'gmail'
+    ? 'Gmail sign-in'
+    : user.authMethod === 'mobile-otp'
+      ? 'Mobile OTP'
+      : 'Local account';
 
   return (
-    <div style={{ padding: '20px' }}>
+    <div style={styles.page} className="profile-page">
       <style>{`
-        @media (max-width: 700px) {
-          .profile-page { padding: 14px !important; }
-          .profile-layout { flex-direction: column !important; }
-          .profile-card { max-width: none !important; width: 100%; }
+        @media (max-width: 960px) {
+          .profile-shell { grid-template-columns: 1fr !important; }
         }
-        @media (max-width: 420px) {
-          .profile-avatar { width: 128px !important; height: 128px !important; }
+        @media (max-width: 640px) {
+          .profile-page { padding: 14px !important; }
+          .profile-header { flex-direction: column !important; align-items: flex-start !important; }
+          .profile-actions { width: 100%; }
+          .profile-actions button { width: 100%; }
         }
       `}</style>
-      <div className="profile-page">
-      <button 
-        onClick={() => router.push('/dashboard')}
-        style={{ padding: '8px 15px', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: '4px', marginBottom: '20px' }}
-      >
-        Back to Dashboard
-      </button>
 
-      <h1>User Profile</h1>
-      <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }} className="profile-layout">
+      <div style={styles.header} className="profile-header">
         <div>
-          <div style={{ marginBottom: '8px' }}><strong>Avatar (cartoonized)</strong></div>
-          <div style={{ width: 160, height: 160, borderRadius: 12, overflow: 'hidden', background: '#eee', display: 'flex', alignItems: 'center', justifyContent: 'center' }} className="profile-avatar">
-            {preview ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={preview} alt="avatar" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-            ) : (
-              <div style={{ color: '#666' }}>No avatar</div>
-            )}
-          </div>
-
-          <div style={{ marginTop: 10 }}>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/*"
-              onChange={(e) => {
-                const f = e.target.files && e.target.files[0];
-                if (f) handleFile(f);
-              }}
-            />
-          </div>
-
-          <div style={{ marginTop: 10 }}>
-            <button onClick={saveAvatar} style={{ padding: '8px 12px', background: '#00ff9f', border: 'none', borderRadius: 6, cursor: 'pointer' }}>Save Avatar</button>
-          </div>
+          <div style={styles.eyebrow}>Account settings</div>
+          <h1 style={styles.title}>Profile</h1>
+          <p style={styles.subtitle}>Update your name, quote, and profile photo from one place.</p>
         </div>
-
-        <div style={{ 
-          backgroundColor: '#f9f9f9', 
-          padding: '20px', 
-          borderRadius: '4px',
-          maxWidth: '520px'
-        }} className="profile-card">
-          <p><strong>Username:</strong> {user.username}</p>
-          <p><strong>Status:</strong> Active</p>
-          <p><strong>Member Since:</strong> 2026</p>
-          <p style={{ color: '#666' }}>Upload a photo and click <strong>Save Avatar</strong>. The image will be converted to a cartoon-style avatar and used in chat messages.</p>
+        <div style={styles.headerActions} className="profile-actions">
+          <button onClick={() => router.push('/dashboard')} style={styles.secondaryButton}>Back to Dashboard</button>
+          <button onClick={handleSave} style={styles.primaryButton} disabled={saving}>{saving ? 'Saving...' : 'Save Profile'}</button>
         </div>
       </div>
+
+      <div style={styles.shell} className="profile-shell">
+        <section style={styles.visualCard}>
+          <div style={styles.avatarWrap}>
+            {profileForm.avatar ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={profileForm.avatar} alt="Profile" style={styles.avatarImage} />
+            ) : (
+              <div style={styles.avatarFallback}>{(profileForm.username || user.username || 'U').slice(0, 1).toUpperCase()}</div>
+            )}
+          </div>
+          <div style={styles.visualMeta}>
+            <div style={styles.profileName}>{profileForm.username || user.username}</div>
+            <div style={styles.profileQuote}>"{profileForm.quote || 'Add your profile quote'}"</div>
+          </div>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            onChange={handleFile}
+            style={{ display: 'none' }}
+          />
+          <button onClick={() => fileRef.current?.click()} style={styles.secondaryButton}>Upload Profile Photo</button>
+          <div style={styles.helperText}>The uploaded image is used directly. No cartoon effect is applied.</div>
+        </section>
+
+        <section style={styles.formCard}>
+          <div style={styles.sectionTitle}>Personal details</div>
+
+          <label style={styles.label}>
+            Username
+            <input
+              value={profileForm.username}
+              onChange={(event) => updateForm('username', event.target.value)}
+              style={styles.input}
+              placeholder="Enter your username"
+            />
+          </label>
+
+          <label style={styles.label}>
+            Profile quote
+            <textarea
+              value={profileForm.quote}
+              onChange={(event) => updateForm('quote', event.target.value)}
+              style={{ ...styles.input, ...styles.textarea }}
+              placeholder="Write a short line for your profile"
+            />
+          </label>
+
+          <div style={styles.infoGrid}>
+            <div style={styles.infoCard}>
+              <div style={styles.infoLabel}>Sign-in method</div>
+              <div style={styles.infoValue}>{authLabel}</div>
+            </div>
+            <div style={styles.infoCard}>
+              <div style={styles.infoLabel}>Email</div>
+              <div style={styles.infoValue}>{user.email || 'Not added'}</div>
+            </div>
+            <div style={styles.infoCard}>
+              <div style={styles.infoLabel}>Mobile</div>
+              <div style={styles.infoValue}>{user.mobile || 'Not added'}</div>
+            </div>
+            <div style={styles.infoCard}>
+              <div style={styles.infoLabel}>Workspace</div>
+              <div style={styles.infoValue}>Cosmix Web</div>
+            </div>
+          </div>
+
+          {status ? <div style={styles.status}>{status}</div> : null}
+        </section>
       </div>
     </div>
   );
 }
+
+const styles = {
+  page: {
+    minHeight: '100vh',
+    padding: '24px',
+    background: 'linear-gradient(180deg, #fff8ef, #fff1e6)',
+    color: '#1f2937',
+    fontFamily: 'Inter, system-ui, sans-serif',
+  },
+  header: {
+    maxWidth: '1180px',
+    margin: '0 auto 22px',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: '16px',
+    padding: '22px 24px',
+    borderRadius: '24px',
+    background: 'rgba(255, 253, 248, 0.94)',
+    border: '1px solid #f3d2b1',
+    boxShadow: '0 20px 60px rgba(249, 115, 22, 0.12)',
+  },
+  eyebrow: {
+    fontSize: '11px',
+    fontWeight: 800,
+    textTransform: 'uppercase',
+    letterSpacing: '0.14em',
+    color: '#8b98ab',
+    marginBottom: '8px',
+  },
+  title: {
+    margin: 0,
+    fontSize: '32px',
+    fontWeight: 800,
+    color: '#0f172a',
+  },
+  subtitle: {
+    margin: '8px 0 0',
+    maxWidth: '560px',
+    fontSize: '15px',
+    lineHeight: 1.6,
+    color: '#5b6472',
+  },
+  headerActions: {
+    display: 'flex',
+    gap: '12px',
+    alignItems: 'center',
+  },
+  shell: {
+    maxWidth: '1180px',
+    margin: '0 auto',
+    display: 'grid',
+    gridTemplateColumns: '320px minmax(0, 1fr)',
+    gap: '22px',
+  },
+  visualCard: {
+    display: 'grid',
+    gap: '18px',
+    alignContent: 'start',
+    padding: '24px',
+    borderRadius: '24px',
+    background: 'linear-gradient(180deg, #fffdf8, #fff4e7)',
+    border: '1px solid #f3d2b1',
+    boxShadow: '0 20px 60px rgba(249, 115, 22, 0.1)',
+  },
+  avatarWrap: {
+    width: '100%',
+    aspectRatio: '1 / 1',
+    borderRadius: '28px',
+    overflow: 'hidden',
+    background: 'linear-gradient(135deg, #fde7cf, #fff8ef)',
+    border: '1px solid #fdba74',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarImage: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
+  },
+  avatarFallback: {
+    fontSize: '84px',
+    fontWeight: 800,
+    color: '#ea580c',
+  },
+  visualMeta: {
+    display: 'grid',
+    gap: '8px',
+  },
+  profileName: {
+    fontSize: '28px',
+    fontWeight: 800,
+    color: '#0f172a',
+  },
+  profileQuote: {
+    fontSize: '15px',
+    lineHeight: 1.6,
+    color: '#5b6472',
+  },
+  formCard: {
+    display: 'grid',
+    gap: '18px',
+    padding: '24px',
+    borderRadius: '24px',
+    background: 'rgba(255, 253, 248, 0.94)',
+    border: '1px solid #f3d2b1',
+    boxShadow: '0 20px 60px rgba(249, 115, 22, 0.1)',
+  },
+  sectionTitle: {
+    fontSize: '19px',
+    fontWeight: 800,
+    color: '#0f172a',
+  },
+  label: {
+    display: 'grid',
+    gap: '8px',
+    fontSize: '13px',
+    fontWeight: 700,
+    color: '#475569',
+  },
+  input: {
+    width: '100%',
+    borderRadius: '16px',
+    border: '1px solid #fdba74',
+    background: '#fff7ed',
+    padding: '14px 16px',
+    fontSize: '15px',
+    color: '#0f172a',
+    outline: 'none',
+  },
+  textarea: {
+    minHeight: '120px',
+    resize: 'vertical',
+    fontFamily: 'inherit',
+  },
+  infoGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+    gap: '12px',
+  },
+  infoCard: {
+    padding: '16px',
+    borderRadius: '18px',
+    border: '1px solid #f3d2b1',
+    background: '#fffaf5',
+  },
+  infoLabel: {
+    fontSize: '11px',
+    fontWeight: 800,
+    textTransform: 'uppercase',
+    letterSpacing: '0.12em',
+    color: '#8b98ab',
+    marginBottom: '8px',
+  },
+  infoValue: {
+    fontSize: '15px',
+    fontWeight: 700,
+    color: '#0f172a',
+    wordBreak: 'break-word',
+  },
+  helperText: {
+    fontSize: '13px',
+    lineHeight: 1.6,
+    color: '#5b6472',
+  },
+  status: {
+    padding: '14px 16px',
+    borderRadius: '16px',
+    background: '#fff1e6',
+    border: '1px solid #fdba74',
+    color: '#9a3412',
+    fontSize: '14px',
+    fontWeight: 600,
+  },
+  primaryButton: {
+    border: 'none',
+    borderRadius: '14px',
+    padding: '12px 18px',
+    background: '#ea580c',
+    color: '#fff',
+    fontSize: '14px',
+    fontWeight: 700,
+    cursor: 'pointer',
+  },
+  secondaryButton: {
+    border: '1px solid #fdba74',
+    borderRadius: '14px',
+    padding: '12px 18px',
+    background: '#fff7ed',
+    color: '#0f172a',
+    fontSize: '14px',
+    fontWeight: 700,
+    cursor: 'pointer',
+  },
+};
