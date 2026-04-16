@@ -2,6 +2,7 @@ import { useRouter } from 'next/router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { persistClientUser, restoreUserSession } from '../lib/auth-client';
 import { ThemePicker, useTheme } from '../lib/ThemePicker';
+import { buildProfileInsights, formatCurrency, formatPace } from '../lib/userInsights';
 
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -17,6 +18,7 @@ export default function Profile() {
   const fileRef = useRef(null);
   const { theme, themeId, setTheme } = useTheme();
   const [user, setUser] = useState(null);
+  const [strategies, setStrategies] = useState([]);
   const [profileForm, setProfileForm] = useState({
     username: '',
     quote: '',
@@ -42,6 +44,17 @@ export default function Profile() {
       active = false;
     };
   }, [router]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    fetch('/api/options-strategies')
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => setStrategies(data?.strategies || []))
+      .catch(() => setStrategies([]));
+  }, [user]);
+
+  const insights = useMemo(() => buildProfileInsights({ strategies, userId: user?.id }), [strategies, user?.id]);
 
   const updateForm = (key, value) => {
     setProfileForm((current) => ({ ...current, [key]: value }));
@@ -110,23 +123,34 @@ export default function Profile() {
     }
   };
 
-  if (!user) return <div style={{ padding: '24px', fontFamily: 'Inter, system-ui, sans-serif' }}>Loading...</div>;
+  if (!user) {
+    return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: theme.pageBgSolid, color: theme.textPrimary, fontFamily: theme.font }}>Loading...</div>;
+  }
 
-  const authLabel = user.authMethod === 'gmail'
-    ? 'Gmail sign-in'
-    : 'Username and password';
+  const authLabel = user.authMethod === 'gmail' ? 'Gmail sign-in' : 'Username and password';
+  const statCards = [
+    { label: 'Total profit', value: formatCurrency(insights.totalProfit), hint: 'Across your saved strategies', accent: insights.totalProfit >= 0 ? theme.green : theme.red },
+    { label: 'Total fitness score', value: String(insights.totalFitnessScore), hint: 'From your logged wellness entries', accent: theme.blue },
+    { label: 'Total friends', value: String(insights.totalFriends), hint: 'Known chat contacts', accent: theme.orange },
+    { label: 'Running streak', value: `${insights.runningStreak} day${insights.runningStreak === 1 ? '' : 's'}`, hint: `${insights.weeklyRunningKm} km this week`, accent: theme.emerald },
+    { label: 'Highest run', value: `${insights.highestRunKm.toFixed(2)} km`, hint: 'Best logged distance', accent: theme.cyan },
+    { label: 'Fastest run', value: formatPace(insights.fastestRunPace), hint: 'Runs above 2 km only', accent: theme.purple },
+  ];
 
   return (
     <div style={styles.page} className="profile-page">
       <style>{`
-        @media (max-width: 960px) {
+        * { box-sizing: border-box; }
+        html, body, #__next { min-height: 100%; margin: 0; }
+        @media (max-width: 1080px) {
           .profile-shell { grid-template-columns: 1fr !important; }
         }
-        @media (max-width: 640px) {
+        @media (max-width: 720px) {
           .profile-page { padding: 14px !important; }
           .profile-header { flex-direction: column !important; align-items: flex-start !important; }
           .profile-actions { width: 100%; }
           .profile-actions button { width: 100%; }
+          .profile-stats { grid-template-columns: 1fr !important; }
         }
       `}</style>
 
@@ -134,11 +158,11 @@ export default function Profile() {
         <div>
           <div style={styles.eyebrow}>Account settings</div>
           <h1 style={styles.title}>Profile</h1>
-          <p style={styles.subtitle}>Update your name, quote, and profile photo from one place.</p>
+          <p style={styles.subtitle}>Update your identity, image, theme, and track the personal stats that matter on one page.</p>
         </div>
         <div style={styles.headerActions} className="profile-actions">
-          <button onClick={() => router.push('/dashboard')} style={styles.secondaryButton}>Back to Dashboard</button>
-          <button onClick={handleSave} style={styles.primaryButton} disabled={saving}>{saving ? 'Saving...' : 'Save Profile'}</button>
+          <button type="button" onClick={() => router.push('/dashboard')} style={styles.secondaryButton}>Back to Dashboard</button>
+          <button type="button" onClick={handleSave} style={styles.primaryButton} disabled={saving}>{saving ? 'Saving...' : 'Save Profile'}</button>
         </div>
       </div>
 
@@ -152,66 +176,60 @@ export default function Profile() {
               <div style={styles.avatarFallback}>{(profileForm.username || user.username || 'U').slice(0, 1).toUpperCase()}</div>
             )}
           </div>
+
           <div style={styles.visualMeta}>
             <div style={styles.profileName}>{profileForm.username || user.username}</div>
             <div style={styles.profileQuote}>"{profileForm.quote || 'Add your profile quote'}"</div>
           </div>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/*"
-            onChange={handleFile}
-            style={{ display: 'none' }}
-          />
-          <button onClick={() => fileRef.current?.click()} style={styles.secondaryButton}>Upload Profile Photo</button>
-          <div style={styles.helperText}>The uploaded image is used directly. No cartoon effect is applied.</div>
+
+          <input ref={fileRef} type="file" accept="image/*" onChange={handleFile} style={{ display: 'none' }} />
+          <button type="button" onClick={() => fileRef.current?.click()} style={styles.secondaryButton}>Upload Profile Photo</button>
+
+          <div style={styles.quickInfoCard}>
+            <div style={styles.infoLabel}>Sign-in method</div>
+            <div style={styles.infoValue}>{authLabel}</div>
+          </div>
+          <div style={styles.quickInfoCard}>
+            <div style={styles.infoLabel}>Email</div>
+            <div style={styles.infoValue}>{user.email || 'Not added'}</div>
+          </div>
+          <div style={styles.quickInfoCard}>
+            <div style={styles.infoLabel}>Mobile</div>
+            <div style={styles.infoValue}>{user.mobile || 'Not added'}</div>
+          </div>
         </section>
 
         <section style={styles.formCard}>
-          <div style={styles.sectionTitle}>Personal details</div>
+          <div style={styles.block}>
+            <div style={styles.sectionTitle}>Personal details</div>
 
-          <label style={styles.label}>
-            Username
-            <input
-              value={profileForm.username}
-              onChange={(event) => updateForm('username', event.target.value)}
-              style={styles.input}
-              placeholder="Enter your username"
-            />
-          </label>
+            <label style={styles.label}>
+              Username
+              <input value={profileForm.username} onChange={(event) => updateForm('username', event.target.value)} style={styles.input} placeholder="Enter your username" />
+            </label>
 
-          <label style={styles.label}>
-            Profile quote
-            <textarea
-              value={profileForm.quote}
-              onChange={(event) => updateForm('quote', event.target.value)}
-              style={{ ...styles.input, ...styles.textarea }}
-              placeholder="Write a short line for your profile"
-            />
-          </label>
+            <label style={styles.label}>
+              Profile quote
+              <textarea value={profileForm.quote} onChange={(event) => updateForm('quote', event.target.value)} style={{ ...styles.input, ...styles.textarea }} placeholder="Write a short line for your profile" />
+            </label>
+          </div>
 
-          <div style={styles.infoGrid}>
-            <div style={styles.infoCard}>
-              <div style={styles.infoLabel}>Sign-in method</div>
-              <div style={styles.infoValue}>{authLabel}</div>
-            </div>
-            <div style={styles.infoCard}>
-              <div style={styles.infoLabel}>Email</div>
-              <div style={styles.infoValue}>{user.email || 'Not added'}</div>
-            </div>
-            <div style={styles.infoCard}>
-              <div style={styles.infoLabel}>Mobile</div>
-              <div style={styles.infoValue}>{user.mobile || 'Not added'}</div>
-            </div>
-            <div style={styles.infoCard}>
-              <div style={styles.infoLabel}>Workspace</div>
-              <div style={styles.infoValue}>Cosmix Web</div>
+          <div style={styles.block}>
+            <div style={styles.sectionTitle}>Profile stats</div>
+            <div style={styles.statsGrid} className="profile-stats">
+              {statCards.map((card) => (
+                <div key={card.label} style={styles.statCard}>
+                  <div style={styles.infoLabel}>{card.label}</div>
+                  <div style={{ ...styles.statValue, color: card.accent }}>{card.value}</div>
+                  <div style={styles.statHint}>{card.hint}</div>
+                </div>
+              ))}
             </div>
           </div>
 
           <div style={styles.themeCard}>
             <div style={styles.sectionTitle}>Theme settings</div>
-            <div style={styles.themeHint}>Sunlit stays the default, and theme changes now live only inside profile settings.</div>
+            <div style={styles.themeHint}>Theme selection lives here so the dashboard can stay focused on work and live metrics.</div>
             <ThemePicker theme={theme} themeId={themeId} setTheme={setTheme} />
           </div>
 
@@ -227,12 +245,12 @@ function getStyles(theme) {
     page: {
       minHeight: '100vh',
       padding: '24px',
-      background: `linear-gradient(180deg, ${theme.pageBgSolid}, ${theme.cardBg})`,
+      background: theme.pageBg,
       color: theme.textPrimary,
       fontFamily: theme.font,
     },
     header: {
-      maxWidth: '1180px',
+      maxWidth: '1240px',
       margin: '0 auto 22px',
       display: 'flex',
       justifyContent: 'space-between',
@@ -260,7 +278,7 @@ function getStyles(theme) {
     },
     subtitle: {
       margin: '8px 0 0',
-      maxWidth: '560px',
+      maxWidth: '620px',
       fontSize: '15px',
       lineHeight: 1.6,
       color: theme.textSecondary,
@@ -271,18 +289,18 @@ function getStyles(theme) {
       alignItems: 'center',
     },
     shell: {
-      maxWidth: '1180px',
+      maxWidth: '1240px',
       margin: '0 auto',
       display: 'grid',
-      gridTemplateColumns: '320px minmax(0, 1fr)',
+      gridTemplateColumns: '340px minmax(0, 1fr)',
       gap: '22px',
     },
     visualCard: {
       display: 'grid',
-      gap: '18px',
+      gap: '16px',
       alignContent: 'start',
       padding: '24px',
-      borderRadius: '24px',
+      borderRadius: '26px',
       background: theme.cardBgGradient,
       border: `1px solid ${theme.cardBorder}`,
       boxShadow: `0 20px 60px ${theme.shadow}`,
@@ -290,7 +308,7 @@ function getStyles(theme) {
     avatarWrap: {
       width: '100%',
       aspectRatio: '1 / 1',
-      borderRadius: '28px',
+      borderRadius: '30px',
       overflow: 'hidden',
       background: `linear-gradient(135deg, ${theme.sectionBg}, ${theme.cardBg})`,
       border: `1px solid ${theme.inputBorder}`,
@@ -322,17 +340,29 @@ function getStyles(theme) {
       lineHeight: 1.6,
       color: theme.textSecondary,
     },
+    quickInfoCard: {
+      padding: '14px 16px',
+      borderRadius: '18px',
+      border: `1px solid ${theme.cardBorder}`,
+      background: theme.cardBg,
+      display: 'grid',
+      gap: '8px',
+    },
     formCard: {
       display: 'grid',
       gap: '18px',
       padding: '24px',
-      borderRadius: '24px',
+      borderRadius: '26px',
       background: theme.panelBg,
       border: `1px solid ${theme.cardBorder}`,
       boxShadow: `0 20px 60px ${theme.shadow}`,
     },
+    block: {
+      display: 'grid',
+      gap: '16px',
+    },
     sectionTitle: {
-      fontSize: '19px',
+      fontSize: '20px',
       fontWeight: 800,
       color: theme.textHeading,
     },
@@ -352,22 +382,24 @@ function getStyles(theme) {
       fontSize: '15px',
       color: theme.textHeading,
       outline: 'none',
+      fontFamily: theme.font,
     },
     textarea: {
       minHeight: '120px',
       resize: 'vertical',
-      fontFamily: 'inherit',
     },
-    infoGrid: {
+    statsGrid: {
       display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-      gap: '12px',
+      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+      gap: '14px',
     },
-    infoCard: {
+    statCard: {
       padding: '16px',
-      borderRadius: '18px',
+      borderRadius: '20px',
       border: `1px solid ${theme.cardBorder}`,
       background: theme.cardBg,
+      display: 'grid',
+      gap: '8px',
     },
     infoLabel: {
       fontSize: '11px',
@@ -375,7 +407,6 @@ function getStyles(theme) {
       textTransform: 'uppercase',
       letterSpacing: '0.12em',
       color: theme.textMuted,
-      marginBottom: '8px',
     },
     infoValue: {
       fontSize: '15px',
@@ -383,16 +414,22 @@ function getStyles(theme) {
       color: theme.textHeading,
       wordBreak: 'break-word',
     },
-    helperText: {
+    statValue: {
+      fontSize: '24px',
+      fontWeight: 800,
+      color: theme.textHeading,
+      wordBreak: 'break-word',
+    },
+    statHint: {
       fontSize: '13px',
-      lineHeight: 1.6,
+      lineHeight: 1.5,
       color: theme.textSecondary,
     },
     themeCard: {
       display: 'grid',
       gap: '12px',
       padding: '18px',
-      borderRadius: '18px',
+      borderRadius: '20px',
       border: `1px solid ${theme.cardBorder}`,
       background: theme.cardBg,
     },
