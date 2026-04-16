@@ -105,6 +105,28 @@ export default function Home() {
     setInfo('');
   };
 
+  useEffect(() => {
+    if (!otpSent || loginMode !== 'mobile' || typeof window === 'undefined') return undefined;
+    if (!('OTPCredential' in window) || !navigator.credentials?.get) return undefined;
+
+    const controller = new AbortController();
+
+    navigator.credentials.get({
+      otp: { transport: ['sms'] },
+      signal: controller.signal,
+    }).then((otpCredential) => {
+      const code = String(otpCredential?.code || '').replace(/\D/g, '').slice(0, 6);
+      if (!code) return;
+      setOtp(code);
+      setError('');
+      setInfo('OTP picked automatically from your SMS inbox.');
+    }).catch(() => {
+      // Web OTP is best-effort only.
+    });
+
+    return () => controller.abort();
+  }, [otpSent, loginMode]);
+
   return (
     <div style={styles.page}>
       <style>{`
@@ -194,6 +216,7 @@ export default function Home() {
                     id="otp-code"
                     type="text"
                     inputMode="numeric"
+                    autoComplete="one-time-code"
                     maxLength={6}
                     placeholder="6-digit OTP"
                     value={otp}
@@ -216,6 +239,12 @@ export default function Home() {
                   </button>
                 ) : null}
               </div>
+
+              {otpSent ? (
+                <div style={styles.otpAssistText}>
+                  On supported mobile browsers, the OTP will be auto-detected from SMS when it arrives.
+                </div>
+              ) : null}
             </form>
           ) : (
             <form onSubmit={handleGmailSignIn}>
@@ -463,5 +492,11 @@ const styles = {
     color: '#8b98ab',
     fontSize: '12px',
     lineHeight: '1.7',
+  },
+  otpAssistText: {
+    marginTop: '12px',
+    color: '#7c5b3b',
+    fontSize: '12px',
+    lineHeight: '1.6',
   },
 };
