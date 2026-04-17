@@ -3,6 +3,7 @@ import { readKnownChatContacts } from './chatPresence';
 
 const TRANSACTION_COST_PER_ORDER = 30;
 const WELLNESS_PREFIX = 'cosmix-wellness-';
+const WELLNESS_GOALS_KEY = 'cosmix-wellness-goals';
 
 function todayDate() {
   return new Date().toISOString().slice(0, 10);
@@ -32,6 +33,10 @@ function normalizeWellnessEntries(entries = []) {
 function readWellnessEntries(userId) {
   if (!userId) return [];
   return normalizeWellnessEntries(parseStoredJson(`${WELLNESS_PREFIX}${userId}-entries`, []));
+}
+
+function readWellnessGoals() {
+  return parseStoredJson(WELLNESS_GOALS_KEY, []).filter(Boolean);
 }
 
 function resolveCurrentEntry(entries = []) {
@@ -80,6 +85,93 @@ function computeFastestRunPace(entries = []) {
 
   if (!qualified.length) return null;
   return Number(Math.min(...qualified).toFixed(2));
+}
+
+function computeCurrentWellnessScore(entry) {
+  if (!entry || !entry.date) return 0;
+  return Number((computeEntryScores(entry).totalScore || 0).toFixed(1));
+}
+
+function computeWeeklyAverageScore(entries = []) {
+  const recentEntries = normalizeWellnessEntries(entries).slice(0, 7);
+  if (!recentEntries.length) return 0;
+  const total = recentEntries.reduce((sum, entry) => sum + Number(computeEntryScores(entry).totalScore || 0), 0);
+  return Number((total / recentEntries.length).toFixed(1));
+}
+
+function buildProfitTrend(strategies = []) {
+  const dailyTotals = new Map();
+
+  strategies.forEach((strategy) => {
+    (strategy?.transactions || []).forEach((transaction) => {
+      const amount = Number(transaction?.amount || 0);
+      const timestamp = String(transaction?.timestamp || '');
+      if (!timestamp || !Number.isFinite(amount) || amount === 0) return;
+      const day = timestamp.slice(0, 10);
+      dailyTotals.set(day, Number((dailyTotals.get(day) || 0) + amount));
+    });
+  });
+
+  if (!dailyTotals.size) return [];
+
+  let runningTotal = 0;
+  return [...dailyTotals.entries()]
+    .sort((left, right) => left[0].localeCompare(right[0]))
+    .slice(-10)
+    .map(([day, amount]) => {
+      runningTotal += Number(amount || 0);
+      return {
+        label: day.slice(5).replace('-', '/'),
+        value: Number(runningTotal.toFixed(2)),
+        dailyValue: Number(amount.toFixed(2)),
+      };
+    });
+}
+
+function buildProfitWindows(strategies = []) {
+  const entries = [];
+
+  strategies.forEach((strategy) => {
+    (strategy?.transactions || []).forEach((transaction) => {
+      const amount = Number(transaction?.amount || 0);
+      const timestamp = String(transaction?.timestamp || '');
+      if (!timestamp || !Number.isFinite(amount) || amount === 0) return;
+      entries.push({
+        amount,
+        date: new Date(timestamp),
+      });
+    });
+  });
+
+  if (!entries.length) {
+    return [
+      { label: '1D P/L', value: 0 },
+      { label: '1W P/L', value: 0 },
+      { label: '1M P/L', value: 0 },
+      { label: '1Y P/L', value: 0 },
+    ];
+  }
+
+  const anchorTime = Math.max(...entries.map((entry) => entry.date.getTime()));
+  const windows = [
+    { label: '1D P/L', days: 1 },
+    { label: '1W P/L', days: 7 },
+    { label: '1M P/L', days: 30 },
+    { label: '1Y P/L', days: 365 },
+  ];
+
+  return windows.map((window) => {
+    const cutoff = anchorTime - ((window.days - 1) * 86400000);
+    const total = entries.reduce((sum, entry) => {
+      if (entry.date.getTime() < cutoff || entry.date.getTime() > anchorTime) return sum;
+      return sum + entry.amount;
+    }, 0);
+
+    return {
+      label: window.label,
+      value: Number(total.toFixed(2)),
+    };
+  });
 }
 
 export function formatCurrency(value) {
@@ -135,6 +227,8 @@ export function buildStrategySummary(strategies = []) {
     : trackerSource?.snapshotMetrics?.points?.length
       ? sampleSeries(trackerSource.snapshotMetrics.points)
       : [];
+  const profitTrend = buildProfitTrend(strategies);
+  const profitWindows = buildProfitWindows(strategies);
 
   return {
     activeCount: active.length,
@@ -145,18 +239,26 @@ export function buildStrategySummary(strategies = []) {
     totalPnl: Number((openMtm + realized).toFixed(2)),
     trackerSource,
     trackerPoints,
+    profitTrend,
+    profitWindows,
     topPnl,
   };
 }
 
 export function buildWellnessSummary(userId) {
   const entries = readWellnessEntries(userId);
+  const goals = readWellnessGoals();
   const currentEntry = resolveCurrentEntry(entries);
   const dashboardStats = computeDashboardStats(entries, currentEntry);
   const scoredRows = entries.map((entry) => computeEntryScores(entry));
+  const completedGoals = goals.filter((goal) => {
+    const status = String(goal?.status || '').toLowerCase();
+    return Boolean(goal?.completedAt) || status === 'done' || status === 'completed';
+  }).length;
 
   return {
     entries,
+    goals,
     currentEntry,
     dashboardStats,
     trendPoints: buildWellnessTrend(entries),
@@ -164,6 +266,10 @@ export function buildWellnessSummary(userId) {
     runningStreak: computeRunningStreak(entries),
     highestRunKm: Number(Math.max(0, ...entries.map((entry) => Number(entry.runningDistanceKm || 0))).toFixed(2)),
     fastestRunPace: computeFastestRunPace(entries),
+    currentWellnessScore: computeCurrentWellnessScore(currentEntry),
+    weeklyAverageWellnessScore: computeWeeklyAverageScore(entries),
+    plannedGoals: goals.length,
+    completedGoals,
   };
 }
 
@@ -181,5 +287,9 @@ export function buildProfileInsights({ strategies = [], userId }) {
     fastestRunPace: wellnessSummary.fastestRunPace,
     weeklyRunningKm: wellnessSummary.dashboardStats.weeklyRunningKm,
     activeDays: wellnessSummary.dashboardStats.activeDays,
+    currentWellnessScore: wellnessSummary.currentWellnessScore,
+    weeklyAverageWellnessScore: wellnessSummary.weeklyAverageWellnessScore,
+    plannedGoals: wellnessSummary.plannedGoals,
+    completedGoals: wellnessSummary.completedGoals,
   };
 }
