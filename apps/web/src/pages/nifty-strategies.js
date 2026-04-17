@@ -1237,13 +1237,15 @@ export default function NiftyStrategiesPage() {
   const enrichStrategies = useCallback(async (baseStrategies = []) => {
     if (!baseStrategies.length) return [];
 
+    const fallbackNiftySpot = Number((marketIndices.find((index) => index.key === 'NIFTY50')?.price) || 0);
+
     return Promise.all(baseStrategies.map(async (strategy) => {
       const strategyPricingSource = strategy.pricingSource || 'blend';
       const valuationSource = currentValuationSource || 'live';
-      let currentSpot = Number(strategy.savedAtSpot || 0);
+      let currentSpot = Number(strategy.currentSpot || strategy.whatIfBaseSpot || strategy.savedAtSpot || 0);
       let liveSource = strategy.liveSource || 'saved';
       let chainMap = { CE: {}, PE: {} };
-      let whatIfScenarios = [];
+      let whatIfScenarios = Array.isArray(strategy.whatIfScenarios) ? strategy.whatIfScenarios : [];
       let whatIfBaseSpot = buildWhatIfBaseSpot(currentSpot);
 
       try {
@@ -1253,7 +1255,7 @@ export default function NiftyStrategiesPage() {
           throw new Error(formulaData.error || 'Unable to load formula prices.');
         }
 
-        currentSpot = Number(formulaData.referenceSpot || formulaData.liveSpot || currentSpot || 0);
+        currentSpot = Number(formulaData.referenceSpot || formulaData.liveSpot || fallbackNiftySpot || currentSpot || 0);
         liveSource = `${getPricingSourceLabel(valuationSource)} / current valuation`;
         (formulaData.contracts || []).forEach((contract) => {
           if (!chainMap[contract.type]) return;
@@ -1282,17 +1284,23 @@ export default function NiftyStrategiesPage() {
           const query = strategy?.selectedExpiry ? `?symbol=NIFTY&expiry=${strategy.selectedExpiry}` : '?symbol=NIFTY';
           const response = await fetch(`/api/options-chain${query}`);
           const data = await response.json();
-          currentSpot = Number(data.spot || currentSpot || 0);
+          currentSpot = Number(data.spot || fallbackNiftySpot || currentSpot || 0);
           liveSource = data.source || liveSource;
           (data.strikes || []).forEach((item) => {
             if (!chainMap[item.type]) return;
             chainMap[item.type][Number(item.strike)] = normalizePremium(item.price || item.lastPrice || item.bid || item.ask || 0);
           });
         } catch (_) {
+          if (fallbackNiftySpot > 0) {
+            currentSpot = fallbackNiftySpot;
+            liveSource = 'market-indices fallback';
+          }
           chainMap = { CE: {}, PE: {} };
         }
       }
 
+      const lotSize = Number(strategy.lotSize) || 65;
+      const hasFreshChainData = Object.keys(chainMap.CE).length > 0 || Object.keys(chainMap.PE).length > 0;
       const liveLegs = syncLegsWithChain(strategy.legs || [], chainMap);
       return {
         ...strategy,
@@ -1303,11 +1311,13 @@ export default function NiftyStrategiesPage() {
         legCatalog: buildLegCatalog(chainMap, currentSpot, strategy.legs || []),
         whatIfBaseSpot,
         whatIfScenarios,
-        liveMetrics: computeStrategyMetrics(liveLegs, Number(strategy.lotSize) || 65, currentSpot),
+        liveMetrics: hasFreshChainData || strategy.status !== 'closed'
+          ? computeStrategyMetrics(liveLegs, lotSize, currentSpot)
+          : (strategy.liveMetrics || computeStrategyMetrics(liveLegs, lotSize, currentSpot)),
         legs: liveLegs,
       };
     }));
-  }, [currentValuationSource]);
+  }, [currentValuationSource, marketIndices]);
 
   const loadSavedStrategies = useCallback(async () => {
     setLoading(true);

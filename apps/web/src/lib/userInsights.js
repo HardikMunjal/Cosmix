@@ -125,7 +125,7 @@ export function buildStrategySummary(strategies = []) {
   const topPnl = strategies
     .map((strategy) => ({
       label: String(strategy.name || 'Unnamed').slice(0, 16),
-      value: Number((computeStrategyLiveMtm(strategy) + computeStrategyRealized(strategy) - calculateTransactionCost(strategy.transactions || [])).toFixed(2)),
+      value: Number(((strategy.status === 'closed' ? 0 : computeStrategyLiveMtm(strategy)) + computeStrategyRealized(strategy) - calculateTransactionCost(strategy.transactions || [])).toFixed(2)),
     }))
     .sort((left, right) => Math.abs(right.value) - Math.abs(left.value))
     .slice(0, 5);

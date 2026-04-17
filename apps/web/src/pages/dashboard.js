@@ -111,6 +111,7 @@ export default function Dashboard() {
   const { theme } = useTheme();
   const [user, setUser] = useState(null);
   const [strategies, setStrategies] = useState([]);
+  const [tradingDeskExpanded, setTradingDeskExpanded] = useState(false);
 
   useEffect(() => {
     restoreUserSession(router, setUser);
@@ -141,11 +142,14 @@ export default function Dashboard() {
   const wellnessSummary = useMemo(() => buildWellnessSummary(user?.id), [user?.id]);
   const profileInsights = useMemo(() => buildProfileInsights({ strategies, userId: user?.id }), [strategies, user?.id]);
 
-  const statChips = useMemo(() => ([
+  const scorecardItems = useMemo(() => ([
     { label: 'Total profit', value: formatCurrency(profileInsights.totalProfit), accent: profileInsights.totalProfit >= 0 ? theme.green : theme.red },
     { label: 'Fitness score', value: String(profileInsights.totalFitnessScore), accent: theme.blue },
     { label: 'Friends', value: String(profileInsights.totalFriends), accent: theme.orange },
-  ]), [profileInsights, theme]);
+    { label: 'Running streak', value: `${profileInsights.runningStreak}d`, accent: theme.emerald },
+    { label: 'Highest run', value: `${profileInsights.highestRunKm.toFixed(2)} km`, accent: theme.cyan },
+    { label: 'Strategies', value: String(strategySummary.totalStrategies), accent: theme.textHeading },
+  ]), [profileInsights, strategySummary.totalStrategies, theme]);
 
   const performanceCards = useMemo(() => ([
     { label: 'Running streak', value: `${profileInsights.runningStreak} day${profileInsights.runningStreak === 1 ? '' : 's'}`, hint: `${profileInsights.weeklyRunningKm} km this week` },
@@ -169,12 +173,13 @@ export default function Dashboard() {
         @media (max-width: 1024px) {
           .dashboard-top-grid, .dashboard-chart-grid, .dashboard-lower-grid { grid-template-columns: 1fr !important; }
           .dashboard-header { align-items: flex-start !important; }
+          .dashboard-profile-shell { grid-template-columns: 1fr !important; }
         }
         @media (max-width: 720px) {
           .dashboard-page { padding: 14px !important; }
           .dashboard-header { flex-direction: column !important; }
           .dashboard-header-actions { width: 100%; justify-content: space-between; }
-          .dashboard-chip-grid, .dashboard-desk-grid, .dashboard-module-grid { grid-template-columns: 1fr !important; }
+          .dashboard-chip-grid, .dashboard-desk-grid, .dashboard-module-grid, .dashboard-scorecard-grid { grid-template-columns: 1fr !important; }
           .dashboard-hero-actions { width: 100%; }
           .dashboard-hero-actions button { width: 100%; }
         }
@@ -202,28 +207,37 @@ export default function Dashboard() {
 
         <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.12fr) minmax(320px, 0.88fr)', gap: '18px' }} className="dashboard-top-grid">
           <div style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: `linear-gradient(135deg, ${theme.cardBg}, ${theme.cyan}14, ${theme.orange}14)`, padding: '24px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '22px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '18px', flexWrap: 'wrap', alignItems: 'center' }}>
-              <div style={{ display: 'grid', gap: '10px' }}>
-                <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Profile pulse</div>
-                <div style={{ fontSize: '30px', lineHeight: 1.15, fontWeight: 800, color: theme.textHeading, maxWidth: '620px' }}>{user.quote || 'Building better decisions, one signal at a time.'}</div>
-                <div style={{ color: theme.textSecondary, fontSize: '14px', lineHeight: 1.6, maxWidth: '620px' }}>Jump straight into settings, update your image, or move into wellness and chat from the same surface.</div>
-              </div>
-              <Avatar user={user} size={84} theme={theme} />
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '12px' }} className="dashboard-chip-grid">
-              {statChips.map((item) => (
-                <div key={item.label} style={{ borderRadius: '18px', padding: '16px', background: `${theme.panelBg}`, border: `1px solid ${theme.cardBorder}` }}>
-                  <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.1em', color: theme.textMuted, fontWeight: 800, marginBottom: '8px' }}>{item.label}</div>
-                  <div style={{ fontSize: '22px', fontWeight: 800, color: item.accent }}>{item.value}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) minmax(0, 1fr)', gap: '20px', alignItems: 'stretch' }} className="dashboard-profile-shell">
+              <div style={{ borderRadius: '24px', padding: '20px', background: `linear-gradient(180deg, ${theme.panelBg}, ${theme.cardBg})`, border: `1px solid ${theme.cardBorder}`, display: 'grid', justifyItems: 'center', alignContent: 'center', gap: '14px' }}>
+                <Avatar user={user} size={140} theme={theme} />
+                <div style={{ textAlign: 'center', display: 'grid', gap: '6px' }}>
+                  <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Profile pulse</div>
+                  <div style={{ fontSize: '26px', fontWeight: 800, color: theme.textHeading }}>{user.username}</div>
+                  <div style={{ fontSize: '14px', lineHeight: 1.6, color: theme.textSecondary }}>{user.quote || 'Building better decisions, one signal at a time.'}</div>
                 </div>
-              ))}
-            </div>
+              </div>
 
-            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }} className="dashboard-hero-actions">
-              <button type="button" onClick={() => router.push('/profile')} style={{ borderRadius: '14px', border: 'none', background: theme.orange, color: '#fff', padding: '12px 16px', cursor: 'pointer', fontSize: '14px', fontWeight: 800 }}>Open profile settings</button>
-              <button type="button" onClick={() => router.push('/wellness')} style={{ borderRadius: '14px', border: `1px solid ${theme.cardBorder}`, background: theme.btnSecondaryBg, color: theme.textPrimary, padding: '12px 16px', cursor: 'pointer', fontSize: '14px', fontWeight: 700 }}>Wellness log</button>
-              <button type="button" onClick={() => router.push('/chat')} style={{ borderRadius: '14px', border: `1px solid ${theme.cardBorder}`, background: theme.btnSecondaryBg, color: theme.textPrimary, padding: '12px 16px', cursor: 'pointer', fontSize: '14px', fontWeight: 700 }}>Open chat</button>
+              <div style={{ display: 'grid', gap: '18px' }}>
+                <div style={{ display: 'grid', gap: '10px' }}>
+                  <div style={{ fontSize: '30px', lineHeight: 1.15, fontWeight: 800, color: theme.textHeading }}>Your personal scorecard and trading shortcuts are now on the same surface.</div>
+                  <div style={{ color: theme.textSecondary, fontSize: '14px', lineHeight: 1.6, maxWidth: '620px' }}>Open settings, review core stats, and move into wellness or chat without leaving the dashboard.</div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '12px' }} className="dashboard-scorecard-grid">
+                  {scorecardItems.map((item) => (
+                    <div key={item.label} style={{ borderRadius: '18px', padding: '16px', background: theme.panelBg, border: `1px solid ${theme.cardBorder}` }}>
+                      <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.1em', color: theme.textMuted, fontWeight: 800, marginBottom: '8px' }}>{item.label}</div>
+                      <div style={{ fontSize: '22px', fontWeight: 800, color: item.accent }}>{item.value}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }} className="dashboard-hero-actions">
+                  <button type="button" onClick={() => router.push('/profile')} style={{ borderRadius: '14px', border: 'none', background: theme.orange, color: '#fff', padding: '12px 16px', cursor: 'pointer', fontSize: '14px', fontWeight: 800 }}>Open profile settings</button>
+                  <button type="button" onClick={() => router.push('/wellness')} style={{ borderRadius: '14px', border: `1px solid ${theme.cardBorder}`, background: theme.btnSecondaryBg, color: theme.textPrimary, padding: '12px 16px', cursor: 'pointer', fontSize: '14px', fontWeight: 700 }}>Wellness log</button>
+                  <button type="button" onClick={() => router.push('/chat')} style={{ borderRadius: '14px', border: `1px solid ${theme.cardBorder}`, background: theme.btnSecondaryBg, color: theme.textPrimary, padding: '12px 16px', cursor: 'pointer', fontSize: '14px', fontWeight: 700 }}>Open chat</button>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -251,20 +265,50 @@ export default function Dashboard() {
         </section>
 
         <section style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '22px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '18px' }}>
-          <div>
-            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800, marginBottom: '8px' }}>Trading desk</div>
-            <div style={{ fontSize: '24px', fontWeight: 800, color: theme.textHeading }}>Core market tools in one fixed section</div>
-          </div>
+          <button
+            type="button"
+            onClick={() => setTradingDeskExpanded((value) => !value)}
+            style={{ textAlign: 'left', borderRadius: '24px', border: `1px solid ${theme.cardBorder}`, background: `linear-gradient(135deg, ${theme.cardBg}, ${theme.cyan}12, ${theme.orange}10)`, padding: '20px', cursor: 'pointer', display: 'grid', gap: '16px', color: theme.textPrimary }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ display: 'grid', gap: '8px' }}>
+                <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Trading desk</div>
+                <div style={{ fontSize: '24px', fontWeight: 800, color: theme.textHeading }}>All Nifty tools in one box</div>
+                <div style={{ fontSize: '14px', lineHeight: 1.6, color: theme.textSecondary, maxWidth: '780px' }}>Click to {tradingDeskExpanded ? 'collapse' : 'expand'} your market workspace. Tracker, builder, analytics, and option pricing stay grouped together instead of occupying separate tiles.</div>
+              </div>
+              <div style={{ minWidth: '140px', display: 'grid', justifyItems: 'end', gap: '8px' }}>
+                <div style={{ fontSize: '12px', fontWeight: 800, color: theme.orange }}>{tradingDeskModules.length} tools</div>
+                <div style={{ fontSize: '30px', lineHeight: 1, fontWeight: 800, color: theme.textHeading }}>{tradingDeskExpanded ? '−' : '+'}</div>
+              </div>
+            </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: '14px' }} className="dashboard-desk-grid">
-            {tradingDeskModules.map((module) => (
-              <button key={module.path} type="button" onClick={() => router.push(module.path)} style={{ textAlign: 'left', borderRadius: '22px', border: `1px solid ${module.accent}55`, background: `linear-gradient(135deg, ${theme.cardBg}, ${module.accent}14)`, padding: '18px', cursor: 'pointer', display: 'grid', gap: '12px', color: theme.textPrimary }}>
-                <div style={{ width: '46px', height: '46px', borderRadius: '14px', display: 'grid', placeItems: 'center', fontSize: '14px', fontWeight: 800, color: module.accent, background: `${module.accent}18`, border: `1px solid ${module.accent}30` }}>{module.icon}</div>
-                <div style={{ fontSize: '18px', fontWeight: 800, color: theme.textHeading }}>{module.title}</div>
-                <div style={{ fontSize: '13px', lineHeight: 1.6, color: theme.textSecondary }}>{module.desc}</div>
-              </button>
-            ))}
-          </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '12px' }} className="dashboard-chip-grid">
+              <div style={{ borderRadius: '18px', padding: '14px 16px', background: theme.panelBg, border: `1px solid ${theme.cardBorder}` }}>
+                <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.1em', color: theme.textMuted, fontWeight: 800, marginBottom: '8px' }}>Net strategy P/L</div>
+                <div style={{ fontSize: '22px', fontWeight: 800, color: strategySummary.totalPnl >= 0 ? theme.green : theme.red }}>{formatCurrency(strategySummary.totalPnl)}</div>
+              </div>
+              <div style={{ borderRadius: '18px', padding: '14px 16px', background: theme.panelBg, border: `1px solid ${theme.cardBorder}` }}>
+                <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.1em', color: theme.textMuted, fontWeight: 800, marginBottom: '8px' }}>Live strategies</div>
+                <div style={{ fontSize: '22px', fontWeight: 800, color: theme.textHeading }}>{strategySummary.activeCount}</div>
+              </div>
+              <div style={{ borderRadius: '18px', padding: '14px 16px', background: theme.panelBg, border: `1px solid ${theme.cardBorder}` }}>
+                <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.1em', color: theme.textMuted, fontWeight: 800, marginBottom: '8px' }}>Closed strategies</div>
+                <div style={{ fontSize: '22px', fontWeight: 800, color: theme.textHeading }}>{strategySummary.closedCount}</div>
+              </div>
+            </div>
+          </button>
+
+          {tradingDeskExpanded ? (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: '14px' }} className="dashboard-desk-grid">
+              {tradingDeskModules.map((module) => (
+                <button key={module.path} type="button" onClick={() => router.push(module.path)} style={{ textAlign: 'left', borderRadius: '22px', border: `1px solid ${module.accent}55`, background: `linear-gradient(135deg, ${theme.cardBg}, ${module.accent}14)`, padding: '18px', cursor: 'pointer', display: 'grid', gap: '12px', color: theme.textPrimary }}>
+                  <div style={{ width: '46px', height: '46px', borderRadius: '14px', display: 'grid', placeItems: 'center', fontSize: '14px', fontWeight: 800, color: module.accent, background: `${module.accent}18`, border: `1px solid ${module.accent}30` }}>{module.icon}</div>
+                  <div style={{ fontSize: '18px', fontWeight: 800, color: theme.textHeading }}>{module.title}</div>
+                  <div style={{ fontSize: '13px', lineHeight: 1.6, color: theme.textSecondary }}>{module.desc}</div>
+                </button>
+              ))}
+            </div>
+          ) : null}
         </section>
 
         <section style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '18px' }} className="dashboard-chart-grid">
