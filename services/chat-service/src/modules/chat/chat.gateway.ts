@@ -26,6 +26,7 @@ export class ChatGateway
   /* 🔥 Better Data Structure */
   private users = new Map<string, string>(); // socketId -> username
   private userSockets = new Map<string, string>(); // username -> socketId
+  private userActors = new Map<string, { username: string; userId?: string | null; avatar?: string | null }>();
 
   /* 🟢 CONNECT */
   handleConnection(socket: Socket) {
@@ -39,6 +40,7 @@ export class ChatGateway
     if (username) {
       this.users.delete(socket.id);
       this.userSockets.delete(username);
+      this.userActors.delete(socket.id);
 
       this.server.emit('online_users', this.getOnlineUsers());
 
@@ -49,22 +51,25 @@ export class ChatGateway
   /* 👤 JOIN USER */
   @SubscribeMessage('join')
   async handleJoin(
-    @MessageBody() data: { username: string },
+    @MessageBody() data: { username: string; userId?: string | null; avatar?: string | null },
     @ConnectedSocket() socket: Socket,
   ) {
     const { username } = data;
 
     socket.data.username = username;
+    socket.data.userId = data.userId || null;
+    socket.data.avatar = data.avatar || null;
 
     this.users.set(socket.id, username);
     this.userSockets.set(username, socket.id);
+    this.userActors.set(socket.id, { username, userId: data.userId || null, avatar: data.avatar || null });
 
     /* Auto join default room */
     socket.join('general');
 
-    const recentMessages = await this.chatService.getMessagesForChat({ type: 'group', name: 'general' }, username);
+    const recentMessages = await this.chatService.getMessagesForChat({ type: 'group', id: 'general', name: 'general' }, username);
     if (recentMessages.length) {
-      socket.emit('history', { chat: { type: 'group', name: 'general' }, messages: recentMessages });
+      socket.emit('history', { chat: { type: 'group', id: 'general', name: 'general' }, messages: recentMessages });
     }
 
     this.server.emit('online_users', this.getOnlineUsers());
@@ -82,6 +87,29 @@ export class ChatGateway
     console.log(`${socket.data.username} joined room ${data.room}`);
   }
 
+  @SubscribeMessage('open_chat')
+  async handleOpenChat(
+    @MessageBody() data: { chat: { type: 'group' | 'dm'; id?: string; name: string } },
+    @ConnectedSocket() socket: Socket,
+  ) {
+    const username = this.users.get(socket.id);
+    if (!username) return;
+
+    if (data.chat.type === 'group') {
+      socket.join(this.chatService.getRoomId(data.chat, username));
+    }
+
+    try {
+      const recentMessages = await this.chatService.getMessagesForChat(data.chat, username);
+      socket.emit('history', {
+        chat: { ...data.chat, id: data.chat.id || this.chatService.getRoomId(data.chat, username) },
+        messages: recentMessages,
+      });
+    } catch (error) {
+      socket.emit('chat_error', { message: error instanceof Error ? error.message : 'Could not load chat history.' });
+    }
+  }
+
   /* 💬 MESSAGE HANDLER */
   @SubscribeMessage('message')
   async handleMessage(
@@ -96,14 +124,22 @@ export class ChatGateway
     @ConnectedSocket() socket: Socket,
   ) {
     const sender = this.users.get(socket.id);
+    const actor = this.userActors.get(socket.id);
 
-    if (!sender) return;
+    if (!sender || !actor) return;
 
-    const payload = {
-      ...data,
-      user: sender,
-    };
-    await this.chatService.sendMessage(payload);
+    let payload;
+    try {
+      payload = await this.chatService.sendMessage(actor, {
+        ...data,
+        user: sender,
+        userId: actor.userId || null,
+        avatar: actor.avatar || null,
+      });
+    } catch (error) {
+      socket.emit('chat_error', { message: error instanceof Error ? error.message : 'Could not send message.' });
+      return;
+    }
     // COMMAND / AI HANDLING
     if (data.type === 'text' && data.text) {
       const text = data.text.trim();
@@ -122,7 +158,7 @@ export class ChatGateway
 
         // emit AI response into the same chat
         if (data.chat.type === 'group') {
-          this.server.to(data.chat.name).emit('message', aiPayload);
+          this.server.to(payload.chat.id || data.chat.name).emit('message', aiPayload);
         } else {
           // DM - reply to both
           const targetSocketId = this.userSockets.get(data.chat.name);
@@ -136,7 +172,7 @@ export class ChatGateway
 
     /* 👥 GROUP CHAT */
     if (data.chat.type === 'group') {
-      this.server.to(data.chat.name).emit('message', payload);
+      this.server.to(payload.chat.id || data.chat.name).emit('message', payload);
     }
 
     /* 👤 DIRECT MESSAGE */
@@ -145,13 +181,7 @@ export class ChatGateway
       const targetSocketId = this.userSockets.get(targetUsername);
 
       if (targetSocketId) {
-        const receiverPayload = {
-          ...payload,
-          chat: {
-            ...data.chat,
-            name: sender,
-          },
-        };
+        const receiverPayload = { ...payload };
 
         // send to receiver
         this.server.to(targetSocketId).emit('message', receiverPayload);
@@ -166,12 +196,12 @@ export class ChatGateway
 
   @SubscribeMessage('typing')
   handleTyping(
-    @MessageBody() data: { user: string; chat: { type: string; name: string } },
+    @MessageBody() data: { user: string; chat: { type: string; name: string; id?: string } },
     @ConnectedSocket() socket: Socket,
   ) {
     // Broadcast typing to room or to DM target
     if (data.chat?.type === 'group') {
-      this.server.to(data.chat.name).emit('typing', { user: data.user });
+      this.server.to(data.chat.id || data.chat.name).emit('typing', { user: data.user });
     } else if (data.chat?.type === 'dm') {
       const targetSocketId = this.userSockets.get(data.chat.name);
       if (targetSocketId) this.server.to(targetSocketId).emit('typing', { user: data.user });

@@ -28,6 +28,7 @@ export async function ensureWebStorage() {
         id TEXT PRIMARY KEY,
         username TEXT NOT NULL,
         username_key TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL DEFAULT '',
         email TEXT,
         email_key TEXT UNIQUE,
         password_hash TEXT,
@@ -36,6 +37,10 @@ export async function ensureWebStorage() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+
+      ALTER TABLE app_users ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';
+
+      CREATE INDEX IF NOT EXISTS idx_app_users_name ON app_users(name);
 
       CREATE TABLE IF NOT EXISTS app_sessions (
         id TEXT PRIMARY KEY,

@@ -14,6 +14,7 @@ const SESSION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const SEEDED_USER = {
   id: 'usr-hardi',
   username: 'Hardi',
+  name: 'Hardik Munjal',
   email: 'hardik.munjaal@gmail.com',
   password: '123',
   quote: 'Building better decisions, one signal at a time.',
@@ -35,6 +36,10 @@ function normalizeUsername(value) {
 
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+function normalizeName(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ');
 }
 
 function validateUsername(value) {
@@ -110,6 +115,7 @@ function buildClientUser(user) {
   return {
     id: user.id,
     username: user.username,
+    name: user.name || user.username,
     email: user.email || '',
     authMethod: user.email ? 'gmail-or-password' : 'password',
     quote: user.quote || 'Building better decisions, one signal at a time.',
@@ -123,6 +129,7 @@ function mapPgUser(row) {
     id: row.id,
     username: row.username,
     usernameKey: row.username_key,
+    name: row.name || row.username,
     email: row.email || '',
     emailKey: row.email_key || undefined,
     passwordHash: row.password_hash || '',
@@ -166,6 +173,7 @@ async function upsertSeededUser(users) {
     id: existing?.id || SEEDED_USER.id,
     username: existing?.username || SEEDED_USER.username,
     usernameKey,
+    name: normalizeName(existing?.name || SEEDED_USER.name || SEEDED_USER.username),
     email: SEEDED_USER.email,
     emailKey,
     passwordHash: hashPassword(SEEDED_USER.password),
@@ -195,11 +203,12 @@ async function ensureSeededUser() {
       const emailKey = normalizeEmail(SEEDED_USER.email);
       await pool.query(
         `INSERT INTO app_users (
-           id, username, username_key, email, email_key, password_hash, quote, avatar, created_at, updated_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+           id, username, username_key, name, email, email_key, password_hash, quote, avatar, created_at, updated_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
          ON CONFLICT (id) DO UPDATE
          SET username = COALESCE(app_users.username, EXCLUDED.username),
              username_key = EXCLUDED.username_key,
+             name = COALESCE(NULLIF(app_users.name, ''), EXCLUDED.name),
              email = EXCLUDED.email,
              email_key = EXCLUDED.email_key,
              password_hash = EXCLUDED.password_hash,
@@ -210,6 +219,7 @@ async function ensureSeededUser() {
           SEEDED_USER.id,
           SEEDED_USER.username,
           usernameKey,
+          normalizeName(SEEDED_USER.name || SEEDED_USER.username),
           SEEDED_USER.email,
           emailKey,
           hashPassword(SEEDED_USER.password),
@@ -328,6 +338,7 @@ export async function signUpUser(payload) {
       id: `usr-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
       username,
       usernameKey,
+      name: normalizeName(payload.name || username),
       email,
       emailKey,
       passwordHash: hashPassword(password),
@@ -337,9 +348,9 @@ export async function signUpUser(payload) {
 
     await pool.query(
       `INSERT INTO app_users (
-         id, username, username_key, email, email_key, password_hash, quote, avatar, created_at, updated_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())`,
-      [user.id, user.username, user.usernameKey, user.email || null, user.emailKey, user.passwordHash, user.quote, user.avatar],
+         id, username, username_key, name, email, email_key, password_hash, quote, avatar, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())`,
+      [user.id, user.username, user.usernameKey, user.name, user.email || null, user.emailKey, user.passwordHash, user.quote, user.avatar],
     );
     return buildClientUser(user);
   }
@@ -363,6 +374,7 @@ export async function signUpUser(payload) {
     id: `usr-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
     username,
     usernameKey,
+    name: normalizeName(payload.name || username),
     ...(email ? { email, emailKey } : {}),
     passwordHash: hashPassword(password),
     quote: 'Building better decisions, one signal at a time.',
@@ -554,6 +566,7 @@ export async function updateAuthenticatedProfile(userId, payload) {
       ...existing,
       username,
       usernameKey,
+      name: normalizeName(payload.name ?? existing.name ?? existing.username),
       email,
       emailKey,
       quote: String(payload.quote ?? existing.quote ?? '').trim() || 'Building better decisions, one signal at a time.',
@@ -565,13 +578,14 @@ export async function updateAuthenticatedProfile(userId, payload) {
       `UPDATE app_users
        SET username = $2,
            username_key = $3,
-           email = $4,
-           email_key = $5,
-           quote = $6,
-           avatar = $7,
-           updated_at = $8
+           name = $4,
+           email = $5,
+           email_key = $6,
+           quote = $7,
+           avatar = $8,
+           updated_at = $9
        WHERE id = $1`,
-      [existing.id, nextUser.username, nextUser.usernameKey, nextUser.email || null, nextUser.emailKey, nextUser.quote, nextUser.avatar, nextUser.updatedAt],
+      [existing.id, nextUser.username, nextUser.usernameKey, nextUser.name, nextUser.email || null, nextUser.emailKey, nextUser.quote, nextUser.avatar, nextUser.updatedAt],
     );
     return buildClientUser(nextUser);
   }
@@ -598,6 +612,7 @@ export async function updateAuthenticatedProfile(userId, payload) {
     ...existing,
     username,
     usernameKey,
+    name: normalizeName(payload.name ?? existing.name ?? existing.username),
     quote: String(payload.quote ?? existing.quote ?? '').trim() || 'Building better decisions, one signal at a time.',
     avatar: payload.avatar ?? existing.avatar ?? '',
     updatedAt: new Date().toISOString(),
@@ -613,6 +628,68 @@ export async function updateAuthenticatedProfile(userId, payload) {
 
   await users.updateAsync({ id: existing.id }, nextUser, {});
   return buildClientUser(nextUser);
+}
+
+export async function searchUsers(query, excludeUserId = '') {
+  const normalizedQuery = normalizeName(query).toLowerCase();
+  if (!normalizedQuery) return [];
+
+  if (hasPostgresStorage()) {
+    await ensureSeededUser();
+    const pool = getWebPool();
+    const result = await pool.query(
+      `SELECT id, username, COALESCE(name, username) AS name, avatar
+       FROM app_users
+       WHERE id <> $1
+         AND (
+           LOWER(username) LIKE $2
+           OR LOWER(COALESCE(name, '')) LIKE $2
+         )
+       ORDER BY CASE
+         WHEN LOWER(username) = $3 THEN 0
+         WHEN LOWER(COALESCE(name, '')) = $3 THEN 1
+         WHEN LOWER(username) LIKE $4 THEN 2
+         WHEN LOWER(COALESCE(name, '')) LIKE $4 THEN 3
+         ELSE 4
+       END,
+       username ASC
+       LIMIT 12`,
+      [String(excludeUserId || ''), `%${normalizedQuery}%`, normalizedQuery, `${normalizedQuery}%`],
+    );
+    return result.rows.map((row) => ({
+      id: row.id,
+      username: row.username,
+      name: row.name || row.username,
+      avatar: row.avatar || '',
+    }));
+  }
+
+  const { users } = await getStores();
+  const userDocs = await users.findAsync({}).execAsync();
+  return userDocs
+    .filter((user) => user.id !== String(excludeUserId || ''))
+    .map((user) => ({
+      id: user.id,
+      username: user.username,
+      name: normalizeName(user.name || user.username),
+      avatar: user.avatar || '',
+    }))
+    .filter((user) => {
+      const username = String(user.username || '').toLowerCase();
+      const name = String(user.name || '').toLowerCase();
+      return username.includes(normalizedQuery) || name.includes(normalizedQuery);
+    })
+    .sort((left, right) => {
+      const leftUsername = left.username.toLowerCase();
+      const rightUsername = right.username.toLowerCase();
+      const leftName = left.name.toLowerCase();
+      const rightName = right.name.toLowerCase();
+      const leftRank = leftUsername === normalizedQuery ? 0 : leftName === normalizedQuery ? 1 : leftUsername.startsWith(normalizedQuery) ? 2 : leftName.startsWith(normalizedQuery) ? 3 : 4;
+      const rightRank = rightUsername === normalizedQuery ? 0 : rightName === normalizedQuery ? 1 : rightUsername.startsWith(normalizedQuery) ? 2 : rightName.startsWith(normalizedQuery) ? 3 : 4;
+      if (leftRank !== rightRank) return leftRank - rightRank;
+      return left.username.localeCompare(right.username);
+    })
+    .slice(0, 12);
 }
 
 export { SESSION_COOKIE_NAME, USERS_DB_FILE, SESSIONS_DB_FILE };
