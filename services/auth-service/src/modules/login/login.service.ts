@@ -29,7 +29,8 @@ export class LoginService {
     if (!this.hasDatabase()) return null;
     if (!this.schemaPromise) {
       const pool = this.getPool();
-      this.schemaPromise = pool?.query(`
+      if (!pool) return null;
+      this.schemaPromise = pool.query(`
         CREATE TABLE IF NOT EXISTS app_users (
           id TEXT PRIMARY KEY,
           username TEXT NOT NULL,
