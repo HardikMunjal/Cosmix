@@ -478,7 +478,7 @@ export class ChatService {
 
     private async assertGroupPermission(username: string, groupId: string, permission: 'view' | 'post' | 'comment' | 'invite') {
         if (groupId === GENERAL_GROUP_ID) {
-            return;
+            throw new ForbiddenException('Open workspace chat is disabled. Use a buddy or group conversation.');
         }
 
         const normalizedUsername = this.normalizeUsername(username);

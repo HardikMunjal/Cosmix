@@ -64,14 +64,6 @@ export class ChatGateway
     this.userSockets.set(username, socket.id);
     this.userActors.set(socket.id, { username, userId: data.userId || null, avatar: data.avatar || null });
 
-    /* Auto join default room */
-    socket.join('general');
-
-    const recentMessages = await this.chatService.getMessagesForChat({ type: 'group', id: 'general', name: 'general' }, username);
-    if (recentMessages.length) {
-      socket.emit('history', { chat: { type: 'group', id: 'general', name: 'general' }, messages: recentMessages });
-    }
-
     this.server.emit('online_users', this.getOnlineUsers());
 
     console.log(`${username} joined`);

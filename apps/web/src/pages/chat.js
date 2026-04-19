@@ -6,7 +6,34 @@ import { useTheme } from '../lib/ThemePicker';
 
 let socket = null;
 
-const GENERAL_CHAT = { type: 'group', id: 'general', name: 'general', label: 'General' };
+function sameChat(left, right) {
+  if (!left || !right) return false;
+  return left.type === right.type && left.id === right.id && left.name === right.name;
+}
+
+function getChatKey(chat) {
+  if (!chat?.type || !chat?.id) return '';
+  return `${chat.type}:${chat.id}`;
+}
+
+function getDefaultChat(bootstrap, currentUsername) {
+  const firstFriend = bootstrap?.friends?.[0];
+  if (firstFriend && currentUsername) {
+    return {
+      type: 'dm',
+      id: buildDmId(currentUsername, firstFriend),
+      name: firstFriend,
+      label: firstFriend,
+    };
+  }
+
+  const firstGroup = bootstrap?.groups?.[0];
+  if (firstGroup) {
+    return { type: 'group', id: firstGroup.id, name: firstGroup.name, label: firstGroup.name };
+  }
+
+  return null;
+}
 
 function buildDmId(left, right) {
   return ['' + left, '' + right]
@@ -74,55 +101,11 @@ function createStyles(theme) {
       display: 'grid',
       gap: '16px',
     },
-    header: {
-      display: 'flex',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      flexWrap: 'wrap',
-      gap: '16px',
-      borderRadius: '28px',
-      padding: '18px 20px',
-      border: `1px solid ${theme.cardBorder}`,
-      background: `linear-gradient(135deg, ${theme.panelBg}, ${theme.cardBg})`,
-      boxShadow: `0 24px 64px ${theme.shadow}`,
-    },
-    eyebrow: {
-      margin: 0,
-      fontSize: '11px',
-      textTransform: 'uppercase',
-      letterSpacing: '0.14em',
-      fontWeight: 800,
-      color: theme.textMuted,
-    },
-    title: {
-      margin: '6px 0 0',
-      fontSize: '30px',
-      fontWeight: 800,
-      color: theme.textHeading,
-    },
-    subtitle: {
-      margin: '10px 0 0',
-      maxWidth: '720px',
-      color: theme.textSecondary,
-      lineHeight: 1.7,
-      fontSize: '14px',
-    },
-    statusPill: {
-      padding: '10px 14px',
-      borderRadius: '999px',
-      border: `1px solid ${theme.cardBorder}`,
-      background: theme.cardBg,
-      color: theme.textSecondary,
-      fontSize: '12px',
-      fontWeight: 800,
-      textTransform: 'uppercase',
-      letterSpacing: '0.08em',
-    },
     layout: {
       display: 'grid',
       gridTemplateColumns: '340px minmax(0, 1fr)',
       gap: '16px',
-      minHeight: 'calc(100vh - 170px)',
+      minHeight: 'calc(100vh - 48px)',
     },
     panel: {
       borderRadius: '28px',
@@ -267,6 +250,17 @@ function createStyles(theme) {
       alignItems: 'center',
       background: `linear-gradient(180deg, ${theme.panelBg}, ${theme.cardBg})`,
     },
+    connectionPill: {
+      padding: '10px 14px',
+      borderRadius: '999px',
+      border: `1px solid ${theme.cardBorder}`,
+      background: theme.cardBg,
+      color: theme.textSecondary,
+      fontSize: '12px',
+      fontWeight: 800,
+      textTransform: 'uppercase',
+      letterSpacing: '0.08em',
+    },
     threadName: {
       margin: 0,
       fontSize: '26px',
@@ -312,6 +306,19 @@ function createStyles(theme) {
       fontWeight: 800,
       textTransform: 'uppercase',
       letterSpacing: '0.08em',
+    },
+    unreadBadge: {
+      minWidth: '24px',
+      height: '24px',
+      padding: '0 8px',
+      borderRadius: '999px',
+      background: theme.orange,
+      color: '#fff',
+      display: 'grid',
+      placeItems: 'center',
+      fontSize: '11px',
+      fontWeight: 800,
+      justifySelf: 'start',
     },
     imageGrid: {
       display: 'grid',
@@ -420,6 +427,36 @@ function createStyles(theme) {
       lineHeight: 1.6,
       margin: 0,
     },
+    toastStack: {
+      position: 'fixed',
+      right: '20px',
+      bottom: '20px',
+      display: 'grid',
+      gap: '10px',
+      zIndex: 40,
+      width: 'min(360px, calc(100vw - 32px))',
+    },
+    toast: {
+      padding: '14px 16px',
+      borderRadius: '18px',
+      border: `1px solid ${theme.cardBorder}`,
+      background: theme.panelBg,
+      boxShadow: `0 18px 44px ${theme.shadow}`,
+      display: 'grid',
+      gap: '6px',
+    },
+    toastTitle: {
+      margin: 0,
+      fontSize: '13px',
+      fontWeight: 800,
+      color: theme.textHeading,
+    },
+    toastBody: {
+      margin: 0,
+      fontSize: '12px',
+      lineHeight: 1.5,
+      color: theme.textSecondary,
+    },
   };
 }
 
@@ -439,13 +476,14 @@ export default function ChatPage() {
   const [user, setUser] = useState(null);
   const [bootstrap, setBootstrap] = useState({ friends: [], incomingRequests: [], outgoingRequests: [], groups: [] });
   const [messages, setMessages] = useState([]);
-  const [activeChat, setActiveChat] = useState(GENERAL_CHAT);
+  const [activeChat, setActiveChat] = useState(null);
   const [onlineUsers, setOnlineUsers] = useState([]);
   const [typingUsers, setTypingUsers] = useState([]);
   const [composerText, setComposerText] = useState('');
   const [buddySearch, setBuddySearch] = useState('');
   const [buddyResults, setBuddyResults] = useState([]);
   const [buddySearchState, setBuddySearchState] = useState('idle');
+  const [buddySearchError, setBuddySearchError] = useState('');
   const [inviteToken, setInviteToken] = useState('');
   const [statusMessage, setStatusMessage] = useState('Loading chat workspace...');
   const [connectionState, setConnectionState] = useState('connecting');
@@ -453,10 +491,15 @@ export default function ChatPage() {
   const [visibilityForm, setVisibilityForm] = useState({ members: '', viewers: '' });
   const [imageCaption, setImageCaption] = useState('');
   const [commentDrafts, setCommentDrafts] = useState({});
+  const [unreadCounts, setUnreadCounts] = useState({});
+  const [toasts, setToasts] = useState([]);
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const inviteHandledRef = useRef(false);
+  const activeChatRef = useRef(null);
+  const incomingRequestsRef = useRef([]);
+  const permissionAskedRef = useRef(false);
 
   const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
   const isLocalHost = host === 'localhost' || host === '127.0.0.1';
@@ -464,15 +507,18 @@ export default function ChatPage() {
 
   const flattenedGroups = useMemo(() => flattenGroups(bootstrap.groups), [bootstrap.groups]);
   const selectedGroup = useMemo(
-    () => bootstrap.groups.find((group) => group.id === activeChat.id) || null,
-    [bootstrap.groups, activeChat.id],
+    () => (activeChat?.id ? bootstrap.groups.find((group) => group.id === activeChat.id) || null : null),
+    [bootstrap.groups, activeChat?.id],
   );
   const selectedMembership = useMemo(
     () => selectedGroup?.memberships.find((membership) => membership.username === user?.username) || null,
     [selectedGroup, user?.username],
   );
   const visibleMessages = useMemo(
-    () => messages.filter((message) => message.chat?.type === activeChat.type && (message.chat?.id || message.chat?.name) === activeChat.id),
+    () => {
+      if (!activeChat) return [];
+      return messages.filter((message) => message.chat?.type === activeChat.type && (message.chat?.id || message.chat?.name) === activeChat.id);
+    },
     [messages, activeChat],
   );
   const childGroups = useMemo(
@@ -480,27 +526,162 @@ export default function ChatPage() {
     [bootstrap.groups, selectedGroup?.id],
   );
 
+  useEffect(() => {
+    activeChatRef.current = activeChat;
+  }, [activeChat]);
+
+  useEffect(() => {
+    incomingRequestsRef.current = bootstrap.incomingRequests || [];
+  }, [bootstrap.incomingRequests]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !user?.username || permissionAskedRef.current) return;
+    if (!('Notification' in window) || window.Notification.permission !== 'default') return;
+    permissionAskedRef.current = true;
+    window.Notification.requestPermission().catch(() => {});
+  }, [user?.username]);
+
+  function pushToast(title, body = '') {
+    const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setToasts((previous) => [...previous.slice(-3), { id, title, body }]);
+    window.setTimeout(() => {
+      setToasts((previous) => previous.filter((toast) => toast.id !== id));
+    }, 4200);
+  }
+
+  function notifyUser(title, body = '', tag = '') {
+    pushToast(title, body);
+
+    if (typeof window === 'undefined' || !('Notification' in window)) return;
+    if (window.Notification.permission !== 'granted' || !document.hidden) return;
+
+    try {
+      new window.Notification(title, { body, tag: tag || title });
+    } catch (_) {
+      // Ignore notification API failures.
+    }
+  }
+
   function applyBootstrap(nextBootstrap, nextChat = null) {
     setBootstrap(nextBootstrap);
+    const fallbackChat = getDefaultChat(nextBootstrap, user?.username);
+
     if (nextChat) {
       setActiveChat(nextChat);
       return;
     }
 
-    if (activeChat.type === 'group' && activeChat.id !== GENERAL_CHAT.id) {
-      const matchingGroup = nextBootstrap.groups.find((group) => group.id === activeChat.id);
-      if (!matchingGroup) {
-        setActiveChat(GENERAL_CHAT);
+    if (!activeChat) {
+      setActiveChat(fallbackChat);
+      return;
+    }
+
+    if (activeChat.type === 'dm') {
+      if (!nextBootstrap.friends.includes(activeChat.name)) {
+        setActiveChat(fallbackChat);
       }
+      return;
+    }
+
+    const matchingGroup = nextBootstrap.groups.find((group) => group.id === activeChat.id);
+    if (!matchingGroup) {
+      setActiveChat(fallbackChat);
     }
   }
 
-  async function fetchBootstrap(preferredChat = null) {
-    if (!user?.username) return;
-    const response = await fetch(`${chatApiBase}/bootstrap?username=${encodeURIComponent(user.username)}`);
-    const payload = await readJsonResponse(response);
-    applyBootstrap(payload, preferredChat);
+  function reportStatus(message, detail = '') {
+    setStatusMessage(message);
+    pushToast(message, detail);
   }
+
+  function reportError(message) {
+    setStatusMessage(message);
+    pushToast('Action failed', message);
+  }
+
+  function describeChat(chat) {
+    if (!chat) return 'conversation';
+    return chat.type === 'dm' ? `@${chat.name}` : `#${chat.name}`;
+  }
+
+  function isChatOpen(chat) {
+    return sameChat(activeChatRef.current, chat);
+  }
+
+  function buildIncomingChat(payload) {
+    const chat = payload?.chat;
+    if (!chat?.type) return null;
+    return {
+      type: chat.type,
+      id: chat.id || chat.name,
+      name: chat.name,
+      label: chat.name,
+    };
+  }
+
+  function summarizeMessage(payload) {
+    const text = String(payload?.text || payload?.gif || '').trim();
+    return text.length > 96 ? `${text.slice(0, 93)}...` : text;
+  }
+
+  function selectChat(nextChat) {
+    setActiveChat(nextChat);
+    setTypingUsers([]);
+    const chatKey = getChatKey(nextChat);
+    if (!chatKey) return;
+    setUnreadCounts((previous) => {
+      if (!previous[chatKey]) return previous;
+      const next = { ...previous };
+      delete next[chatKey];
+      return next;
+    });
+  }
+
+  function incrementUnread(chat) {
+    const chatKey = getChatKey(chat);
+    if (!chatKey) return;
+    setUnreadCounts((previous) => ({
+      ...previous,
+      [chatKey]: (previous[chatKey] || 0) + 1,
+    }));
+  }
+
+  async function loadBootstrapSnapshot() {
+    if (!user?.username) return null;
+    const response = await fetch(`${chatApiBase}/bootstrap?username=${encodeURIComponent(user.username)}`);
+    return readJsonResponse(response);
+  }
+
+  async function fetchBootstrap(preferredChat = null) {
+    const payload = await loadBootstrapSnapshot();
+    if (!payload) return null;
+    applyBootstrap(payload, preferredChat);
+    return payload;
+  }
+
+  useEffect(() => {
+    if (!user?.username) return undefined;
+
+    const interval = window.setInterval(async () => {
+      try {
+        const payload = await loadBootstrapSnapshot();
+        if (!payload) return;
+
+        const previousIncoming = new Set(incomingRequestsRef.current || []);
+        (payload.incomingRequests || []).forEach((requester) => {
+          if (!previousIncoming.has(requester)) {
+            notifyUser('New buddy request', `${requester} sent you a buddy request.`, `buddy-request-${requester}`);
+          }
+        });
+
+        applyBootstrap(payload);
+      } catch (_) {
+        // Background refresh failures should not interrupt the UI.
+      }
+    }, 10000);
+
+    return () => window.clearInterval(interval);
+  }, [chatApiBase, user?.username]);
 
   useEffect(() => {
     let active = true;
@@ -520,7 +701,7 @@ export default function ChatPage() {
     fetchBootstrap().then(() => {
       setStatusMessage('Ready');
     }).catch((error) => {
-      setStatusMessage(error.message);
+      reportError(error.message);
     });
   }, [user?.username]);
 
@@ -549,6 +730,21 @@ export default function ChatPage() {
 
     socket.on('message', (payload) => {
       setMessages((previous) => mergeMessages(previous, [payload]));
+
+      if (!payload?.user || payload.user === user.username) return;
+      const incomingChat = buildIncomingChat(payload);
+      if (!incomingChat) return;
+
+      const title = incomingChat.type === 'dm'
+        ? `New message from ${payload.user}`
+        : `${payload.user} in ${describeChat(incomingChat)}`;
+      const body = summarizeMessage(payload) || 'Sent you a message.';
+      if (!isChatOpen(incomingChat)) {
+        incrementUnread(incomingChat);
+      }
+      if (!isChatOpen(incomingChat) || document.hidden) {
+        notifyUser(title, body, payload.id || `${incomingChat.id}-${payload.timestamp}`);
+      }
     });
 
     socket.on('online_users', (list) => {
@@ -565,7 +761,7 @@ export default function ChatPage() {
     });
 
     socket.on('chat_error', (payload) => {
-      setStatusMessage(payload?.message || 'Chat request failed.');
+      reportError(payload?.message || 'Chat request failed.');
     });
 
     return () => {
@@ -582,7 +778,7 @@ export default function ChatPage() {
   }, [bootstrap.groups, connectionState]);
 
   useEffect(() => {
-    if (!socket || connectionState !== 'connected' || !user?.username) return;
+    if (!socket || connectionState !== 'connected' || !user?.username || !activeChat) return;
     socket.emit('open_chat', { chat: { type: activeChat.type, id: activeChat.id, name: activeChat.name } });
   }, [activeChat, connectionState, user?.username]);
 
@@ -613,13 +809,13 @@ export default function ChatPage() {
         const joinedGroup = payload.groups.find((group) => group.shareToken === token);
         applyBootstrap(
           payload,
-          joinedGroup ? { type: 'group', id: joinedGroup.id, name: joinedGroup.name, label: joinedGroup.name } : GENERAL_CHAT,
+          joinedGroup ? { type: 'group', id: joinedGroup.id, name: joinedGroup.name, label: joinedGroup.name } : getDefaultChat(payload, user?.username),
         );
         router.replace('/chat', undefined, { shallow: true });
-        setStatusMessage(joinedGroup ? `Joined ${joinedGroup.name}` : 'Invite processed.');
+        reportStatus(joinedGroup ? `Joined ${joinedGroup.name}` : 'Invite processed.');
       })
       .catch((error) => {
-        setStatusMessage(error.message);
+        reportError(error.message);
       });
   }, [chatApiBase, router, user?.username]);
 
@@ -644,9 +840,10 @@ export default function ChatPage() {
       setBuddySearch('');
       setBuddyResults([]);
       setBuddySearchState('idle');
-      setStatusMessage('Buddy request sent.');
+      setBuddySearchError('');
+      reportStatus('Buddy request sent.', `Request sent to ${targetUsername}.`);
     } catch (error) {
-      setStatusMessage(error.message);
+      reportError(error.message);
     }
   }
 
@@ -656,19 +853,20 @@ export default function ChatPage() {
         actorUsername: user.username,
         requesterUsername,
       });
-      setStatusMessage(`You are now connected with ${requesterUsername}.`);
+      reportStatus(`You are now connected with ${requesterUsername}.`);
     } catch (error) {
-      setStatusMessage(error.message);
+      reportError(error.message);
     }
   }
 
   useEffect(() => {
-    if (!user?.id) return;
+    if (!user?.username) return;
 
     const query = buddySearch.trim();
     if (!query) {
       setBuddyResults([]);
       setBuddySearchState('idle');
+      setBuddySearchError('');
       return;
     }
 
@@ -676,6 +874,7 @@ export default function ChatPage() {
     const timer = window.setTimeout(async () => {
       try {
         setBuddySearchState('loading');
+        setBuddySearchError('');
         const response = await fetch(`/api/chat/buddy-search?q=${encodeURIComponent(query)}`, {
           signal: controller.signal,
         });
@@ -685,7 +884,7 @@ export default function ChatPage() {
       } catch (error) {
         if (error.name === 'AbortError') return;
         setBuddySearchState('error');
-        setStatusMessage(error.message || 'Unable to search buddies.');
+        setBuddySearchError(error.message || 'Unable to search buddies.');
       }
     }, 220);
 
@@ -693,7 +892,7 @@ export default function ChatPage() {
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [buddySearch, user?.id]);
+  }, [buddySearch, user?.username]);
 
   async function handleCreateGroup(event) {
     event.preventDefault();
@@ -719,9 +918,9 @@ export default function ChatPage() {
         },
       );
       setGroupForm({ name: '', description: '', parentGroupId: '', members: '', viewers: '' });
-      setStatusMessage('Group created.');
+      reportStatus('Group created.');
     } catch (error) {
-      setStatusMessage(error.message);
+      reportError(error.message);
     }
   }
 
@@ -736,11 +935,11 @@ export default function ChatPage() {
         viewerUsernames: parseCommaList(visibilityForm.viewers),
       }, (payload) => {
         const refreshed = payload.groups.find((group) => group.id === selectedGroup.id);
-        return refreshed ? { type: 'group', id: refreshed.id, name: refreshed.name, label: refreshed.name } : GENERAL_CHAT;
+        return refreshed ? { type: 'group', id: refreshed.id, name: refreshed.name, label: refreshed.name } : getDefaultChat(payload, user?.username);
       });
-      setStatusMessage('Group visibility updated.');
+      reportStatus('Group visibility updated.');
     } catch (error) {
-      setStatusMessage(error.message);
+      reportError(error.message);
     }
   }
 
@@ -755,12 +954,12 @@ export default function ChatPage() {
       });
       const joinedGroup = payload.groups.find((group) => group.shareToken === inviteToken.trim());
       if (joinedGroup) {
-        setActiveChat({ type: 'group', id: joinedGroup.id, name: joinedGroup.name, label: joinedGroup.name });
+        selectChat({ type: 'group', id: joinedGroup.id, name: joinedGroup.name, label: joinedGroup.name });
       }
       setInviteToken('');
-      setStatusMessage('Invite link accepted.');
+      reportStatus('Invite link accepted.');
     } catch (error) {
-      setStatusMessage(error.message);
+      reportError(error.message);
     }
   }
 
@@ -783,14 +982,14 @@ export default function ChatPage() {
         caption: imageCaption.trim(),
       }, (payload) => {
         const refreshed = payload.groups.find((group) => group.id === selectedGroup.id);
-        return refreshed ? { type: 'group', id: refreshed.id, name: refreshed.name, label: refreshed.name } : GENERAL_CHAT;
+        return refreshed ? { type: 'group', id: refreshed.id, name: refreshed.name, label: refreshed.name } : getDefaultChat(payload, user?.username);
       });
 
       setImageCaption('');
       event.target.value = '';
-      setStatusMessage('Group image uploaded.');
+      reportStatus('Group image uploaded.');
     } catch (error) {
-      setStatusMessage(error.message);
+      reportError(error.message);
     }
   }
 
@@ -804,17 +1003,17 @@ export default function ChatPage() {
         body,
       }, (payload) => {
         const refreshed = payload.groups.find((group) => group.id === selectedGroup.id);
-        return refreshed ? { type: 'group', id: refreshed.id, name: refreshed.name, label: refreshed.name } : GENERAL_CHAT;
+        return refreshed ? { type: 'group', id: refreshed.id, name: refreshed.name, label: refreshed.name } : getDefaultChat(payload, user?.username);
       });
       setCommentDrafts((previous) => ({ ...previous, [imageId]: '' }));
-      setStatusMessage('Comment added.');
+      reportStatus('Comment added.');
     } catch (error) {
-      setStatusMessage(error.message);
+      reportError(error.message);
     }
   }
 
   function selectFriend(friendName) {
-    setActiveChat({
+    selectChat({
       type: 'dm',
       id: buildDmId(user.username, friendName),
       name: friendName,
@@ -823,11 +1022,11 @@ export default function ChatPage() {
   }
 
   function selectGroup(group) {
-    setActiveChat({ type: 'group', id: group.id, name: group.name, label: group.name });
+    selectChat({ type: 'group', id: group.id, name: group.name, label: group.name });
   }
 
   function emitTyping() {
-    if (!socket || connectionState !== 'connected' || !user?.username) return;
+    if (!socket || connectionState !== 'connected' || !user?.username || !activeChat) return;
     socket.emit('typing', { user: user.username, chat: { type: activeChat.type, id: activeChat.id, name: activeChat.name } });
   }
 
@@ -838,7 +1037,7 @@ export default function ChatPage() {
 
   function handleSendMessage(event) {
     event.preventDefault();
-    if (!socket || !composerText.trim() || connectionState !== 'connected') return;
+    if (!socket || !activeChat || !composerText.trim() || connectionState !== 'connected') return;
     socket.emit('message', {
       type: 'text',
       text: composerText.trim(),
@@ -862,24 +1061,8 @@ export default function ChatPage() {
   return (
     <div className="chat-page" style={styles.page}>
       <div style={styles.shell}>
-        <header style={styles.header}>
-          <div>
-            <p style={styles.eyebrow}>Messaging</p>
-            <h1 style={styles.title}>Messaging Workspace</h1>
-          </div>
-          <div style={styles.statusPill}>{connectionState}</div>
-        </header>
-
         <div className="chat-layout" style={styles.layout}>
           <aside style={{ ...styles.panel, ...styles.sidebar }}>
-            <section style={styles.block}>
-              <p style={styles.sectionTitle}>Workspace</p>
-              <div style={styles.badgeRow}>
-                <span style={styles.badge}>{user?.username || 'anonymous'}</span>
-                <span style={styles.badge}>{statusMessage}</span>
-              </div>
-            </section>
-
             <form style={styles.block} onSubmit={handleJoinByToken}>
               <p style={styles.sectionTitle}>Join By Share Token</p>
               <input
@@ -897,9 +1080,9 @@ export default function ChatPage() {
                 style={styles.textInput}
                 value={buddySearch}
                 onChange={(event) => setBuddySearch(event.target.value)}
-                placeholder="Search by username or name"
               />
               {buddySearchState === 'loading' ? <p style={styles.helperText}>Searching users...</p> : null}
+              {buddySearchError ? <p style={styles.helperText}>{buddySearchError}</p> : null}
               {buddySearch.trim() && buddySearchState === 'done' && buddyResults.length === 0 ? <p style={styles.helperText}>No matching users found.</p> : null}
               {buddyResults.map((result) => {
                 const isBuddy = bootstrap.friends.includes(result.username);
@@ -910,7 +1093,7 @@ export default function ChatPage() {
                     <div style={styles.searchMetaRow}>
                       <div>
                         <div style={styles.listTitle}>{result.name || result.username}</div>
-                        <div style={styles.listMeta}>@ {result.username}</div>
+                        <div style={styles.listMeta}>@{result.username}</div>
                       </div>
                       {isBuddy ? <span style={styles.badge}>Buddy</span> : null}
                       {isPending ? <span style={styles.badge}>Pending</span> : null}
@@ -953,14 +1136,15 @@ export default function ChatPage() {
 
             <section style={styles.block}>
               <p style={styles.sectionTitle}>Buddies</p>
-              <button type="button" style={styles.listButton} onClick={() => setActiveChat(GENERAL_CHAT)}>
-                <span style={styles.listTitle}># General</span>
-                <span style={styles.listMeta}>Always available</span>
-              </button>
               {bootstrap.friends.length ? bootstrap.friends.map((friendName) => (
                 <button key={friendName} type="button" style={styles.listButton} onClick={() => selectFriend(friendName)}>
-                  <span style={styles.listTitle}>@ {friendName}</span>
+                  <span style={styles.listTitle}>@{friendName}</span>
                   <span style={styles.listMeta}>{onlineUsers.includes(friendName) ? 'Online now' : 'Offline'}</span>
+                  {unreadCounts[getChatKey({ type: 'dm', id: buildDmId(user?.username || '', friendName) })] ? (
+                    <span style={styles.unreadBadge}>
+                      {unreadCounts[getChatKey({ type: 'dm', id: buildDmId(user?.username || '', friendName) })]}
+                    </span>
+                  ) : null}
                 </button>
               )) : <p style={styles.helperText}>Accepted buddies will appear here for direct messaging.</p>}
             </section>
@@ -976,6 +1160,9 @@ export default function ChatPage() {
                 >
                   <span style={styles.listTitle}>{depth ? 'Subgroup' : 'Group'}: {group.name}</span>
                   <span style={styles.listMeta}>{group.memberships.length} visible members</span>
+                  {unreadCounts[getChatKey({ type: 'group', id: group.id })] ? (
+                    <span style={styles.unreadBadge}>{unreadCounts[getChatKey({ type: 'group', id: group.id })]}</span>
+                  ) : null}
                 </button>
               )) : <p style={styles.helperText}>No custom groups yet.</p>}
             </section>
@@ -1023,20 +1210,31 @@ export default function ChatPage() {
           <section style={{ ...styles.panel, ...styles.main }}>
             <div style={styles.topBar}>
               <div>
-                <h2 style={styles.threadName}>{activeChat.type === 'dm' ? `@ ${activeChat.label || activeChat.name}` : `# ${activeChat.label || activeChat.name}`}</h2>
+                <h2 style={styles.threadName}>
+                  {activeChat
+                    ? activeChat.type === 'dm'
+                      ? `@${activeChat.label || activeChat.name}`
+                      : `#${activeChat.label || activeChat.name}`
+                    : 'No conversation selected'}
+                </h2>
                 <p style={styles.threadMeta}>
-                  {activeChat.type === 'dm'
+                  {!activeChat
+                    ? 'Start by connecting with a buddy or joining a group.'
+                    : activeChat.type === 'dm'
                     ? 'Direct messaging is available for connected buddies.'
-                    : selectedGroup?.description || 'General channel for everyone in the workspace.'}
+                    : selectedGroup?.description || 'Only members of this group can view and post here.'}
                 </p>
               </div>
 
-              {selectedGroup ? (
+              <div style={styles.actionsRow}>
+                <span style={styles.connectionPill}>{connectionState}</span>
+                {selectedGroup ? (
                 <div style={styles.actionsRow}>
                   <button type="button" style={styles.secondaryButton} onClick={openWhatsAppShare}>Share To WhatsApp</button>
                   <button type="button" style={styles.secondaryButton} onClick={() => navigator.clipboard?.writeText(selectedGroup.shareToken)}>Copy Token</button>
                 </div>
-              ) : null}
+                ) : null}
+              </div>
             </div>
 
             {selectedGroup ? (
@@ -1165,7 +1363,9 @@ export default function ChatPage() {
                 </div>
               )) : (
                 <div style={styles.empty}>
-                  Start the thread. Group access, subgroup visibility, and image discussions all feed into this timeline.
+                  {activeChat
+                    ? 'No messages yet in this conversation.'
+                    : 'No buddy or group conversation is available yet.'}
                 </div>
               )}
               <div ref={messagesEndRef} />
@@ -1181,21 +1381,35 @@ export default function ChatPage() {
                   style={styles.textarea}
                   value={composerText}
                   onChange={handleComposerChange}
-                  placeholder={activeChat.type === 'dm' ? `Message ${activeChat.name}` : `Message ${activeChat.name}`}
+                  placeholder={activeChat ? `Message ${activeChat.name}` : 'Select a buddy or group'}
+                  disabled={!activeChat}
                 />
-                <button type="submit" style={styles.primaryButton}>Send</button>
+                <button type="submit" style={styles.primaryButton} disabled={!activeChat}>Send</button>
               </div>
               <p style={styles.helperText}>
-                {activeChat.type === 'dm'
+                {!activeChat
+                  ? 'Messaging is available only with accepted buddies or members of your groups.'
+                  : activeChat.type === 'dm'
                   ? 'Direct messages require an accepted buddy connection.'
                   : selectedGroup
                     ? 'Posting inside custom groups follows the group visibility and posting rules.'
-                    : 'General chat is open to everyone.'}
+                    : 'Messaging is available only inside your allowed conversations.'}
               </p>
             </form>
           </section>
         </div>
       </div>
+
+      {toasts.length ? (
+        <div style={styles.toastStack}>
+          {toasts.map((toast) => (
+            <div key={toast.id} style={styles.toast}>
+              <p style={styles.toastTitle}>{toast.title}</p>
+              {toast.body ? <p style={styles.toastBody}>{toast.body}</p> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       <style jsx>{`
         @media (max-width: 980px) {
