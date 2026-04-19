@@ -7,7 +7,7 @@ import { CreateUserDto } from './dto/create-user.dto';
 export class UsersService {
     private users: User[] = [];
     private readonly databaseUrl = process.env.DATABASE_URL || '';
-    private pool: Pool | null = null;
+    private pool: any = null;
     private schemaPromise: Promise<unknown> | null = null;
 
     private hasDatabase() {

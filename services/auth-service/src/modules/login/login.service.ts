@@ -6,7 +6,7 @@ import { LoginDto } from './dto/login.dto';
 @Injectable()
 export class LoginService {
   private readonly databaseUrl = process.env.DATABASE_URL || '';
-  private pool: Pool | null = null;
+  private pool: any = null;
   private schemaPromise: Promise<unknown> | null = null;
 
   constructor(
