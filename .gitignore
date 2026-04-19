@@ -50,6 +50,9 @@ Thumbs.db
 # Local scripts
 _test_ws.js
 
+# Prevent ts-node from picking stale compiled files over chat TypeScript sources
+services/chat-service/src/modules/chat/*.js
+
 # Archives
 *.tgz
 
