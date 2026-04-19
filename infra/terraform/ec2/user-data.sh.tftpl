@@ -36,7 +36,7 @@ if [ -n "${repo_url}" ]; then
 POSTGRES_USER=${postgres_user}
 POSTGRES_PASSWORD=${postgres_password}
 POSTGRES_DB=${postgres_db}
-DATABASE_URL=postgres://${postgres_user}:${postgres_password}@postgres:5432/${postgres_db}
+DATABASE_URL=postgres://${postgres_user}:${urlencode(postgres_password)}@postgres:5432/${postgres_db}
 STRAVA_CLIENT_ID=${strava_client_id}
 STRAVA_CLIENT_SECRET=${strava_client_secret}
 EOF
