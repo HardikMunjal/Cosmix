@@ -26,7 +26,8 @@ export class UsersService {
         if (!this.hasDatabase()) return null;
         if (!this.schemaPromise) {
             const pool = this.getPool();
-            this.schemaPromise = pool?.query(`
+            if (!pool) return null;
+            this.schemaPromise = pool.query(`
                 CREATE TABLE IF NOT EXISTS app_users (
                     id TEXT PRIMARY KEY,
                     username TEXT NOT NULL,
@@ -83,7 +84,7 @@ export class UsersService {
         if (this.hasDatabase()) {
             const pool = await this.ensureSchema();
             const result = await pool!.query('SELECT * FROM app_users ORDER BY created_at DESC');
-            return result.rows.map((row) => this.mapUser(row));
+            return result.rows.map((row: any) => this.mapUser(row));
         }
 
         return this.users;

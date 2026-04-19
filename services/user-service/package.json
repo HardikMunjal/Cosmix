@@ -21,6 +21,7 @@
     "typeorm": "^0.2.41"
   },
   "devDependencies": {
+    "@types/pg": "^8.15.6",
     "@nestjs/testing": "^9.0.0",
     "eslint": "^7.32.0",
     "jest": "^27.0.6",

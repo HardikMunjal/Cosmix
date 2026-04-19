@@ -54,6 +54,9 @@ _test_ws.js
 services/chat-service/src/modules/chat/*.js
 services/auth-service/src/modules/login/*.js
 services/auth-service/src/modules/login/dto/*.js
+services/user-service/src/modules/users/*.js
+services/user-service/src/modules/users/dto/*.js
+services/user-service/src/modules/users/entities/*.js
 
 # Archives
 *.tgz
