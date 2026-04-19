@@ -61,7 +61,7 @@ export default function App() {
       >
         <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
         <Stack.Screen name="Dashboard" component={DashboardScreen} options={{ title: 'Cosmix', headerBackVisible: false }} />
-        <Stack.Screen name="Chat" component={ChatScreen} options={{ title: 'Team Chat' }} />
+        <Stack.Screen name="Chat" component={ChatScreen} options={{ title: 'Chat' }} />
         <Stack.Screen name="OptionsStrategy" component={OptionsStrategyScreen} options={{ title: 'Options Strategy' }} />
         <Stack.Screen name="ExpectedOptionPrices" component={ExpectedOptionPricesScreen} options={{ title: 'Expected Option Prices' }} />
       </Stack.Navigator>

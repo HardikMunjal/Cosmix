@@ -14,16 +14,84 @@ import {
   DAILY_PENALTY,
   computeDashboardStats,
   computeEntryScores,
+  DEFAULT_SCORING_RULES,
+  normalizeScoringRules,
 } from '../lib/wellnessScoring';
 
 const STORAGE_LANG_KEY = 'cosmix-henna-language';
 function storageKey(userId, suffix) { return `cosmix-wellness-${userId}-${suffix}`; }
+
+function formatDisplayDate(value) {
+  const date = new Date(`${String(value).slice(0, 10)}T00:00:00`);
+  return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function summarizeAddedActivities(selectedDate, activityNames, updates) {
+  const uniqueActivityNames = Array.from(new Set(activityNames.filter(Boolean)));
+  const activityLabel = uniqueActivityNames.length ? uniqueActivityNames.join(', ') : 'Activity';
+  return `Added on ${formatDisplayDate(selectedDate)}: ${activityLabel} - ${formatUpdateList(updates)}`;
+}
+
+function inferActivityNamesFromUpdates(updates) {
+  return Array.from(new Set(updates.map((update) => {
+    if (update.key.startsWith('running')) return 'Running';
+    if (update.key.startsWith('walking')) return 'Walking';
+    if (update.key === 'exerciseMinutes') return 'Workout';
+    if (update.key === 'badmintonMinutes') return 'Badminton';
+    if (update.key === 'yogaMinutes') return 'Yoga';
+    if (update.key === 'footballMinutes') return 'Football';
+    if (update.key === 'cricketMinutes') return 'Cricket';
+    if (update.key === 'swimmingMinutes') return 'Swimming';
+    if (update.key === 'meditationMinutes') return 'Meditation';
+    if (update.key === 'whiskyPegs') return 'Whisky';
+    if (update.key === 'fastFoodServings') return 'Fast food';
+    if (update.key === 'sugarServings') return 'Sugar';
+    if (update.key === 'sleepHours') return 'Sleep';
+    return update.label;
+  })));
+}
+
+function isAdminUser(user) {
+  const username = String(user?.username || '').trim().toLowerCase();
+  const email = String(user?.email || '').trim().toLowerCase();
+  return user?.id === 'usr-hardi' || username === 'hardi' || email === 'hardik.munjaal@gmail.com';
+}
+
+function formatFormula(multiplier, divisor, unit) {
+  if (!multiplier) return '0';
+  if (divisor === 1) return `${unit} x ${formatMetric(multiplier)}`;
+  return `(${unit} / ${formatMetric(divisor)}) x ${formatMetric(multiplier)}`;
+}
+
+const SCORE_FIELDS = [
+  'runningMinutes', 'runningDistanceKm', 'walkingMinutes', 'walkingDistanceKm',
+  'exerciseMinutes', 'yogaMinutes', 'badmintonMinutes', 'footballMinutes',
+  'cricketMinutes', 'swimmingMinutes', 'meditationMinutes', 'whiskyPegs',
+  'fastFoodServings', 'sugarServings', 'headacheLevel', 'sleepHours',
+];
+
+function hasScorableData(entry) {
+  if (!entry) return false;
+  return SCORE_FIELDS.some((field) => Number(entry[field] || 0) > 0);
+}
+
+const ZERO_SCORES = {
+  physicalScore: 0,
+  mentalScore: 0,
+  totalScore: 0,
+  physicalPenalty: 0,
+  mentalPenalty: 0,
+  sleepPhysical: 0,
+  sleepMental: 0,
+  workoutMinutes: 0,
+};
 
 /* ---------- activity dropdown config ---------- */
 const ACTIVITY_OPTIONS = [
   { id: 'running', label: 'Running', icon: '🏃', fields: [{ key: 'runningDistanceKm', label: 'Distance', unit: 'km', step: 0.1 }, { key: 'runningMinutes', label: 'Time', unit: 'mins', step: 1 }] },
   { id: 'walking', label: 'Walking', icon: '🚶', fields: [{ key: 'walkingDistanceKm', label: 'Distance', unit: 'km', step: 0.1 }, { key: 'walkingMinutes', label: 'Time', unit: 'mins', step: 1 }] },
   { id: 'exercise', label: 'Workout', icon: '💪', fields: [{ key: 'exerciseMinutes', label: 'Time', unit: 'mins', step: 1 }] },
+  { id: 'yoga', label: 'Yoga', icon: '🧘', fields: [{ key: 'yogaMinutes', label: 'Time', unit: 'mins', step: 1 }] },
   { id: 'badminton', label: 'Badminton', icon: '🏸', fields: [{ key: 'badmintonMinutes', label: 'Time', unit: 'mins', step: 1 }] },
   { id: 'football', label: 'Football', icon: '⚽', fields: [{ key: 'footballMinutes', label: 'Time', unit: 'mins', step: 1 }] },
   { id: 'cricket', label: 'Cricket', icon: '🏏', fields: [{ key: 'cricketMinutes', label: 'Time', unit: 'mins', step: 1 }] },
@@ -85,6 +153,7 @@ export default function WellnessPage() {
   const recognitionActiveRef = useRef(false);
   const initDoneRef = useRef(false);
   const userIdRef = useRef(null);
+  const transactionLogsRef = useRef(null);
 
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -104,6 +173,17 @@ export default function WellnessPage() {
   const [stravaConnected, setStravaConnected] = useState(false);
   const [stravaLoading, setStravaLoading] = useState(false);
   const [stravaMsg, setStravaMsg] = useState('');
+  const [planInfo, setPlanInfo] = useState(null);
+  const [planStartDate, setPlanStartDate] = useState(todayDate());
+  const [dailyScores, setDailyScores] = useState([]);
+  const [planTransactions, setPlanTransactions] = useState([]);
+  const [showPlanTransactions, setShowPlanTransactions] = useState(false);
+  const [showScoringRules, setShowScoringRules] = useState(false);
+  const [scoringRules, setScoringRules] = useState(DEFAULT_SCORING_RULES);
+  const [showCreatePlanForm, setShowCreatePlanForm] = useState(false);
+  const [showPlanMenu, setShowPlanMenu] = useState(false);
+  const [showRenamePlanForm, setShowRenamePlanForm] = useState(false);
+  const [planNameDraft, setPlanNameDraft] = useState('');
 
   const showMicSecurityWarning = typeof window !== 'undefined' && !window.isSecureContext && window.location.hostname !== 'localhost';
 
@@ -113,6 +193,31 @@ export default function WellnessPage() {
       : '')
     : '';
   const saveTimerRef = useRef(null);
+  const suppressSyncCountRef = useRef(0);
+
+  function applyServerState(serverData, options = {}) {
+    const { syncLocal = false } = options;
+    if (!serverData) return;
+    const nextEntries = Array.isArray(serverData.entries) ? serverData.entries : [];
+    const nextForm = { ...DEFAULT_FORM, ...(serverData.form || {}), date: String(serverData.form?.date || todayDate()).slice(0, 10) };
+    suppressSyncCountRef.current += 2;
+    setEntries(nextEntries);
+    setForm(nextForm);
+    setPlanInfo(serverData.plan || null);
+    setPlanNameDraft(serverData.plan?.name || '');
+    setDailyScores(Array.isArray(serverData.dailyScores) ? serverData.dailyScores : []);
+    setPlanTransactions(Array.isArray(serverData.planTransactions) ? serverData.planTransactions : []);
+    if (serverData.plan?.startDate) {
+      setPlanStartDate(serverData.plan.startDate);
+    }
+    if (serverData.scoringRules) {
+      setScoringRules(normalizeScoringRules(serverData.scoringRules));
+    }
+    if (syncLocal && typeof window !== 'undefined' && userIdRef.current) {
+      localStorage.setItem(storageKey(userIdRef.current, 'entries'), JSON.stringify(nextEntries));
+      localStorage.setItem(storageKey(userIdRef.current, 'form'), JSON.stringify(nextForm));
+    }
+  }
 
   /* ---- init (runs once) ---- */
   useEffect(() => {
@@ -130,6 +235,7 @@ export default function WellnessPage() {
       setEntries(localEntries);
       setForm(resolvedForm);
       setSelectedDate(today);
+      setPlanStartDate(today);
       const storedLanguage = localStorage.getItem(STORAGE_LANG_KEY);
       if (storedLanguage && LANGUAGE_OPTIONS.some((o) => o.value === storedLanguage)) setVoiceLanguage(storedLanguage);
       initDoneRef.current = true;
@@ -139,20 +245,7 @@ export default function WellnessPage() {
         .then((r) => r.ok ? r.json() : null)
         .then((serverData) => {
           if (!serverData) return;
-          const sEntries = serverData.entries || [];
-          const sForm = serverData.form || null;
-          if (sEntries.length > 0) {
-            const merged = [...sEntries];
-            const serverDates = new Set(sEntries.map((e) => e.date));
-            localEntries.forEach((e) => { if (!serverDates.has(e.date)) merged.push(e); });
-            setEntries(merged);
-            localStorage.setItem(storageKey(uid, 'entries'), JSON.stringify(merged));
-            const sTodayEntry = merged.find((e) => e.date === today);
-            if (sTodayEntry) setForm(sTodayEntry);
-          }
-          if (sForm && sEntries.length === 0 && localEntries.length === 0) {
-            setForm({ ...DEFAULT_FORM, ...sForm, date: today });
-          }
+          applyServerState(serverData, { syncLocal: true });
         })
         .catch(() => {});
 
@@ -218,8 +311,95 @@ export default function WellnessPage() {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ entries: newEntries, form: newForm }),
-      }).catch(() => { /* server offline, silent fail */ });
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((serverData) => {
+          if (!serverData) return;
+          applyServerState(serverData, { syncLocal: true });
+        })
+        .catch(() => { /* server offline, silent fail */ });
     }, 1500);
+  }
+
+  function handleStartPlan() {
+    const uid = userIdRef.current;
+    if (!uid || !planStartDate) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    fetch(`${API_BASE}/wellness/plan/${encodeURIComponent(uid)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        startDate: planStartDate,
+        name: planNameDraft,
+      }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((serverData) => {
+        if (!serverData) return;
+        applyServerState(serverData, { syncLocal: true });
+        setShowPlanTransactions(false);
+        setShowCreatePlanForm(false);
+        setShowRenamePlanForm(false);
+        setShowPlanMenu(false);
+        setAssistantReply(`Plan ${serverData.plan?.name || ''} started from ${planStartDate}. Earlier active plan data is now inactive.`.trim());
+      })
+      .catch(() => setAssistantReply('Could not start the plan right now.'));
+  }
+
+  function handleRenamePlan() {
+    const uid = userIdRef.current;
+    if (!uid || !planInfo?.id || !String(planNameDraft || '').trim()) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    fetch(`${API_BASE}/wellness/plan/${encodeURIComponent(uid)}/name`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: planNameDraft.trim() }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((serverData) => {
+        if (!serverData) return;
+        applyServerState(serverData, { syncLocal: true });
+        setShowRenamePlanForm(false);
+        setShowPlanMenu(false);
+        setAssistantReply(`Plan renamed to ${serverData.plan?.name || planNameDraft.trim()}.`);
+      })
+      .catch(() => setAssistantReply('Could not rename the active plan right now.'));
+  }
+
+  function handleResetCurrentPlan() {
+    const uid = userIdRef.current;
+    if (!uid || !planInfo?.id) return;
+    if (typeof window !== 'undefined' && !window.confirm(`Reset ${planInfo.name}? This will mark current plan data inactive and remove it from calculation.`)) {
+      return;
+    }
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    fetch(`${API_BASE}/wellness/plan/${encodeURIComponent(uid)}/reset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((serverData) => {
+        if (!serverData) return;
+        applyServerState(serverData, { syncLocal: true });
+        setShowPlanTransactions(false);
+        setShowCreatePlanForm(false);
+        setShowRenamePlanForm(false);
+        setShowPlanMenu(false);
+        setAssistantReply(`Current plan data for ${planInfo.name} is now inactive and excluded from score calculation.`);
+      })
+      .catch(() => setAssistantReply('Could not reset the current plan right now.'));
+  }
+
+  function handlePlanNameClick() {
+    setShowPlanTransactions((current) => {
+      const next = !current;
+      if (next && typeof window !== 'undefined') {
+        window.requestAnimationFrame(() => {
+          transactionLogsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+      }
+      return next;
+    });
   }
 
   /* ---- Strava connect / disconnect ---- */
@@ -271,11 +451,19 @@ export default function WellnessPage() {
   /* ---- persist (only after init, per-user keys) ---- */
   useEffect(() => {
     if (!initDoneRef.current || !userIdRef.current) return;
+    if (suppressSyncCountRef.current > 0) {
+      suppressSyncCountRef.current -= 1;
+      return;
+    }
     localStorage.setItem(storageKey(userIdRef.current, 'form'), JSON.stringify(form));
     syncToServer(entries, form);
   }, [form]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!initDoneRef.current || !userIdRef.current) return;
+    if (suppressSyncCountRef.current > 0) {
+      suppressSyncCountRef.current -= 1;
+      return;
+    }
     localStorage.setItem(storageKey(userIdRef.current, 'entries'), JSON.stringify(entries));
     syncToServer(entries, form);
   }, [entries]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -352,7 +540,7 @@ export default function WellnessPage() {
       return;
     }
     saveEntry({ ...nextForm, date: selectedDate });
-    setAssistantReply(`Added: ${formatUpdateList(updates)}`);
+    setAssistantReply(summarizeAddedActivities(selectedDate, inferActivityNamesFromUpdates(updates), updates));
     setCommandInput('');
     if (source === 'voice') setTranscript(trimmed);
   }
@@ -393,8 +581,9 @@ export default function WellnessPage() {
   }
 
   /* ---- computed ---- */
-  const stats = useMemo(() => computeDashboardStats(entries, form), [entries, form]);
-  const todayScores = useMemo(() => computeEntryScores(form), [form]);
+  const stats = useMemo(() => computeDashboardStats(entries, form, scoringRules), [entries, form, scoringRules]);
+  const todayScores = useMemo(() => computeEntryScores(form, scoringRules), [form, scoringRules]);
+  const formHasScorableData = useMemo(() => hasScorableData(form), [form]);
 
   const recentRunning = useMemo(
     () => (entries.length ? entries : [form]).filter((e) => Number(e.runningDistanceKm || 0) > 0 || Number(e.runningMinutes || 0) > 0).slice(0, 5),
@@ -407,6 +596,45 @@ export default function WellnessPage() {
   );
 
   const selectedActivityConfig = ACTIVITY_OPTIONS.find((a) => a.id === selectedActivity);
+  const autoScoredDays = dailyScores.filter((score) => score.source === 'auto').length;
+  const loggedPlanDays = dailyScores.filter((score) => score.source === 'entry').length;
+  const latestPlanScore = dailyScores[0] || null;
+  const totalPlanDays = dailyScores.length;
+  const planTotals = useMemo(() => dailyScores.reduce((sum, score) => ({
+    physical: sum.physical + Number(score.physicalScore || 0),
+    mental: sum.mental + Number(score.mentalScore || 0),
+    total: sum.total + Number(score.totalScore || 0),
+  }), { physical: 0, mental: 0, total: 0 }), [dailyScores]);
+  const planScoreChartData = useMemo(() => [...dailyScores].sort((left, right) => left.date.localeCompare(right.date)), [dailyScores]);
+  const currentPenalty = scoringRules?.dailyPenalty || DAILY_PENALTY;
+  const canManageScoringRules = isAdminUser(user);
+  const hasActivePlan = Boolean(planInfo?.startDate && totalPlanDays > 0);
+  const hasAnyActiveData = hasActivePlan || entries.some((entry) => hasScorableData(entry)) || formHasScorableData;
+  const selectedDateIsToday = selectedDate === todayDate();
+  const selectedDateCardLabel = selectedDateIsToday ? 'Today' : formatDisplayDate(selectedDate);
+  const displayScores = !hasAnyActiveData
+    ? { physical: 0, mental: 0, total: 0 }
+    : hasActivePlan
+      ? planTotals
+      : { physical: stats.totalPhysicalScore, mental: stats.totalMentalScore, total: stats.totalBodyScore };
+  const displayedPhysicalScore = displayScores.physical;
+  const displayedMentalScore = displayScores.mental;
+  const displayedTotalScore = displayScores.total;
+  const visibleTodayScores = formHasScorableData ? todayScores : ZERO_SCORES;
+  const readinessCards = [
+    { label: 'Hampta Pass', targetScore: Number(scoringRules?.targets?.hamptaPass || stats.readiness.hamptaPass.targetScore), color: '#fb7185' },
+    { label: 'Skiing Feb 2027', targetScore: Number(scoringRules?.targets?.skiing2027 || stats.readiness.skiing2027.targetScore), color: '#38bdf8' },
+    { label: 'Marathon 10km', targetScore: Number(scoringRules?.targets?.marathon10k || stats.readiness.marathon10k.targetScore), color: '#f59e0b' },
+  ].map((card) => {
+    const currentScore = displayedTotalScore;
+    const percent = Math.max(0, Math.min(100, Number(((currentScore / card.targetScore) * 100).toFixed(2))));
+    return {
+      ...card,
+      currentScore: Number(currentScore.toFixed(2)),
+      percent,
+      remaining: Number(Math.max(0, card.targetScore - currentScore).toFixed(2)),
+    };
+  });
 
   /* ---- chart data ---- */
   const weekChartData = useMemo(() => {
@@ -417,11 +645,11 @@ export default function WellnessPage() {
       d.setDate(d.getDate() - i);
       const dateStr = d.toISOString().slice(0, 10);
       const entry = (dateStr === form.date) ? form : entries.find((e) => e.date === dateStr);
-      const scores = entry ? computeEntryScores(entry) : { physicalScore: 0, mentalScore: 0, totalScore: 0, workoutMinutes: 0 };
+      const scores = entry && hasScorableData(entry) ? computeEntryScores(entry, scoringRules) : ZERO_SCORES;
       days.push({ date: dateStr, dayLabel: d.toLocaleDateString('en', { weekday: 'short' }), ...scores });
     }
     return days;
-  }, [entries, form]);
+  }, [entries, form, scoringRules]);
 
   const activityBreakdown = useMemo(() => {
     const week = [form, ...entries.filter((e) => e.date !== form.date)].slice(0, 7);
@@ -429,6 +657,7 @@ export default function WellnessPage() {
       { label: 'Running', icon: '🏃', mins: week.reduce((s, e) => s + Number(e.runningMinutes || 0), 0), color: '#fb7185' },
       { label: 'Walking', icon: '🚶', mins: week.reduce((s, e) => s + Number(e.walkingMinutes || 0), 0), color: '#a3e635' },
       { label: 'Workout', icon: '💪', mins: week.reduce((s, e) => s + Number(e.exerciseMinutes || 0), 0), color: '#f59e0b' },
+      { label: 'Yoga', icon: '🧘', mins: week.reduce((s, e) => s + Number(e.yogaMinutes || 0), 0), color: '#fbbf24' },
       { label: 'Badminton', icon: '🏸', mins: week.reduce((s, e) => s + Number(e.badmintonMinutes || 0), 0), color: '#eab308' },
       { label: 'Football', icon: '⚽', mins: week.reduce((s, e) => s + Number(e.footballMinutes || 0), 0), color: '#22c55e' },
       { label: 'Cricket', icon: '🏏', mins: week.reduce((s, e) => s + Number(e.cricketMinutes || 0), 0), color: '#8b5cf6' },
@@ -444,6 +673,7 @@ export default function WellnessPage() {
     if (Number(form.runningDistanceKm || 0) > 0 || Number(form.runningMinutes || 0) > 0) list.push({ icon: '🏃', label: 'Running', detail: `${formatMetric(form.runningDistanceKm)} km · ${formatMetric(form.runningMinutes)} mins` });
     if (Number(form.walkingDistanceKm || 0) > 0 || Number(form.walkingMinutes || 0) > 0) list.push({ icon: '🚶', label: 'Walking', detail: `${formatMetric(form.walkingDistanceKm)} km · ${formatMetric(form.walkingMinutes)} mins` });
     if (Number(form.exerciseMinutes || 0) > 0) list.push({ icon: '💪', label: 'Workout', detail: `${formatMetric(form.exerciseMinutes)} mins` });
+      if (Number(form.yogaMinutes || 0) > 0) list.push({ icon: '🧘', label: 'Yoga', detail: `${formatMetric(form.yogaMinutes)} mins` });
     if (Number(form.badmintonMinutes || 0) > 0) list.push({ icon: '🏸', label: 'Badminton', detail: `${formatMetric(form.badmintonMinutes)} mins` });
     if (Number(form.footballMinutes || 0) > 0) list.push({ icon: '⚽', label: 'Football', detail: `${formatMetric(form.footballMinutes)} mins` });
     if (Number(form.cricketMinutes || 0) > 0) list.push({ icon: '🏏', label: 'Cricket', detail: `${formatMetric(form.cricketMinutes)} mins` });
@@ -490,6 +720,7 @@ export default function WellnessPage() {
                 <span style={{ fontSize: 11, opacity: 0.8 }}>{weather.city}</span>
               </div>
             )}
+            {canManageScoringRules && <button onClick={() => router.push('/wellness-admin')} style={s.chipBtn}>Scoring Admin</button>}
             <button onClick={() => router.push('/dashboard')} style={s.chipBtn}>Dashboard</button>
           </div>
         </div>
@@ -500,28 +731,28 @@ export default function WellnessPage() {
             <div style={s.scoreIcon}>🏋️</div>
             <div>
               <div style={s.scoreLabel}>Physical</div>
-              <div style={s.scoreNum}>{formatMetric(stats.totalPhysicalScore)}</div>
+              <div style={s.scoreNum}>{formatMetric(displayedPhysicalScore)}</div>
             </div>
           </div>
           <div style={s.scoreCard}>
             <div style={s.scoreIcon}>🧠</div>
             <div>
               <div style={s.scoreLabel}>Mental</div>
-              <div style={s.scoreNum}>{formatMetric(stats.totalMentalScore)}</div>
+              <div style={s.scoreNum}>{formatMetric(displayedMentalScore)}</div>
             </div>
           </div>
           <div style={s.scoreCard}>
             <div style={s.scoreIcon}>⚡</div>
             <div>
               <div style={s.scoreLabel}>Total</div>
-              <div style={s.scoreNum}>{formatMetric(stats.totalBodyScore)}</div>
+              <div style={s.scoreNum}>{formatMetric(displayedTotalScore)}</div>
             </div>
           </div>
           <div style={s.scoreCard}>
             <div style={s.scoreIcon}>📅</div>
             <div>
-              <div style={s.scoreLabel}>Today</div>
-              <div style={s.scoreNum}>{formatMetric(todayScores.totalScore)}</div>
+              <div style={s.scoreLabel}>{selectedDateCardLabel}</div>
+              <div style={s.scoreNum}>{formatMetric(visibleTodayScores.totalScore)}</div>
             </div>
           </div>
         </div>
@@ -562,6 +793,77 @@ export default function WellnessPage() {
             <div style={s.toggleRow}>
               <button onClick={() => setInputMode('dropdown')} style={inputMode === 'dropdown' ? s.toggleActive : s.toggleBtn}>Dropdown</button>
               <button onClick={() => setInputMode('text')} style={inputMode === 'text' ? s.toggleActive : s.toggleBtn}>Text / Voice</button>
+            </div>
+
+            <div style={s.planCard}>
+              <div>
+                <div style={s.planHeaderRow}>
+                  <div style={s.planTitle}>Plan</div>
+                  <div style={s.planMenuWrap}>
+                    <button type="button" onClick={() => setShowPlanMenu((current) => !current)} style={s.planIconBtn} aria-label="Open plan actions">
+                      ⋯
+                    </button>
+                    {showPlanMenu && (
+                      <div style={s.planMenu}>
+                        <button type="button" onClick={() => { setPlanNameDraft(''); setShowCreatePlanForm((current) => !current); setShowRenamePlanForm(false); setShowPlanMenu(false); }} style={s.planMenuItem}>
+                          {showCreatePlanForm ? 'Close new plan' : (planInfo ? 'Create new plan' : 'Create plan')}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!planInfo?.id}
+                          onClick={() => { setPlanNameDraft(planInfo?.name || ''); setShowRenamePlanForm((current) => !current); setShowCreatePlanForm(false); setShowPlanMenu(false); }}
+                          style={planInfo?.id ? s.planMenuItem : s.planMenuItemDisabled}
+                        >
+                          Rename current plan
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!planInfo?.id}
+                          onClick={handleResetCurrentPlan}
+                          style={planInfo?.id ? { ...s.planMenuItem, color: '#fecaca' } : s.planMenuItemDisabled}
+                        >
+                          Reset current plan data
+                        </button>
+                        {!planInfo?.id && <div style={s.planMenuHint}>Start a plan first to rename or reset it.</div>}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                {planInfo?.name ? (
+                  <button type="button" onClick={handlePlanNameClick} style={s.planNameBtn}>
+                    {planInfo.name}
+                  </button>
+                ) : null}
+                <div style={s.planCopy}>
+                  {planInfo?.startDate
+                    ? `${planInfo.name || 'Plan'} started on ${formatDisplayDate(planInfo.startDate)}. Daily drain has been applied from the start date through today for ${totalPlanDays} day${totalPlanDays === 1 ? '' : 's'}. Logged activity exists on ${loggedPlanDays} day${loggedPlanDays === 1 ? '' : 's'}. Reset marks current plan data inactive, and a new plan moves the old active plan into inactive history.`
+                    : 'Pick a start date to create a plan. If you choose a past date, daily drain will be applied from that start date through today.'}
+                </div>
+              </div>
+              {showCreatePlanForm && (
+                <div style={s.planControls}>
+                  <input type="date" value={planStartDate} onChange={(e) => setPlanStartDate(e.target.value)} style={s.dateInput} max={todayDate()} />
+                  <input type="text" value={planNameDraft} onChange={(e) => setPlanNameDraft(e.target.value)} placeholder="Plan name (optional)" style={s.planTextInput} />
+                  <button onClick={handleStartPlan} style={s.planBtn}>{planInfo ? 'Start new plan' : 'Start plan'}</button>
+                </div>
+              )}
+              {showRenamePlanForm && planInfo?.id && (
+                <div style={s.planControls}>
+                  <input type="text" value={planNameDraft} onChange={(e) => setPlanNameDraft(e.target.value)} placeholder="Update current plan name" style={s.planTextInput} />
+                  <button onClick={handleRenamePlan} style={s.planBtn}>Save name</button>
+                </div>
+              )}
+              <div style={s.planStatsGrid} className="plan-stats-grid">
+                <div style={s.planStatCard}><span style={s.planStatLabel}>Plan days</span><span style={s.planStatValue}>{totalPlanDays}</span></div>
+                <div style={s.planStatCard}><span style={s.planStatLabel}>Physical total</span><span style={s.planStatValue}>{formatMetric(planTotals.physical)}</span></div>
+                <div style={s.planStatCard}><span style={s.planStatLabel}>Mental total</span><span style={s.planStatValue}>{formatMetric(planTotals.mental)}</span></div>
+                <div style={s.planStatCard}><span style={s.planStatLabel}>Plan total</span><span style={s.planStatValue}>{formatMetric(planTotals.total)}</span></div>
+              </div>
+              {latestPlanScore && (
+                <div style={s.planMeta}>
+                  Latest score {formatMetric(latestPlanScore.totalScore)} on {formatDisplayDate(latestPlanScore.date)}. Cumulative total {formatMetric(latestPlanScore.cumulativeTotalScore || 0)}. Auto-only days: {autoScoredDays}. Click {planInfo?.name || 'plan'} to open transaction logs.
+                </div>
+              )}
             </div>
 
             {inputMode === 'dropdown' ? (
@@ -672,11 +974,7 @@ export default function WellnessPage() {
           {/* right: readiness targets */}
           <div style={s.card}>
             <div style={s.cardTitle}>Readiness Targets</div>
-            {[
-              { label: 'Hampta Pass', ...stats.readiness.hamptaPass, color: '#fb7185' },
-              { label: 'Skiing Feb 2027', ...stats.readiness.skiing2027, color: '#38bdf8' },
-              { label: 'Marathon 10km', ...stats.readiness.marathon10k, color: '#f59e0b' },
-            ].map((t) => (
+            {readinessCards.map((t) => (
               <div key={t.label} style={s.targetCard}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ fontWeight: 700, fontSize: 14 }}>{t.label}</span>
@@ -689,12 +987,12 @@ export default function WellnessPage() {
               </div>
             ))}
 
-            <div style={{ ...s.cardTitle, marginTop: 20 }}>Today&apos;s Breakdown</div>
+            <div style={{ ...s.cardTitle, marginTop: 20 }}>{selectedDateIsToday ? 'Today\'s Breakdown' : `${formatDisplayDate(selectedDate)} Breakdown`}</div>
             <div style={s.breakdownGrid}>
-              <div style={s.breakdownItem}><span style={{ fontSize: 12, opacity: 0.7 }}>Physical</span><span style={{ fontWeight: 800 }}>{formatMetric(todayScores.physicalScore)}</span></div>
-              <div style={s.breakdownItem}><span style={{ fontSize: 12, opacity: 0.7 }}>Mental</span><span style={{ fontWeight: 800 }}>{formatMetric(todayScores.mentalScore)}</span></div>
-              <div style={s.breakdownItem}><span style={{ fontSize: 12, opacity: 0.7 }}>Workout mins</span><span style={{ fontWeight: 800 }}>{formatMetric(todayScores.workoutMinutes)}</span></div>
-              <div style={s.breakdownItem}><span style={{ fontSize: 12, opacity: 0.7 }}>Sleep effect</span><span style={{ fontWeight: 800, color: todayScores.sleepPhysical > 0 ? '#4ade80' : todayScores.sleepPhysical < 0 ? '#f87171' : '#94a3b8' }}>{todayScores.sleepPhysical > 0 ? '+' : ''}{formatMetric(todayScores.sleepPhysical)}</span></div>
+              <div style={s.breakdownItem}><span style={{ fontSize: 12, opacity: 0.7 }}>Physical</span><span style={{ fontWeight: 800 }}>{formatMetric(visibleTodayScores.physicalScore)}</span></div>
+              <div style={s.breakdownItem}><span style={{ fontSize: 12, opacity: 0.7 }}>Mental</span><span style={{ fontWeight: 800 }}>{formatMetric(visibleTodayScores.mentalScore)}</span></div>
+              <div style={s.breakdownItem}><span style={{ fontSize: 12, opacity: 0.7 }}>Workout mins</span><span style={{ fontWeight: 800 }}>{formatMetric(visibleTodayScores.workoutMinutes)}</span></div>
+              <div style={s.breakdownItem}><span style={{ fontSize: 12, opacity: 0.7 }}>Sleep effect</span><span style={{ fontWeight: 800, color: visibleTodayScores.sleepPhysical > 0 ? '#4ade80' : visibleTodayScores.sleepPhysical < 0 ? '#f87171' : '#94a3b8' }}>{visibleTodayScores.sleepPhysical > 0 ? '+' : ''}{formatMetric(visibleTodayScores.sleepPhysical)}</span></div>
             </div>
           </div>
         </div>
@@ -704,48 +1002,48 @@ export default function WellnessPage() {
           <div style={s.dashGrid} className="dash-grid">
             {/* Weekly Score Bar Chart */}
             <div style={s.card}>
-              <div style={s.cardTitle}>📊 Weekly Score Trend</div>
+              <div style={s.cardTitle}>📈 Daily Total Score</div>
+              <div style={s.metaText}>This line shows each day's total score directly, not the running total.</div>
               <div style={s.chartWrap}>
                 {(() => {
-                  const maxScore = Math.max(1, ...weekChartData.map((d) => Math.abs(d.totalScore)));
-                  const barW = 100 / 7;
-                  const chartH = 140;
-                  const zeroY = weekChartData.some((d) => d.totalScore < 0) ? chartH * 0.75 : chartH;
+                  const chartW = 320;
+                  const chartH = 160;
+                  const minScore = Math.min(0, ...weekChartData.map((d) => d.totalScore));
+                  const maxScore = Math.max(0, ...weekChartData.map((d) => d.totalScore));
+                  const scoreRange = Math.max(1, maxScore - minScore);
+                  const zeroY = chartH - (((0 - minScore) / scoreRange) * (chartH - 24)) - 12;
+                  const totalPoints = weekChartData.map((d, i) => {
+                    const x = weekChartData.length === 1 ? chartW / 2 : (i / (weekChartData.length - 1)) * chartW;
+                    const y = chartH - (((d.totalScore - minScore) / scoreRange) * (chartH - 24)) - 12;
+                    return `${x},${y}`;
+                  }).join(' ');
                   return (
-                    <svg viewBox={`0 0 320 ${chartH + 28}`} style={{ width: '100%', height: chartH + 28 }}>
-                      {/* grid lines */}
-                      {[0.25, 0.5, 0.75, 1].map((f) => (
-                        <line key={f} x1="0" x2="320" y1={zeroY - zeroY * f} y2={zeroY - zeroY * f} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
-                      ))}
+                    <svg viewBox={`0 0 ${chartW} ${chartH + 28}`} style={{ width: '100%', height: chartH + 28 }}>
+                      {[0, 0.25, 0.5, 0.75, 1].map((f) => {
+                        const y = chartH - (f * (chartH - 24)) - 12;
+                        return (
+                          <line key={f} x1="0" x2={chartW} y1={y} y2={y} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
+                        );
+                      })}
+                      <polyline fill="none" stroke="#fde68a" strokeWidth="3" points={totalPoints} />
                       {weekChartData.map((d, i) => {
-                        const barH = (Math.abs(d.totalScore) / maxScore) * (d.totalScore >= 0 ? zeroY : chartH - zeroY);
-                        const x = i * (320 / 7) + (320 / 7 - 28) / 2;
-                        const y = d.totalScore >= 0 ? zeroY - barH : zeroY;
+                        const x = weekChartData.length === 1 ? chartW / 2 : (i / (weekChartData.length - 1)) * chartW;
+                        const y = chartH - (((d.totalScore - minScore) / scoreRange) * (chartH - 24)) - 12;
                         const isToday = d.date === todayDate();
                         return (
                           <g key={d.date}>
-                            <rect x={x} y={y} width="28" height={Math.max(barH, 2)} rx="6"
-                              fill={d.totalScore < 0 ? '#f87171' : isToday ? 'url(#barGrad)' : 'rgba(255,255,255,0.18)'}
-                            />
-                            <text x={x + 14} y={y - 4} textAnchor="middle" fill="#fff" fontSize="10" fontWeight="700" opacity="0.9">
+                            <circle cx={x} cy={y} r="4.5" fill={d.totalScore < 0 ? '#f87171' : isToday ? '#fde68a' : '#fbbf24'} />
+                            <text x={x} y={y - 8} textAnchor="middle" fill="#fff" fontSize="10" fontWeight="700" opacity="0.9">
                               {d.totalScore !== 0 ? formatMetric(d.totalScore) : ''}
                             </text>
-                            <text x={x + 14} y={chartH + 18} textAnchor="middle" fill="#fff" fontSize="10" fontWeight={isToday ? '800' : '500'} opacity={isToday ? 1 : 0.55}>
+                            <text x={x} y={chartH + 18} textAnchor="middle" fill="#fff" fontSize="10" fontWeight={isToday ? '800' : '500'} opacity={isToday ? 1 : 0.55}>
                               {d.dayLabel}
                             </text>
                           </g>
                         );
                       })}
-                      {/* zero line */}
-                      {weekChartData.some((d) => d.totalScore < 0) && (
-                        <line x1="0" x2="320" y1={zeroY} y2={zeroY} stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeDasharray="4" />
-                      )}
-                      <defs>
-                        <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#fb7185" />
-                          <stop offset="100%" stopColor="#f97316" />
-                        </linearGradient>
-                      </defs>
+                      <line x1="0" x2={chartW} y1={zeroY} y2={zeroY} stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeDasharray="4" />
+                      <text x="8" y="18" fill="#fde68a" fontSize="11" fontWeight="700">Total score per day</text>
                     </svg>
                   );
                 })()}
@@ -858,38 +1156,130 @@ export default function WellnessPage() {
           </div>
         </div>
 
+        {planScoreChartData.length > 0 && (
+          <div style={{ ...s.card, marginTop: 14 }}>
+            <div style={s.cardTitle}>Plan Score Trends</div>
+            <div style={s.metaText}>Daily total score and cumulative total score for the active plan, recalculated from the current scoring rules.</div>
+            <div style={s.chartWrap}>
+              {(() => {
+                const minScore = Math.min(
+                  ...planScoreChartData.map((point) => Math.min(point.totalScore, point.cumulativeTotalScore || 0)),
+                  0,
+                );
+                const maxScore = Math.max(
+                  ...planScoreChartData.map((point) => Math.max(point.totalScore, point.cumulativeTotalScore || 0)),
+                  1,
+                );
+                const chartWidth = 640;
+                const chartHeight = 220;
+                const normalizedRange = Math.max(1, maxScore - minScore);
+                const dailyPoints = planScoreChartData.map((point, index) => {
+                  const x = planScoreChartData.length === 1 ? chartWidth / 2 : (index / (planScoreChartData.length - 1)) * chartWidth;
+                  const y = chartHeight - (((point.totalScore - minScore) / normalizedRange) * (chartHeight - 24)) - 12;
+                  return `${x},${y}`;
+                }).join(' ');
+                const cumulativePoints = planScoreChartData.map((point, index) => {
+                  const x = planScoreChartData.length === 1 ? chartWidth / 2 : (index / (planScoreChartData.length - 1)) * chartWidth;
+                  const y = chartHeight - ((((point.cumulativeTotalScore || 0) - minScore) / normalizedRange) * (chartHeight - 24)) - 12;
+                  return `${x},${y}`;
+                }).join(' ');
+                const zeroY = chartHeight - (((0 - minScore) / normalizedRange) * (chartHeight - 24)) - 12;
+                return (
+                  <svg viewBox={`0 0 ${chartWidth} ${chartHeight + 26}`} style={{ width: '100%', height: chartHeight + 26 }}>
+                    <line x1="0" x2={chartWidth} y1={zeroY} y2={zeroY} stroke="rgba(255,255,255,0.16)" strokeWidth="1" strokeDasharray="4" />
+                    <polyline fill="none" stroke="#fde68a" strokeWidth="2.5" strokeDasharray="6 5" points={dailyPoints} />
+                    <polyline fill="none" stroke="#4ade80" strokeWidth="3.5" points={cumulativePoints} />
+                    {planScoreChartData.map((point, index) => {
+                      const x = planScoreChartData.length === 1 ? chartWidth / 2 : (index / (planScoreChartData.length - 1)) * chartWidth;
+                      const dailyY = chartHeight - (((point.totalScore - minScore) / normalizedRange) * (chartHeight - 24)) - 12;
+                      const cumulativeY = chartHeight - ((((point.cumulativeTotalScore || 0) - minScore) / normalizedRange) * (chartHeight - 24)) - 12;
+                      const showLabel = index === 0 || index === planScoreChartData.length - 1 || index % Math.max(1, Math.ceil(planScoreChartData.length / 6)) === 0;
+                      return (
+                        <g key={point.date}>
+                          <circle cx={x} cy={dailyY} r="4" fill={point.source === 'auto' ? '#f59e0b' : '#fde68a'} />
+                          <circle cx={x} cy={cumulativeY} r="4.5" fill="#4ade80" />
+                          {showLabel && <text x={x} y={chartHeight + 16} textAnchor="middle" fill="#fff" fontSize="10" opacity="0.7">{point.date.slice(5)}</text>}
+                          <text x={x} y={cumulativeY - 8} textAnchor="middle" fill="#fff" fontSize="10" fontWeight="700" opacity="0.85">{formatMetric(point.cumulativeTotalScore || 0)}</text>
+                        </g>
+                      );
+                    })}
+                    <text x="12" y="18" fill="#4ade80" fontSize="11" fontWeight="700">Cumulative total</text>
+                    <text x="122" y="18" fill="#fde68a" fontSize="11" fontWeight="700">Daily total</text>
+                  </svg>
+                );
+              })()}
+            </div>
+          </div>
+        )}
+
+        <div style={{ ...s.card, marginTop: 14 }} ref={transactionLogsRef}>
+          <button type="button" onClick={() => setShowPlanTransactions((current) => !current)} style={s.sectionToggleBtn}>
+            <span>Transaction Logs {planInfo?.name ? `- ${planInfo.name}` : ''}</span>
+            <span>{showPlanTransactions ? 'Hide' : 'Show'}</span>
+          </button>
+          {showPlanTransactions && (
+            <div style={s.sectionContent}>
+              {planTransactions.length > 0 ? (
+                <div style={s.planTimeline}>
+                  {planTransactions.map((transaction, index) => (
+                    <div key={`${transaction.date}-${transaction.activityName}-${index}`} style={s.planTimelineRow}>
+                      <div style={s.planTimelineDate}>{formatDisplayDate(transaction.date)}</div>
+                      <div style={s.planTimelineBody}>
+                        <div style={s.planTimelineName}>{transaction.activityName}</div>
+                        <div style={s.planTimelineDetail}>{transaction.detail}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={s.metaText}>Create a plan to see the transaction log.</div>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Scoring Rules */}
         <div style={{ ...s.card, marginTop: 14 }}>
-          <div style={s.cardTitle}>📐 Scoring Rules</div>
-          <div style={{ overflowX: 'auto', marginTop: 10 }}>
-            <table style={s.rulesTable}>
-              <thead>
-                <tr>
-                  <th style={s.rulesTh}>Activity</th>
-                  <th style={s.rulesTh}>Physical</th>
-                  <th style={s.rulesTh}>Mental</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr><td style={s.rulesTd}>🏃 Running</td><td style={s.rulesTd}>distance × 0.9</td><td style={s.rulesTd}>distance × 0.4</td></tr>
-                <tr><td style={s.rulesTd}>🚶 Walking</td><td style={s.rulesTd}>distance × 0.3</td><td style={s.rulesTd}>(mins / 30) × 0.25</td></tr>
-                <tr><td style={s.rulesTd}>💪 Workout</td><td style={s.rulesTd}>(mins / 30) × 0.8</td><td style={s.rulesTd}>(mins / 30) × 0.5</td></tr>
-                <tr><td style={s.rulesTd}>🏸 Badminton</td><td style={s.rulesTd}>(mins / 60) × 1.2</td><td style={s.rulesTd}>(mins / 30) × 0.5</td></tr>
-                <tr><td style={s.rulesTd}>⚽ Football</td><td style={s.rulesTd}>(mins / 60) × 2</td><td style={s.rulesTd}>(mins / 30) × 0.5</td></tr>
-                <tr><td style={s.rulesTd}>🏏 Cricket</td><td style={s.rulesTd}>(mins / 60) × 1.5</td><td style={s.rulesTd}>(mins / 30) × 0.5</td></tr>
-                <tr><td style={s.rulesTd}>🏊 Swimming</td><td style={s.rulesTd}>(mins / 30) × 0.7</td><td style={s.rulesTd}>(mins / 30) × 1</td></tr>
-                <tr><td style={s.rulesTd}>🧘 Meditation</td><td style={s.rulesTd}>(mins / 30) × 0.2</td><td style={s.rulesTd}>(mins / 30) × 1.5</td></tr>
-                <tr style={{ borderTop: '1px solid rgba(255,255,255,0.1)' }}><td style={s.rulesTd}>😴 Sleep</td><td style={{ ...s.rulesTd, colSpan: 2 }} colSpan={2}>6.5 hrs = 0. Every ±30 min → ±0.5 physical &amp; ±0.5 mental</td></tr>
-                <tr style={{ borderTop: '1px solid rgba(255,255,255,0.1)' }}><td style={s.rulesTd}>🥃 Whisky</td><td style={{ ...s.rulesTd, color: '#f87171' }}>pegs × -1.1</td><td style={s.rulesTd}>—</td></tr>
-                <tr><td style={s.rulesTd}>🍔 Fast food</td><td style={{ ...s.rulesTd, color: '#f87171' }}>count × -0.9</td><td style={s.rulesTd}>—</td></tr>
-                <tr><td style={s.rulesTd}>🍬 Sugar</td><td style={{ ...s.rulesTd, color: '#f87171' }}>count × -2</td><td style={s.rulesTd}>—</td></tr>
-                <tr style={{ borderTop: '1px solid rgba(255,255,255,0.12)' }}><td style={{ ...s.rulesTd, fontWeight: 700 }}>📉 Daily drain</td><td style={{ ...s.rulesTd, color: '#f87171', fontWeight: 700 }}>-2.7</td><td style={{ ...s.rulesTd, color: '#f87171', fontWeight: 700 }}>-1.0</td></tr>
-              </tbody>
-            </table>
-          </div>
-          <div style={{ fontSize: 12, opacity: 0.55, marginTop: 10, lineHeight: 1.6 }}>
-            Daily drain always applies (body decay + office/life). Activities and sleep offset it. Score accumulates over 14 days.
-          </div>
+          <button type="button" onClick={() => setShowScoringRules((current) => !current)} style={s.sectionToggleBtn}>
+            <span>Scoring Rules</span>
+            <span>{showScoringRules ? 'Hide' : 'Show'}</span>
+          </button>
+          {showScoringRules && (
+            <div style={s.sectionContent}>
+              <div style={{ overflowX: 'auto', marginTop: 10 }}>
+                <table style={s.rulesTable}>
+                  <thead>
+                    <tr>
+                      <th style={s.rulesTh}>Activity</th>
+                      <th style={s.rulesTh}>Physical</th>
+                      <th style={s.rulesTh}>Mental</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {scoringRules.activities.map((rule) => (
+                      <tr key={rule.key}>
+                        <td style={s.rulesTd}>{rule.icon} {rule.label}</td>
+                        <td style={{ ...s.rulesTd, color: rule.physicalMultiplier < 0 ? '#fca5a5' : s.rulesTd.color }}>{rule.physicalMultiplier ? formatFormula(rule.physicalMultiplier, rule.physicalDivisor, rule.unit) : '—'}</td>
+                        <td style={{ ...s.rulesTd, color: rule.mentalMultiplier < 0 ? '#fca5a5' : s.rulesTd.color }}>{rule.mentalMultiplier ? formatFormula(rule.mentalMultiplier, rule.mentalDivisor, rule.unit) : '—'}</td>
+                      </tr>
+                    ))}
+                    <tr style={{ borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+                      <td style={s.rulesTd}>😴 Sleep</td>
+                      <td style={{ ...s.rulesTd, colSpan: 2 }} colSpan={2}>Baseline {formatMetric(scoringRules.sleep.baselineHours)} hrs. Every {formatMetric(scoringRules.sleep.stepHours)} hrs changes physical and mental by {formatMetric(scoringRules.sleep.scorePerStep)}.</td>
+                    </tr>
+                    <tr style={{ borderTop: '1px solid rgba(255,255,255,0.12)' }}>
+                      <td style={{ ...s.rulesTd, fontWeight: 700 }}>📉 Daily drain</td>
+                      <td style={{ ...s.rulesTd, color: '#f87171', fontWeight: 700 }}>-{formatMetric(currentPenalty.physical)}</td>
+                      <td style={{ ...s.rulesTd, color: '#f87171', fontWeight: 700 }}>-{formatMetric(currentPenalty.mental)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ fontSize: 12, opacity: 0.55, marginTop: 10, lineHeight: 1.6 }}>
+                Scores are recalculated from these rules for the full active plan whenever wellness data is loaded. If Hardi changes the rules from the admin page, the plan totals and day-wise graph update from the new rule set.
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </>
@@ -910,6 +1300,7 @@ const pageKeyframes = `
     .dash-grid{grid-template-columns:1fr!important}
     .activity-grid{grid-template-columns:repeat(4,1fr)!important}
     .field-row{flex-direction:column!important}
+    .plan-stats-grid{grid-template-columns:1fr 1fr!important}
   }
   @media(max-width:480px){
     .score-strip{grid-template-columns:1fr 1fr!important;gap:8px!important}
@@ -957,6 +1348,35 @@ const s = {
   cardTitle: { fontSize: 17, fontWeight: 800 },
   dateInput: { borderRadius: 10, border: '1px solid rgba(255,255,255,0.18)', padding: '8px 12px', background: 'rgba(36,18,47,0.30)', color: '#fff', fontSize: 13, outline: 'none' },
   toggleRow: { display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 },
+  planCard: { marginBottom: 14, padding: '14px 16px', borderRadius: 16, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.10)', display: 'grid', gap: 10 },
+  planHeaderRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
+  planTitle: { fontSize: 13, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', opacity: 0.8 },
+  planMenuWrap: { position: 'relative' },
+  planIconBtn: { width: 34, height: 34, borderRadius: 999, border: '1px solid rgba(255,255,255,0.16)', background: 'rgba(255,255,255,0.08)', color: '#fff', fontSize: 22, lineHeight: 1, cursor: 'pointer' },
+  planMenu: { position: 'absolute', top: 'calc(100% + 8px)', right: 0, minWidth: 220, padding: 6, borderRadius: 14, background: 'rgba(29,18,44,0.95)', border: '1px solid rgba(255,255,255,0.12)', backdropFilter: 'blur(18px)', display: 'grid', gap: 4, zIndex: 3, boxShadow: '0 14px 40px rgba(0,0,0,0.28)' },
+  planMenuItem: { border: 'none', borderRadius: 10, padding: '10px 12px', background: 'transparent', color: '#fff', textAlign: 'left', fontSize: 13, fontWeight: 700, cursor: 'pointer' },
+  planMenuItemDisabled: { border: 'none', borderRadius: 10, padding: '10px 12px', background: 'transparent', color: 'rgba(255,255,255,0.42)', textAlign: 'left', fontSize: 13, fontWeight: 700, cursor: 'not-allowed' },
+  planMenuHint: { padding: '6px 12px 4px', fontSize: 11, lineHeight: 1.4, color: 'rgba(255,255,255,0.58)' },
+  planNameBtn: { marginTop: 6, padding: 0, border: 'none', background: 'transparent', color: '#fde68a', fontSize: 24, fontWeight: 900, letterSpacing: '0.02em', cursor: 'pointer', textAlign: 'left' },
+  planCopy: { fontSize: 13, lineHeight: 1.5, opacity: 0.86 },
+  planActionsRow: { display: 'flex', justifyContent: 'flex-start' },
+  planActionBtn: { border: '1px solid rgba(255,255,255,0.16)', borderRadius: 999, padding: '7px 14px', background: 'rgba(255,255,255,0.06)', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer' },
+  planControls: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  planTextInput: { flex: 1, minWidth: 180, borderRadius: 10, border: '1px solid rgba(255,255,255,0.18)', padding: '9px 12px', background: 'rgba(36,18,47,0.30)', color: '#fff', fontSize: 13, outline: 'none' },
+  planBtn: { border: 'none', borderRadius: 12, padding: '9px 16px', background: 'linear-gradient(135deg,#22c55e,#16a34a)', color: '#fff', fontWeight: 800, cursor: 'pointer', fontSize: 13 },
+  planMeta: { fontSize: 12, color: '#bbf7d0', fontWeight: 600 },
+  planStatsGrid: { display: 'grid', gridTemplateColumns: 'repeat(4,minmax(0,1fr))', gap: 8 },
+  planStatCard: { padding: '10px 12px', borderRadius: 12, background: 'rgba(255,255,255,0.06)', display: 'grid', gap: 4 },
+  planStatLabel: { fontSize: 11, opacity: 0.65, textTransform: 'uppercase', fontWeight: 700 },
+  planStatValue: { fontSize: 18, fontWeight: 900 },
+  planTimeline: { maxHeight: 320, overflowY: 'auto', display: 'grid', gap: 8, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.1)' },
+  planTimelineRow: { display: 'grid', gridTemplateColumns: '110px 1fr', gap: 10, padding: '10px 12px', borderRadius: 12, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.06)' },
+  planTimelineDate: { fontSize: 12, fontWeight: 700, color: '#fde68a' },
+  planTimelineBody: { display: 'grid', gap: 4 },
+  planTimelineName: { fontSize: 14, fontWeight: 800, color: '#fff' },
+  planTimelineDetail: { fontSize: 12, lineHeight: 1.5, opacity: 0.8 },
+  sectionToggleBtn: { width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, border: '1px solid rgba(255,255,255,0.12)', borderRadius: 14, padding: '12px 14px', background: 'rgba(255,255,255,0.06)', color: '#fff', fontSize: 15, fontWeight: 800, cursor: 'pointer', textAlign: 'left' },
+  sectionContent: { marginTop: 12 },
   toggleBtn: { border: '1px solid rgba(255,255,255,0.14)', borderRadius: 999, padding: '7px 14px', background: 'transparent', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer' },
   toggleActive: { border: 'none', borderRadius: 999, padding: '7px 14px', background: 'linear-gradient(135deg,#fb7185,#f97316)', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer' },
   trackingOn: { border: 'none', borderRadius: 999, padding: '7px 14px', background: 'linear-gradient(135deg,#ef4444,#dc2626)', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer' },

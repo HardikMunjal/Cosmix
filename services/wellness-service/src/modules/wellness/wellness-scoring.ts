@@ -1,4 +1,33 @@
-export const DEFAULT_SCORING_RULES = {
+export type WellnessMetricRule = {
+  key: string;
+  label: string;
+  icon: string;
+  unit: string;
+  physicalMultiplier: number;
+  physicalDivisor: number;
+  mentalMultiplier: number;
+  mentalDivisor: number;
+};
+
+export type WellnessScoringRules = {
+  activities: WellnessMetricRule[];
+  dailyPenalty: {
+    physical: number;
+    mental: number;
+  };
+  sleep: {
+    baselineHours: number;
+    stepHours: number;
+    scorePerStep: number;
+  };
+  targets: {
+    hamptaPass: number;
+    skiing2027: number;
+    marathon10k: number;
+  };
+};
+
+export const DEFAULT_SCORING_RULES: WellnessScoringRules = {
   activities: [
     { key: 'runningDistanceKm', label: 'Running', icon: '🏃', unit: 'km', physicalMultiplier: 0.9, physicalDivisor: 1, mentalMultiplier: 0.4, mentalDivisor: 1 },
     { key: 'walkingDistanceKm', label: 'Walking distance', icon: '🚶', unit: 'km', physicalMultiplier: 0.3, physicalDivisor: 1, mentalMultiplier: 0, mentalDivisor: 1 },
@@ -30,10 +59,14 @@ export const DEFAULT_SCORING_RULES = {
   },
 };
 
-export const DAILY_PENALTY = DEFAULT_SCORING_RULES.dailyPenalty;
+export function roundScore(value: number) {
+  return Number(Number(value || 0).toFixed(2));
+}
 
-export function normalizeScoringRules(input) {
-  const activityMap = new Map((input?.activities || []).map((rule) => [rule.key, rule]));
+export function normalizeScoringRules(input?: Partial<WellnessScoringRules> | null): WellnessScoringRules {
+  const activityMap = new Map(
+    (input?.activities || []).map((rule) => [rule.key, rule]),
+  );
 
   return {
     activities: DEFAULT_SCORING_RULES.activities.map((defaultRule) => {
@@ -64,23 +97,19 @@ export function normalizeScoringRules(input) {
   };
 }
 
-export function roundScore(value) {
-  return Number(Number(value || 0).toFixed(2));
-}
-
-function sleepScore(sleepHours, rules) {
-  const hrs = Number(sleepHours || 0);
-  if (hrs === 0) return 0;
-  const diff = hrs - rules.sleep.baselineHours;
+function sleepScore(sleepHours: unknown, rules: WellnessScoringRules) {
+  const hours = Number(sleepHours || 0);
+  if (hours === 0) return 0;
+  const diff = hours - rules.sleep.baselineHours;
   return (diff / rules.sleep.stepHours) * rules.sleep.scorePerStep;
 }
 
-function computeContribution(value, multiplier, divisor) {
+function computeContribution(value: unknown, multiplier: number, divisor: number) {
   if (!multiplier) return 0;
   return (Number(value || 0) / Math.max(1, divisor)) * multiplier;
 }
 
-export function getWorkoutMinutes(entry) {
+export function getWorkoutMinutes(entry: Record<string, unknown>) {
   return Number(entry.runningMinutes || 0)
     + Number(entry.walkingMinutes || 0)
     + Number(entry.exerciseMinutes || 0)
@@ -91,68 +120,29 @@ export function getWorkoutMinutes(entry) {
     + Number(entry.swimmingMinutes || 0);
 }
 
-export function computeEntryScores(entry, scoringRules = DEFAULT_SCORING_RULES) {
-  const rules = normalizeScoringRules(scoringRules);
-  const physicalBase = rules.activities.reduce((sum, rule) => sum + computeContribution(entry[rule.key], rule.physicalMultiplier, rule.physicalDivisor), 0);
-  const mentalBase = rules.activities.reduce((sum, rule) => sum + computeContribution(entry[rule.key], rule.mentalMultiplier, rule.mentalDivisor), 0);
-
-  const sleepPhysical = sleepScore(entry.sleepHours, rules);
-  const sleepMental = sleepScore(entry.sleepHours, rules);
-  const physicalPenalty = rules.dailyPenalty.physical;
-  const mentalPenalty = rules.dailyPenalty.mental;
-
-  const physicalScore = roundScore(physicalBase + sleepPhysical - physicalPenalty);
-  const mentalScore = roundScore(mentalBase + sleepMental - mentalPenalty);
+export function computeEntryScores(entry: Record<string, unknown>, rules: WellnessScoringRules = DEFAULT_SCORING_RULES) {
+  const normalizedRules = normalizeScoringRules(rules);
+  const physicalBase = normalizedRules.activities.reduce(
+    (sum, rule) => sum + computeContribution(entry[rule.key], rule.physicalMultiplier, rule.physicalDivisor),
+    0,
+  );
+  const mentalBase = normalizedRules.activities.reduce(
+    (sum, rule) => sum + computeContribution(entry[rule.key], rule.mentalMultiplier, rule.mentalDivisor),
+    0,
+  );
+  const sleepPhysical = sleepScore(entry.sleepHours, normalizedRules);
+  const sleepMental = sleepScore(entry.sleepHours, normalizedRules);
+  const physicalScore = roundScore(physicalBase + sleepPhysical - normalizedRules.dailyPenalty.physical);
+  const mentalScore = roundScore(mentalBase + sleepMental - normalizedRules.dailyPenalty.mental);
 
   return {
     physicalScore,
     mentalScore,
     totalScore: roundScore(physicalScore + mentalScore),
-    physicalPenalty: roundScore(physicalPenalty),
-    mentalPenalty: roundScore(mentalPenalty),
+    physicalPenalty: roundScore(normalizedRules.dailyPenalty.physical),
+    mentalPenalty: roundScore(normalizedRules.dailyPenalty.mental),
     sleepPhysical: roundScore(sleepPhysical),
     sleepMental: roundScore(sleepMental),
     workoutMinutes: getWorkoutMinutes(entry),
-  };
-}
-
-export function computeDashboardStats(entries, currentEntry, scoringRules = DEFAULT_SCORING_RULES) {
-  const rules = normalizeScoringRules(scoringRules);
-  const rows = [currentEntry, ...entries.filter((entry) => entry.date !== currentEntry.date)].slice(0, 14);
-  const weekRows = rows.slice(0, 7);
-
-  const weeklyRunningKm = weekRows.reduce((sum, entry) => sum + Number(entry.runningDistanceKm || 0), 0);
-  const weeklyWorkoutMinutes = weekRows.reduce((sum, entry) => sum + getWorkoutMinutes(entry), 0);
-  const totalRunningMinutes = weekRows.reduce((sum, entry) => sum + Number(entry.runningMinutes || 0), 0);
-  const averagePace = weeklyRunningKm > 0 ? totalRunningMinutes / weeklyRunningKm : null;
-  const activeDays = weekRows.filter((entry) => getWorkoutMinutes(entry) > 0).length;
-  const scoredRows = rows.map((entry) => ({ entry, scores: computeEntryScores(entry, rules) }));
-  const totalPhysicalScore = scoredRows.reduce((sum, row) => sum + row.scores.physicalScore, 0);
-  const totalMentalScore = scoredRows.reduce((sum, row) => sum + row.scores.mentalScore, 0);
-  const totalBodyScore = roundScore(totalPhysicalScore + totalMentalScore);
-
-  return {
-    todayScores: computeEntryScores(currentEntry, rules),
-    weeklyRunningKm: roundScore(weeklyRunningKm),
-    weeklyWorkoutMinutes: roundScore(weeklyWorkoutMinutes),
-    averagePace: averagePace == null ? null : roundScore(averagePace),
-    activeDays,
-    totalPhysicalScore: roundScore(totalPhysicalScore),
-    totalMentalScore: roundScore(totalMentalScore),
-    totalBodyScore,
-    readiness: {
-      hamptaPass: buildReadiness(totalBodyScore, rules.targets.hamptaPass),
-      skiing2027: buildReadiness(totalBodyScore, rules.targets.skiing2027),
-      marathon10k: buildReadiness(totalBodyScore, rules.targets.marathon10k),
-    },
-  };
-}
-
-function buildReadiness(currentScore, targetScore) {
-  return {
-    targetScore,
-    currentScore: roundScore(currentScore),
-    percent: Math.max(0, Math.min(100, roundScore((currentScore / targetScore) * 100))),
-    remaining: roundScore(Math.max(0, targetScore - currentScore)),
   };
 }

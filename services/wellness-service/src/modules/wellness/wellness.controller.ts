@@ -14,8 +14,11 @@ export class WellnessController {
   ) {}
 
   @Get('defaults')
-  getDefaults() {
-    return this.wellnessService.getDefaults();
+  async getDefaults() {
+    return {
+      ...this.wellnessService.getDefaults(),
+      scoringRules: await this.storageService.loadScoringRules(),
+    };
   }
 
   @Post('coach')
@@ -24,14 +27,73 @@ export class WellnessController {
   }
 
   @Get('data/:userId')
-  loadUserData(@Param('userId') userId: string) {
-    return this.storageService.load(userId);
+  async loadUserData(@Param('userId') userId: string) {
+    const [state, scoringRules] = await Promise.all([
+      this.storageService.load(userId),
+      this.storageService.loadScoringRules(),
+    ]);
+    return { ...state, scoringRules };
   }
 
   @Put('data/:userId')
-  saveUserData(@Param('userId') userId: string, @Body() body: { entries: any[]; form: any }) {
-    this.storageService.save(userId, body);
-    return { ok: true };
+  async saveUserData(@Param('userId') userId: string, @Body() body: { entries: any[]; form: any }) {
+    const [state, scoringRules] = await Promise.all([
+      this.storageService.save(userId, body),
+      this.storageService.loadScoringRules(),
+    ]);
+    return { ...state, scoringRules };
+  }
+
+  @Delete('data/:userId')
+  async clearUserData(@Param('userId') userId: string) {
+    const [state, scoringRules] = await Promise.all([
+      this.storageService.clear(userId),
+      this.storageService.loadScoringRules(),
+    ]);
+    return { ...state, scoringRules };
+  }
+
+  @Post('plan/:userId')
+  async startPlan(
+    @Param('userId') userId: string,
+    @Body() body: { startDate: string; name?: string },
+  ) {
+    const [state, scoringRules] = await Promise.all([
+      this.storageService.startPlan(userId, body.startDate, body.name),
+      this.storageService.loadScoringRules(),
+    ]);
+    return { ...state, scoringRules };
+  }
+
+  @Put('plan/:userId/name')
+  async renamePlan(
+    @Param('userId') userId: string,
+    @Body() body: { name: string },
+  ) {
+    const [state, scoringRules] = await Promise.all([
+      this.storageService.renamePlan(userId, body.name),
+      this.storageService.loadScoringRules(),
+    ]);
+    return { ...state, scoringRules };
+  }
+
+  @Post('plan/:userId/reset')
+  async resetCurrentPlan(@Param('userId') userId: string) {
+    const [state, scoringRules] = await Promise.all([
+      this.storageService.resetCurrentPlan(userId),
+      this.storageService.loadScoringRules(),
+    ]);
+    return { ...state, scoringRules };
+  }
+
+  @Get('scoring-rules')
+  getScoringRules() {
+    return this.storageService.loadScoringRules();
+  }
+
+  @Put('scoring-rules')
+  updateScoringRules(@Body() body: any) {
+    return this.storageService.saveScoringRules(body || {});
   }
 
   /* ---- Strava integration ---- */
@@ -67,8 +129,8 @@ export class WellnessController {
   }
 
   @Get('strava/status/:userId')
-  stravaStatus(@Param('userId') userId: string) {
-    return { connected: this.stravaService.isConnected(userId) };
+  async stravaStatus(@Param('userId') userId: string) {
+    return { connected: await this.stravaService.isConnected(userId) };
   }
 
   @Get('strava/activities/:userId')
@@ -79,8 +141,8 @@ export class WellnessController {
   }
 
   @Delete('strava/:userId')
-  stravaDisconnect(@Param('userId') userId: string) {
-    this.stravaService.disconnect(userId);
+  async stravaDisconnect(@Param('userId') userId: string) {
+    await this.stravaService.disconnect(userId);
     return { ok: true };
   }
 }

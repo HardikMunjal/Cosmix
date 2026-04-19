@@ -43,7 +43,7 @@ function createStyles(theme) {
       maxWidth: '1280px',
       margin: '0 auto',
       display: 'grid',
-      gap: '18px',
+      gap: '14px',
     },
     header: {
       display: 'flex',
@@ -51,10 +51,10 @@ function createStyles(theme) {
       alignItems: 'center',
       gap: '16px',
       flexWrap: 'wrap',
-      borderRadius: '24px',
+      borderRadius: '22px',
       border: `1px solid ${theme.cardBorder}`,
       background: theme.panelBg,
-      padding: '20px 22px',
+      padding: '16px 18px',
       boxShadow: `0 20px 56px ${theme.shadow}`,
     },
     eyebrow: {
@@ -67,13 +67,13 @@ function createStyles(theme) {
     },
     title: {
       margin: 0,
-      fontSize: '32px',
+      fontSize: '28px',
       fontWeight: 800,
       color: theme.textHeading,
     },
     subtitle: {
       margin: '8px 0 0',
-      maxWidth: '620px',
+      maxWidth: '520px',
       color: theme.textSecondary,
       lineHeight: 1.6,
       fontSize: '14px',
@@ -91,8 +91,8 @@ function createStyles(theme) {
     layout: {
       display: 'grid',
       gridTemplateColumns: '280px minmax(0, 1fr)',
-      gap: '18px',
-      minHeight: 'calc(100vh - 180px)',
+      gap: '14px',
+      minHeight: 'calc(100vh - 160px)',
     },
     panel: {
       borderRadius: '24px',
@@ -101,10 +101,14 @@ function createStyles(theme) {
       boxShadow: `0 20px 56px ${theme.shadow}`,
     },
     sidebar: {
-      padding: '18px',
+      padding: '16px',
       display: 'grid',
-      gap: '18px',
+      gap: '14px',
       alignContent: 'start',
+    },
+    sidebarGroup: {
+      display: 'grid',
+      gap: '10px',
     },
     sectionTitle: {
       margin: 0,
@@ -117,24 +121,26 @@ function createStyles(theme) {
     laneButton: {
       width: '100%',
       textAlign: 'left',
-      padding: '14px 16px',
+      padding: '14px 15px',
       borderRadius: '18px',
       border: `1px solid ${theme.cardBorder}`,
       background: theme.cardBg,
       cursor: 'pointer',
       color: theme.textPrimary,
-      display: 'grid',
-      gap: '6px',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: '10px',
     },
     laneTitle: {
       fontSize: '15px',
       fontWeight: 800,
       color: theme.textHeading,
     },
-    laneDesc: {
-      fontSize: '12px',
-      color: theme.textSecondary,
-      lineHeight: 1.5,
+    compactMeta: {
+      fontSize: '11px',
+      color: theme.textMuted,
+      fontWeight: 700,
     },
     onlineDot: {
       width: '8px',
@@ -161,66 +167,65 @@ function createStyles(theme) {
     },
     main: {
       display: 'grid',
-      gridTemplateRows: 'auto minmax(0, 1fr) auto',
+      gridTemplateRows: 'auto auto minmax(0, 1fr) auto',
       minHeight: 0,
       overflow: 'hidden',
     },
-    hero: {
-      padding: '20px 22px',
+    topBar: {
+      padding: '16px 18px',
       borderBottom: `1px solid ${theme.cardBorder}`,
       display: 'flex',
       justifyContent: 'space-between',
-      gap: '16px',
+      gap: '12px',
       flexWrap: 'wrap',
       alignItems: 'center',
-      background: `linear-gradient(135deg, ${theme.cardBg}, ${theme.cardBorder}50)`,
+      background: `linear-gradient(180deg, ${theme.panelBg}, ${theme.cardBg})`,
     },
-    statusPill: {
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: '8px',
-      borderRadius: '999px',
-      padding: '8px 12px',
-      border: `1px solid ${theme.cardBorder}`,
-      background: theme.cardBg,
-      color: theme.textPrimary,
-      fontSize: '12px',
-      fontWeight: 800,
-      textTransform: 'uppercase',
-      letterSpacing: '0.08em',
-    },
-    metricRow: {
+    threadIdentity: {
       display: 'grid',
-      gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-      gap: '10px',
-      width: '100%',
+      gap: '4px',
     },
-    metricCard: {
-      borderRadius: '16px',
-      padding: '14px',
-      border: `1px solid ${theme.cardBorder}`,
-      background: theme.inputBg,
-      display: 'grid',
-      gap: '6px',
-    },
-    metricLabel: {
-      fontSize: '11px',
-      textTransform: 'uppercase',
-      letterSpacing: '0.1em',
-      color: theme.textMuted,
-      fontWeight: 800,
-    },
-    metricValue: {
+    threadName: {
       fontSize: '22px',
       fontWeight: 800,
       color: theme.textHeading,
     },
+    threadMeta: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '8px',
+      color: theme.textSecondary,
+      fontSize: '12px',
+      fontWeight: 700,
+    },
+    mobileConversations: {
+      display: 'none',
+      gap: '10px',
+      padding: '12px 18px 0',
+      overflowX: 'auto',
+      borderBottom: `1px solid ${theme.cardBorder}`,
+      background: theme.panelBg,
+    },
+    mobileConversationButton: {
+      borderRadius: '999px',
+      border: `1px solid ${theme.cardBorder}`,
+      background: theme.cardBg,
+      color: theme.textPrimary,
+      padding: '10px 14px',
+      fontSize: '13px',
+      fontWeight: 700,
+      cursor: 'pointer',
+      whiteSpace: 'nowrap',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '10px',
+    },
     messages: {
       minHeight: 0,
       overflowY: 'auto',
-      padding: '18px 22px',
+      padding: '16px 18px',
       display: 'grid',
-      gap: '14px',
+      gap: '12px',
       background: `linear-gradient(180deg, ${theme.panelDarkBg}, ${theme.cardBg})`,
     },
     empty: {
@@ -234,7 +239,7 @@ function createStyles(theme) {
     },
     messageRow: {
       display: 'flex',
-      gap: '12px',
+      gap: '10px',
       alignItems: 'flex-start',
       maxWidth: '100%',
     },
@@ -253,11 +258,11 @@ function createStyles(theme) {
     },
     messageCard: {
       maxWidth: 'min(78%, 720px)',
-      borderRadius: '20px',
+      borderRadius: '18px',
       border: `1px solid ${theme.cardBorder}`,
-      padding: '14px 16px',
+      padding: '12px 14px',
       display: 'grid',
-      gap: '8px',
+      gap: '6px',
       wordBreak: 'break-word',
       boxShadow: `0 12px 32px ${theme.shadow}`,
     },
@@ -272,27 +277,28 @@ function createStyles(theme) {
       color: theme.textMuted,
     },
     messageText: {
-      fontSize: '14px',
-      lineHeight: 1.65,
+      fontSize: '15px',
+      lineHeight: 1.55,
       color: theme.textPrimary,
       whiteSpace: 'pre-wrap',
     },
     typingBar: {
-      padding: '0 22px 12px',
+      padding: '0 18px 10px',
       color: theme.textSecondary,
       fontSize: '12px',
       fontWeight: 700,
     },
     composer: {
-      padding: '18px 22px 22px',
+      padding: '14px 18px 18px',
       borderTop: `1px solid ${theme.cardBorder}`,
       background: theme.cardBg,
-      display: 'grid',
-      gap: '12px',
+      display: 'flex',
+      gap: '10px',
+      alignItems: 'flex-end',
     },
     input: {
       width: '100%',
-      borderRadius: '16px',
+      borderRadius: '22px',
       border: `1px solid ${theme.inputBorder}`,
       background: theme.inputBg,
       color: theme.textPrimary,
@@ -300,23 +306,12 @@ function createStyles(theme) {
       fontSize: '14px',
       outline: 'none',
       fontFamily: theme.font,
-    },
-    composerRow: {
-      display: 'flex',
-      justifyContent: 'space-between',
-      gap: '10px',
-      flexWrap: 'wrap',
-      alignItems: 'center',
-    },
-    helperText: {
-      fontSize: '12px',
-      color: theme.textSecondary,
-      lineHeight: 1.5,
+      flex: 1,
     },
     sendButton: {
       border: 'none',
-      borderRadius: '14px',
-      padding: '12px 18px',
+      borderRadius: '18px',
+      padding: '14px 18px',
       cursor: 'pointer',
       background: `linear-gradient(135deg, ${theme.blue}, ${theme.orange})`,
       color: '#fff',
@@ -467,29 +462,36 @@ export default function Chat() {
         html, body, #__next { min-height: 100%; margin: 0; }
         @media (max-width: 980px) {
           .chat-layout { grid-template-columns: 1fr !important; }
+          .chat-sidebar { display: none !important; }
+          .chat-mobile-conversations { display: flex !important; }
         }
         @media (max-width: 720px) {
           .chat-page { padding: 14px !important; }
           .chat-header { flex-direction: column !important; align-items: flex-start !important; }
-          .chat-metrics { grid-template-columns: 1fr !important; }
-          .chat-composer-row { flex-direction: column !important; align-items: stretch !important; }
+          .chat-topbar { padding: 14px !important; }
+          .chat-thread-name { font-size: 20px !important; }
+          .chat-messages { padding: 14px !important; }
+          .chat-message-card { max-width: 88% !important; }
+          .chat-composer { padding: 12px 14px 14px !important; }
+          .chat-send { width: 48px !important; padding-left: 0 !important; padding-right: 0 !important; }
+          .chat-send-label { display: none !important; }
         }
       `}</style>
 
       <div style={styles.shell}>
         <header style={styles.header} className="chat-header">
           <div>
-            <div style={styles.eyebrow}>Cosmix realtime</div>
+            <div style={styles.eyebrow}>Cosmix chat</div>
             <h1 style={styles.title}>Chat</h1>
-            <p style={styles.subtitle}>Direct messages and the general lane stay available, but the extra default prompts and template clutter are removed.</p>
+            <p style={styles.subtitle}>A clean conversation view with direct messages and a simple general thread.</p>
           </div>
           <button type="button" onClick={() => router.push('/dashboard')} style={styles.ghostButton}>Back to dashboard</button>
         </header>
 
         <div style={styles.layout} className="chat-layout">
-          <aside style={{ ...styles.panel, ...styles.sidebar }}>
-            <div style={{ display: 'grid', gap: '10px' }}>
-              <h2 style={styles.sectionTitle}>Shared lane</h2>
+          <aside style={{ ...styles.panel, ...styles.sidebar }} className="chat-sidebar">
+            <div style={styles.sidebarGroup}>
+              <h2 style={styles.sectionTitle}>Conversations</h2>
               <button
                 type="button"
                 onClick={() => setActiveChat(GENERAL_CHAT)}
@@ -499,15 +501,15 @@ export default function Chat() {
                   boxShadow: activeChat.type === 'group' ? `0 0 0 1px ${theme.blue}` : 'none',
                 }}
               >
-                <span style={styles.laneTitle}>#general</span>
-                <span style={styles.laneDesc}>Main room for shared updates and quick team messages.</span>
+                <span style={styles.laneTitle}>General</span>
+                <span style={styles.compactMeta}>{onlineUsers.length || 1} online</span>
               </button>
             </div>
 
-            <div style={{ display: 'grid', gap: '10px' }}>
+            <div style={styles.sidebarGroup}>
               <h2 style={styles.sectionTitle}>People</h2>
               {contactRows.length === 0 ? (
-                <div style={styles.laneDesc}>Open the chat from another account to start direct messaging live users.</div>
+                <div style={styles.compactMeta}>Direct chats appear here when someone messages you.</div>
               ) : contactRows.map((contact) => (
                 <button
                   key={contact.name}
@@ -530,35 +532,49 @@ export default function Chat() {
           </aside>
 
           <section style={{ ...styles.panel, ...styles.main }}>
-            <div style={styles.hero}>
-              <div style={{ display: 'grid', gap: '8px' }}>
-                <div style={styles.sectionTitle}>Current lane</div>
-                <div style={{ fontSize: '26px', fontWeight: 800, color: theme.textHeading }}>{laneLabel}</div>
-                <div style={{ color: theme.textSecondary, fontSize: '14px', lineHeight: 1.6 }}>{activeChat.type === 'dm' ? `Private conversation with ${activeChat.name}.` : 'General room for shared updates.'}</div>
-              </div>
-
-              <div style={{ display: 'grid', gap: '10px', minWidth: 'min(100%, 360px)' }}>
-                <div style={styles.metricRow} className="chat-metrics">
-                  <div style={styles.metricCard}>
-                    <div style={styles.metricLabel}>Connection</div>
-                    <div style={{ ...styles.metricValue, fontSize: '18px', color: connectionState === 'connected' ? theme.green : theme.red }}>{connectionState}</div>
-                  </div>
-                  <div style={styles.metricCard}>
-                    <div style={styles.metricLabel}>Online users</div>
-                    <div style={styles.metricValue}>{onlineUsers.length || 1}</div>
-                  </div>
-                  <div style={styles.metricCard}>
-                    <div style={styles.metricLabel}>Messages here</div>
-                    <div style={styles.metricValue}>{visibleMessages.length}</div>
-                  </div>
-                </div>
-                <div style={styles.statusPill}><span style={styles.onlineDot} />{activeChat.type === 'dm' ? 'Direct messaging enabled' : 'Group lane ready'}</div>
-              </div>
+            <div style={styles.mobileConversations} className="chat-mobile-conversations">
+              <button
+                type="button"
+                onClick={() => setActiveChat(GENERAL_CHAT)}
+                style={{
+                  ...styles.mobileConversationButton,
+                  borderColor: activeChat.type === 'group' ? theme.blue : theme.cardBorder,
+                  boxShadow: activeChat.type === 'group' ? `0 0 0 1px ${theme.blue}` : 'none',
+                }}
+              >
+                <span>General</span>
+              </button>
+              {contactRows.map((contact) => (
+                <button
+                  key={contact.name}
+                  type="button"
+                  onClick={() => setActiveChat({ type: 'dm', name: contact.name })}
+                  style={{
+                    ...styles.mobileConversationButton,
+                    borderColor: activeChat.type === 'dm' && activeChat.name === contact.name ? theme.orange : theme.cardBorder,
+                    boxShadow: activeChat.type === 'dm' && activeChat.name === contact.name ? `0 0 0 1px ${theme.orange}` : 'none',
+                  }}
+                >
+                  {contact.live ? <span style={styles.onlineDot} /> : null}
+                  <span>@{contact.name}</span>
+                </button>
+              ))}
             </div>
 
-            <div style={styles.messages}>
+            <div style={styles.topBar} className="chat-topbar">
+              <div style={styles.threadIdentity}>
+                <div style={styles.threadName} className="chat-thread-name">{activeChat.type === 'dm' ? `@${activeChat.name}` : 'General'}</div>
+                <div style={styles.threadMeta}>
+                  <span style={{ ...styles.onlineDot, background: connectionState === 'connected' ? theme.green : theme.red, boxShadow: connectionState === 'connected' ? `0 0 12px ${theme.green}` : 'none' }} />
+                  <span>{connectionState === 'connected' ? 'Online' : 'Reconnecting'}</span>
+                </div>
+              </div>
+              <div style={styles.compactMeta}>{visibleMessages.length} messages</div>
+            </div>
+
+            <div style={styles.messages} className="chat-messages">
               {visibleMessages.length === 0 ? (
-                <div style={styles.empty}>Start the conversation in {laneLabel}. Messages sent to live users now land in the correct direct thread.</div>
+                <div style={styles.empty}>No messages yet.</div>
               ) : visibleMessages.map((message, index) => {
                 const mine = message.user === user.username;
                 const accent = getUserColor(message.user || 'user', theme);
@@ -580,11 +596,10 @@ export default function Chat() {
                       )}
                     </div>
 
-                    <div style={{ ...styles.messageCard, background: mine ? `${accent}18` : theme.cardBg, borderColor: mine ? `${accent}77` : theme.cardBorder }}>
+                    <div className="chat-message-card" style={{ ...styles.messageCard, background: mine ? `${accent}18` : theme.cardBg, borderColor: mine ? `${accent}77` : theme.cardBorder }}>
                       <div style={{ ...styles.messageMeta, color: mine ? accent : theme.textMuted }}>
                         <span>{message.user}</span>
                         <span>{message.timestamp || ''}</span>
-                        <span>{message.chat?.type === 'dm' ? 'direct' : 'group'}</span>
                       </div>
                       <div style={styles.messageText}>{message.text}</div>
                     </div>
@@ -596,7 +611,7 @@ export default function Chat() {
 
             {typingUsers.length > 0 ? <div style={styles.typingBar}>{typingUsers.join(', ')} typing...</div> : null}
 
-            <div style={styles.composer}>
+            <div style={styles.composer} className="chat-composer">
               <input
                 ref={inputRef}
                 value={input}
@@ -610,14 +625,10 @@ export default function Chat() {
                     sendMessage();
                   }
                 }}
-                placeholder={`Message ${laneLabel}`}
+                placeholder="Type a message"
                 style={styles.input}
               />
-
-              <div style={styles.composerRow} className="chat-composer-row">
-                <div style={styles.helperText}>{activeChat.type === 'dm' ? `Only you and ${activeChat.name} will see this thread.` : 'Everyone in the general room will see this message.'}</div>
-                <button type="button" onClick={sendMessage} style={styles.sendButton}>Send message</button>
-              </div>
+              <button type="button" onClick={sendMessage} style={styles.sendButton} className="chat-send"><span className="chat-send-label">Send</span></button>
             </div>
           </section>
         </div>

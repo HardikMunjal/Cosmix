@@ -1,4 +1,8 @@
+x-default-env: &default-env
+  DATABASE_URL: ${DATABASE_URL:-postgres://user:password@postgres:5432/cosmix}
+
 services:
+
   nginx:
     image: nginx:1.27-alpine
     restart: unless-stopped
@@ -16,35 +20,58 @@ services:
       context: ..
       dockerfile: apps/api-gateway/Dockerfile
     restart: unless-stopped
+    environment: *default-env
     depends_on:
-      - auth-service
-      - chat-service
-      - user-service
-      - wellness-service
+      postgres:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
+      chat-service:
+        condition: service_started
+      user-service:
+        condition: service_started
+      wellness-service:
+        condition: service_started
 
   auth-service:
     build:
       context: ..
       dockerfile: services/auth-service/Dockerfile
     restart: unless-stopped
+    environment: *default-env
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   chat-service:
     build:
       context: ..
       dockerfile: services/chat-service/Dockerfile
     restart: unless-stopped
+    environment: *default-env
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   user-service:
     build:
       context: ..
       dockerfile: services/user-service/Dockerfile
     restart: unless-stopped
+    environment: *default-env
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   wellness-service:
     build:
       context: ..
       dockerfile: services/wellness-service/Dockerfile
     restart: unless-stopped
+    environment: *default-env
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       - ../services/wellness-service/data:/usr/src/app/data
 
@@ -53,12 +80,18 @@ services:
       context: ..
       dockerfile: apps/web/Dockerfile
     restart: unless-stopped
+    environment: *default-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api-gateway:
+        condition: service_started
+      chat-service:
+        condition: service_started
+      wellness-service:
+        condition: service_started
     volumes:
       - ../apps/web/data:/usr/src/app/data
-    depends_on:
-      - api-gateway
-      - chat-service
-      - wellness-service
 
   postgres:
     image: postgres:13
@@ -67,6 +100,11 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
       POSTGRES_DB: ${POSTGRES_DB:-cosmix}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-cosmix}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     volumes:
       - postgres_data:/var/lib/postgresql/data
 

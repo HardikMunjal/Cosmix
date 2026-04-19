@@ -82,10 +82,13 @@ terraform apply
 
 4. SSH into the instance using the Terraform output.
 5. Ensure the repo exists in `/opt/cosmix`.
-6. Start the stack:
+6. Create `infra/.env` on the instance from `infra/.env.ec2.example` and set a strong Postgres password.
+7. Start the stack:
 
 ```bash
 cd /opt/cosmix/infra
+cp .env.ec2.example .env
+# edit .env and set POSTGRES_PASSWORD / DATABASE_URL first
 docker compose -f docker-compose.ec2.yml up -d --build
 ```
 
@@ -106,6 +109,14 @@ Chat websocket and wellness requests are routed through the same public host on 
   - Nginx or ALB
   - ACM TLS
   - managed Postgres
+
+## Postgres Choice
+
+For AWS free tier, the better approach here is one EC2 instance with Docker Compose and a private Postgres container on the same host. A separate EC2 instance or RDS would add cost or complexity without real benefit for this workload.
+
+- Postgres stays internal to Docker networking and is not exposed publicly.
+- Persistent storage is handled by the `postgres_data` Docker volume.
+- Services wait for Postgres health before starting.
 
 ## Important Note About AWS Credentials
 

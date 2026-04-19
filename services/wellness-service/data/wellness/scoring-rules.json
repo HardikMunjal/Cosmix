@@ -1,0 +1,138 @@
+{
+  "activities": [
+    {
+      "key": "runningDistanceKm",
+      "label": "Running",
+      "icon": "??",
+      "unit": "km",
+      "physicalMultiplier": 0.9,
+      "physicalDivisor": 1,
+      "mentalMultiplier": 0.4,
+      "mentalDivisor": 1
+    },
+    {
+      "key": "walkingDistanceKm",
+      "label": "Walking distance",
+      "icon": "??",
+      "unit": "km",
+      "physicalMultiplier": 0.3,
+      "physicalDivisor": 1,
+      "mentalMultiplier": 0,
+      "mentalDivisor": 1
+    },
+    {
+      "key": "walkingMinutes",
+      "label": "Walking time",
+      "icon": "??",
+      "unit": "mins",
+      "physicalMultiplier": 0,
+      "physicalDivisor": 1,
+      "mentalMultiplier": 0.25,
+      "mentalDivisor": 30
+    },
+    {
+      "key": "exerciseMinutes",
+      "label": "Workout",
+      "icon": "??",
+      "unit": "mins",
+      "physicalMultiplier": 0.8,
+      "physicalDivisor": 30,
+      "mentalMultiplier": 0.5,
+      "mentalDivisor": 30
+    },
+    {
+      "key": "badmintonMinutes",
+      "label": "Badminton",
+      "icon": "??",
+      "unit": "mins",
+      "physicalMultiplier": 1.2,
+      "physicalDivisor": 60,
+      "mentalMultiplier": 0.5,
+      "mentalDivisor": 30
+    },
+    {
+      "key": "footballMinutes",
+      "label": "Football",
+      "icon": "?",
+      "unit": "mins",
+      "physicalMultiplier": 2,
+      "physicalDivisor": 60,
+      "mentalMultiplier": 0.5,
+      "mentalDivisor": 30
+    },
+    {
+      "key": "cricketMinutes",
+      "label": "Cricket",
+      "icon": "??",
+      "unit": "mins",
+      "physicalMultiplier": 1.5,
+      "physicalDivisor": 60,
+      "mentalMultiplier": 0.5,
+      "mentalDivisor": 30
+    },
+    {
+      "key": "swimmingMinutes",
+      "label": "Swimming",
+      "icon": "??",
+      "unit": "mins",
+      "physicalMultiplier": 0.7,
+      "physicalDivisor": 30,
+      "mentalMultiplier": 1,
+      "mentalDivisor": 30
+    },
+    {
+      "key": "meditationMinutes",
+      "label": "Meditation",
+      "icon": "??",
+      "unit": "mins",
+      "physicalMultiplier": 0.2,
+      "physicalDivisor": 30,
+      "mentalMultiplier": 1.5,
+      "mentalDivisor": 30
+    },
+    {
+      "key": "whiskyPegs",
+      "label": "Whisky",
+      "icon": "??",
+      "unit": "pegs",
+      "physicalMultiplier": -1.1,
+      "physicalDivisor": 1,
+      "mentalMultiplier": 0,
+      "mentalDivisor": 1
+    },
+    {
+      "key": "fastFoodServings",
+      "label": "Fast food",
+      "icon": "??",
+      "unit": "count",
+      "physicalMultiplier": -0.9,
+      "physicalDivisor": 1,
+      "mentalMultiplier": 0,
+      "mentalDivisor": 1
+    },
+    {
+      "key": "sugarServings",
+      "label": "Sugar",
+      "icon": "??",
+      "unit": "count",
+      "physicalMultiplier": -2,
+      "physicalDivisor": 1,
+      "mentalMultiplier": 0,
+      "mentalDivisor": 1
+    }
+  ],
+  "dailyPenalty": {
+    "physical": 2.7,
+    "mental": 1
+  },
+  "sleep": {
+    "baselineHours": 6.5,
+    "stepHours": 0.5,
+    "scorePerStep": 0.5
+  },
+  "targets": {
+    "hamptaPass": 90,
+    "skiing2027": 300,
+    "marathon10k": 100
+  }
+}

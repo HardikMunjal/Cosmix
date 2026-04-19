@@ -10,6 +10,7 @@ type NormalizedEntry = {
   meditationMinutes: number;
   headacheLevel: number;
   exerciseMinutes: number;
+  yogaMinutes: number;
   fastFoodServings: number;
   sugarServings: number;
   cricketMinutes: number;
@@ -178,6 +179,7 @@ export class WellnessService {
       meditationMinutes: safeNumber(entry.meditationMinutes),
       headacheLevel: safeNumber(entry.headacheLevel),
       exerciseMinutes: safeNumber(entry.exerciseMinutes),
+      yogaMinutes: safeNumber(entry.yogaMinutes),
       fastFoodServings: safeNumber(entry.fastFoodServings),
       sugarServings: safeNumber(entry.sugarServings),
       cricketMinutes: safeNumber(entry.cricketMinutes),
@@ -215,6 +217,7 @@ export class WellnessService {
     return entry.runningMinutes
       + entry.walkingMinutes
       + entry.exerciseMinutes
+      + entry.yogaMinutes
       + entry.cricketMinutes
       + entry.footballMinutes
       + entry.badmintonMinutes
@@ -366,7 +369,7 @@ export class WellnessService {
     const combined = userTurns.map((turn) => turn.text.toLowerCase()).join(' ');
     const themes: string[] = [];
 
-    if (/(run|running|jog|workout|gym|exercise|swim|swimming|badminton|football|cricket)/.test(combined)) {
+    if (/(run|running|jog|workout|gym|exercise|yoga|asan|swim|swimming|badminton|football|cricket)/.test(combined)) {
       themes.push(`you have been talking a lot about movement, and today you are sitting at ${this.formatMetric(this.totalMovement(latestEntry))} active minutes`);
     }
 
@@ -404,6 +407,7 @@ export class WellnessService {
       { terms: ['km', 'kilometer', 'kilometers'], label: 'running distance', value: latestEntry.runningDistanceKm, unit: 'km' },
       { terms: ['meditate', 'meditation', 'breathing', 'breathwork'], label: 'meditation', value: latestEntry.meditationMinutes, unit: 'mins' },
       { terms: ['exercise', 'workout', 'gym', 'training'], label: 'exercise', value: latestEntry.exerciseMinutes, unit: 'mins' },
+      { terms: ['yoga', 'asan', 'asanas', 'surya namaskar'], label: 'yoga', value: latestEntry.yogaMinutes, unit: 'mins' },
       { terms: ['fast food', 'burger', 'pizza', 'junk food'], label: 'fast food', value: latestEntry.fastFoodServings, unit: 'servings' },
       { terms: ['cricket'], label: 'cricket', value: latestEntry.cricketMinutes, unit: 'mins' },
       { terms: ['football', 'soccer'], label: 'football', value: latestEntry.footballMinutes, unit: 'mins' },

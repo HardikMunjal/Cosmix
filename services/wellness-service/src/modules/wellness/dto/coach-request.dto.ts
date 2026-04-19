@@ -9,6 +9,7 @@ export class WellnessEntryDto {
   sugarServings?: number;
   whiskyPegs?: number;
   exerciseMinutes?: number;
+  yogaMinutes?: number;
   fastFoodServings?: number;
   cricketMinutes?: number;
   footballMinutes?: number;

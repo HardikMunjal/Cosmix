@@ -9,6 +9,7 @@ export const ACTIVITY_FIELDS = [
   { key: 'walkingMinutes', label: 'Walking time', unit: 'mins', color: '#a3e635', step: 1 },
   { key: 'walkingDistanceKm', label: 'Walking distance', unit: 'km', color: '#84cc16', step: 0.1 },
   { key: 'exerciseMinutes', label: 'Workout', unit: 'mins', color: '#f59e0b', step: 1 },
+  { key: 'yogaMinutes', label: 'Yoga', unit: 'mins', color: '#fbbf24', step: 1 },
   { key: 'badmintonMinutes', label: 'Badminton', unit: 'mins', color: '#eab308', step: 1 },
   { key: 'footballMinutes', label: 'Football', unit: 'mins', color: '#22c55e', step: 1 },
   { key: 'cricketMinutes', label: 'Cricket', unit: 'mins', color: '#8b5cf6', step: 1 },
@@ -28,6 +29,7 @@ export const DEFAULT_FORM = {
   walkingMinutes: 0,
   walkingDistanceKm: 0,
   exerciseMinutes: 0,
+  yogaMinutes: 0,
   badmintonMinutes: 0,
   footballMinutes: 0,
   cricketMinutes: 0,
@@ -152,6 +154,7 @@ export function parseActivityCommand(form, message) {
 
   const mappings = [
     { key: 'exerciseMinutes', label: 'Workout', unit: 'mins', terms: ['exercise', 'workout', 'gym', 'training', 'kasrat', 'व्यायाम', 'कसरत'] },
+    { key: 'yogaMinutes', label: 'Yoga', unit: 'mins', terms: ['yoga', 'asan', 'asanas', 'surya namaskar', 'योग'] },
     { key: 'badmintonMinutes', label: 'Badminton', unit: 'mins', terms: ['badminton'] },
     { key: 'footballMinutes', label: 'Football', unit: 'mins', terms: ['football', 'soccer'] },
     { key: 'cricketMinutes', label: 'Cricket', unit: 'mins', terms: ['cricket'] },
@@ -182,6 +185,7 @@ export function parseActivityCommand(form, message) {
     ['walkingMinutes', 'Walking time', 'mins'],
     ['walkingDistanceKm', 'Walking distance', 'km'],
     ['exerciseMinutes', 'Workout', 'mins'],
+    ['yogaMinutes', 'Yoga', 'mins'],
     ['badmintonMinutes', 'Badminton', 'mins'],
     ['footballMinutes', 'Football', 'mins'],
     ['cricketMinutes', 'Cricket', 'mins'],

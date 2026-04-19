@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import Datastore from '@seald-io/nedb';
 import { assignOrphanStrategiesToOwner } from './strategyStore';
+import { ensureWebStorage, getWebPool, hasPostgresStorage } from './postgres';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const USERS_DB_FILE = path.join(DATA_DIR, 'users.db');
@@ -20,6 +21,7 @@ const SEEDED_USER = {
 };
 
 let dbBundlePromise = null;
+let seededUserPromise = null;
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) {
@@ -115,6 +117,22 @@ function buildClientUser(user) {
   };
 }
 
+function mapPgUser(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    username: row.username,
+    usernameKey: row.username_key,
+    email: row.email || '',
+    emailKey: row.email_key || undefined,
+    passwordHash: row.password_hash || '',
+    quote: row.quote || '',
+    avatar: row.avatar || '',
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
+  };
+}
+
 async function initStores() {
   ensureDataDir();
 
@@ -168,6 +186,45 @@ async function getStores() {
   return dbBundlePromise;
 }
 
+async function ensureSeededUser() {
+  if (!hasPostgresStorage()) return null;
+  if (!seededUserPromise) {
+    seededUserPromise = (async () => {
+      const pool = await ensureWebStorage();
+      const usernameKey = normalizeUsername(SEEDED_USER.username);
+      const emailKey = normalizeEmail(SEEDED_USER.email);
+      await pool.query(
+        `INSERT INTO app_users (
+           id, username, username_key, email, email_key, password_hash, quote, avatar, created_at, updated_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+         ON CONFLICT (id) DO UPDATE
+         SET username = COALESCE(app_users.username, EXCLUDED.username),
+             username_key = EXCLUDED.username_key,
+             email = EXCLUDED.email,
+             email_key = EXCLUDED.email_key,
+             password_hash = EXCLUDED.password_hash,
+             quote = COALESCE(NULLIF(app_users.quote, ''), EXCLUDED.quote),
+             avatar = COALESCE(app_users.avatar, EXCLUDED.avatar),
+             updated_at = NOW()`,
+        [
+          SEEDED_USER.id,
+          SEEDED_USER.username,
+          usernameKey,
+          SEEDED_USER.email,
+          emailKey,
+          hashPassword(SEEDED_USER.password),
+          SEEDED_USER.quote,
+          SEEDED_USER.avatar,
+        ],
+      );
+      await assignOrphanStrategiesToOwner(SEEDED_USER.id);
+      const seeded = await pool.query('SELECT * FROM app_users WHERE id = $1', [SEEDED_USER.id]);
+      return mapPgUser(seeded.rows[0]);
+    })();
+  }
+  return seededUserPromise;
+}
+
 function setSessionCookie(res, token, expiresAt) {
   const expiryDate = new Date(expiresAt);
   appendSetCookie(res, serializeCookie(SESSION_COOKIE_NAME, token, {
@@ -190,6 +247,28 @@ function clearSessionCookie(res) {
 }
 
 async function createSessionForUser(userId, res) {
+  if (hasPostgresStorage()) {
+    await ensureSeededUser();
+    const pool = getWebPool();
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + SESSION_WINDOW_MS).toISOString();
+    const session = {
+      id: `sess-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
+      userId: String(userId),
+      tokenHash: hashSessionToken(token),
+      createdAt: new Date().toISOString(),
+      lastActivityAt: new Date().toISOString(),
+      expiresAt,
+    };
+    await pool.query(
+      `INSERT INTO app_sessions (id, user_id, token_hash, created_at, last_activity_at, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [session.id, session.userId, session.tokenHash, session.createdAt, session.lastActivityAt, session.expiresAt],
+    );
+    setSessionCookie(res, token, expiresAt);
+    return session;
+  }
+
   const { sessions } = await getStores();
   const token = crypto.randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + SESSION_WINDOW_MS).toISOString();
@@ -207,6 +286,17 @@ async function createSessionForUser(userId, res) {
 }
 
 async function extendSession(session, token, res) {
+  if (hasPostgresStorage()) {
+    const pool = getWebPool();
+    const expiresAt = new Date(Date.now() + SESSION_WINDOW_MS).toISOString();
+    await pool.query(
+      'UPDATE app_sessions SET expires_at = $2, last_activity_at = $3 WHERE id = $1',
+      [session.id, expiresAt, new Date().toISOString()],
+    );
+    setSessionCookie(res, token, expiresAt);
+    return;
+  }
+
   const { sessions } = await getStores();
   const expiresAt = new Date(Date.now() + SESSION_WINDOW_MS).toISOString();
   await sessions.updateAsync(
@@ -218,6 +308,42 @@ async function extendSession(session, token, res) {
 }
 
 export async function signUpUser(payload) {
+  if (hasPostgresStorage()) {
+    await ensureSeededUser();
+    const pool = getWebPool();
+    const username = validateUsername(payload.username);
+    const usernameKey = normalizeUsername(username);
+    const email = payload.email ? validateGmail(payload.email) : '';
+    const emailKey = email || null;
+    const password = validatePassword(payload.password);
+
+    const existingUsername = await pool.query('SELECT id FROM app_users WHERE username_key = $1', [usernameKey]);
+    if (existingUsername.rows[0]) throw new Error('Username already exists.');
+    if (emailKey) {
+      const existingEmail = await pool.query('SELECT id FROM app_users WHERE email_key = $1', [emailKey]);
+      if (existingEmail.rows[0]) throw new Error('Email already exists.');
+    }
+
+    const user = {
+      id: `usr-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
+      username,
+      usernameKey,
+      email,
+      emailKey,
+      passwordHash: hashPassword(password),
+      quote: 'Building better decisions, one signal at a time.',
+      avatar: '',
+    };
+
+    await pool.query(
+      `INSERT INTO app_users (
+         id, username, username_key, email, email_key, password_hash, quote, avatar, created_at, updated_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())`,
+      [user.id, user.username, user.usernameKey, user.email || null, user.emailKey, user.passwordHash, user.quote, user.avatar],
+    );
+    return buildClientUser(user);
+  }
+
   const { users } = await getStores();
   const username = validateUsername(payload.username);
   const usernameKey = normalizeUsername(username);
@@ -250,6 +376,27 @@ export async function signUpUser(payload) {
 }
 
 export async function loginWithUsernamePassword(payload) {
+  if (hasPostgresStorage()) {
+    await ensureSeededUser();
+    const pool = getWebPool();
+    const identifier = String(payload.identifier || '').trim();
+    const password = String(payload.password || '');
+    if (!identifier) throw new Error('Username is required.');
+    if (!password) throw new Error('Password is required.');
+
+    const normalizedIdentifier = normalizeUsername(identifier);
+    const normalizedEmail = normalizeEmail(identifier);
+    const result = await pool.query(
+      'SELECT * FROM app_users WHERE username_key = $1 OR email_key = $2 LIMIT 1',
+      [normalizedIdentifier, normalizedEmail],
+    );
+    const user = mapPgUser(result.rows[0]);
+    if (!user || !verifyPassword(password, user.passwordHash)) {
+      throw new Error('Invalid username or password.');
+    }
+    return buildClientUser(user);
+  }
+
   const { users } = await getStores();
   const identifier = String(payload.identifier || '').trim();
   const password = String(payload.password || '');
@@ -266,6 +413,19 @@ export async function loginWithUsernamePassword(payload) {
 }
 
 export async function loginWithGmail(payload) {
+  if (hasPostgresStorage()) {
+    await ensureSeededUser();
+    const pool = getWebPool();
+    const email = validateGmail(payload.email);
+    if (!email) throw new Error('Gmail address is required.');
+    const result = await pool.query('SELECT * FROM app_users WHERE email_key = $1 LIMIT 1', [email]);
+    const user = mapPgUser(result.rows[0]);
+    if (!user) {
+      throw new Error('No account found for that Gmail. Sign up first.');
+    }
+    return buildClientUser(user);
+  }
+
   const { users } = await getStores();
   const email = validateGmail(payload.email);
   if (!email) throw new Error('Gmail address is required.');
@@ -281,6 +441,14 @@ export async function createAuthenticatedSession(userId, res) {
 }
 
 export async function findUserById(userId) {
+  if (hasPostgresStorage()) {
+    await ensureSeededUser();
+    const pool = getWebPool();
+    const result = await pool.query('SELECT * FROM app_users WHERE id = $1 LIMIT 1', [String(userId)]);
+    const user = mapPgUser(result.rows[0]);
+    return user ? buildClientUser(user) : null;
+  }
+
   const { users } = await getStores();
   const user = await users.findOneAsync({ id: String(userId) }).execAsync();
   return user ? buildClientUser(user) : null;
@@ -290,6 +458,35 @@ export async function getAuthenticatedUser(req, res) {
   const cookies = parseCookies(req);
   const token = cookies[SESSION_COOKIE_NAME];
   if (!token) return null;
+
+  if (hasPostgresStorage()) {
+    await ensureSeededUser();
+    const pool = getWebPool();
+    const tokenHash = hashSessionToken(token);
+    const sessionResult = await pool.query('SELECT * FROM app_sessions WHERE token_hash = $1 LIMIT 1', [tokenHash]);
+    const session = sessionResult.rows[0];
+    if (!session) {
+      clearSessionCookie(res);
+      return null;
+    }
+
+    if (new Date(session.expires_at).getTime() <= Date.now()) {
+      await pool.query('DELETE FROM app_sessions WHERE id = $1', [session.id]);
+      clearSessionCookie(res);
+      return null;
+    }
+
+    const userResult = await pool.query('SELECT * FROM app_users WHERE id = $1 LIMIT 1', [String(session.user_id)]);
+    const user = mapPgUser(userResult.rows[0]);
+    if (!user) {
+      await pool.query('DELETE FROM app_sessions WHERE id = $1', [session.id]);
+      clearSessionCookie(res);
+      return null;
+    }
+
+    await extendSession({ id: session.id }, token, res);
+    return buildClientUser(user);
+  }
 
   const { users, sessions } = await getStores();
   const tokenHash = hashSessionToken(token);
@@ -320,13 +517,65 @@ export async function logoutAuthenticatedUser(req, res) {
   const cookies = parseCookies(req);
   const token = cookies[SESSION_COOKIE_NAME];
   if (token) {
+    if (hasPostgresStorage()) {
+      const pool = getWebPool();
+      await pool.query('DELETE FROM app_sessions WHERE token_hash = $1', [hashSessionToken(token)]);
+    } else {
     const { sessions } = await getStores();
     await sessions.removeAsync({ tokenHash: hashSessionToken(token) }, {});
+    }
   }
   clearSessionCookie(res);
 }
 
 export async function updateAuthenticatedProfile(userId, payload) {
+  if (hasPostgresStorage()) {
+    await ensureSeededUser();
+    const pool = getWebPool();
+    const existingResult = await pool.query('SELECT * FROM app_users WHERE id = $1 LIMIT 1', [String(userId)]);
+    const existing = mapPgUser(existingResult.rows[0]);
+    if (!existing) throw new Error('User not found.');
+
+    const username = validateUsername(payload.username ?? existing.username);
+    const usernameKey = normalizeUsername(username);
+    const email = payload.email === undefined
+      ? (existing.email || '')
+      : (payload.email ? validateGmail(payload.email) : '');
+    const emailKey = email || null;
+
+    const usernameOwner = await pool.query('SELECT id FROM app_users WHERE username_key = $1 LIMIT 1', [usernameKey]);
+    if (usernameOwner.rows[0] && usernameOwner.rows[0].id !== existing.id) throw new Error('Username already exists.');
+    if (emailKey) {
+      const emailOwner = await pool.query('SELECT id FROM app_users WHERE email_key = $1 LIMIT 1', [emailKey]);
+      if (emailOwner.rows[0] && emailOwner.rows[0].id !== existing.id) throw new Error('Email already exists.');
+    }
+
+    const nextUser = {
+      ...existing,
+      username,
+      usernameKey,
+      email,
+      emailKey,
+      quote: String(payload.quote ?? existing.quote ?? '').trim() || 'Building better decisions, one signal at a time.',
+      avatar: payload.avatar ?? existing.avatar ?? '',
+      updatedAt: new Date().toISOString(),
+    };
+
+    await pool.query(
+      `UPDATE app_users
+       SET username = $2,
+           username_key = $3,
+           email = $4,
+           email_key = $5,
+           quote = $6,
+           avatar = $7,
+           updated_at = $8
+       WHERE id = $1`,
+      [existing.id, nextUser.username, nextUser.usernameKey, nextUser.email || null, nextUser.emailKey, nextUser.quote, nextUser.avatar, nextUser.updatedAt],
+    );
+    return buildClientUser(nextUser);
+  }
+
   const { users } = await getStores();
   const existing = await users.findOneAsync({ id: String(userId) }).execAsync();
   if (!existing) throw new Error('User not found.');

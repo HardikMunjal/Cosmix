@@ -8,6 +8,7 @@ import {
   OnGatewayDisconnect,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
+import { ChatService } from './chat.service';
 
 @WebSocketGateway({
   cors: {
@@ -17,6 +18,8 @@ import { Server, Socket } from 'socket.io';
 export class ChatGateway
   implements OnGatewayConnection, OnGatewayDisconnect
 {
+  constructor(private readonly chatService: ChatService) {}
+
   @WebSocketServer()
   server!: Server;
 
@@ -45,7 +48,7 @@ export class ChatGateway
 
   /* 👤 JOIN USER */
   @SubscribeMessage('join')
-  handleJoin(
+  async handleJoin(
     @MessageBody() data: { username: string },
     @ConnectedSocket() socket: Socket,
   ) {
@@ -58,6 +61,11 @@ export class ChatGateway
 
     /* Auto join default room */
     socket.join('general');
+
+    const recentMessages = await this.chatService.getMessagesForChat({ type: 'group', name: 'general' }, username);
+    if (recentMessages.length) {
+      socket.emit('history', { chat: { type: 'group', name: 'general' }, messages: recentMessages });
+    }
 
     this.server.emit('online_users', this.getOnlineUsers());
 
@@ -76,7 +84,7 @@ export class ChatGateway
 
   /* 💬 MESSAGE HANDLER */
   @SubscribeMessage('message')
-  handleMessage(
+  async handleMessage(
     @MessageBody()
     data: {
       type: 'text' | 'gif';
@@ -95,6 +103,7 @@ export class ChatGateway
       ...data,
       user: sender,
     };
+    await this.chatService.sendMessage(payload);
     // COMMAND / AI HANDLING
     if (data.type === 'text' && data.text) {
       const text = data.text.trim();
