@@ -92,3 +92,35 @@ variable "repo_branch" {
   type        = string
   default     = "main"
 }
+
+variable "postgres_user" {
+  description = "Postgres username written into infra/.env on the EC2 host"
+  type        = string
+  default     = "cosmix"
+}
+
+variable "postgres_password" {
+  description = "Postgres password written into infra/.env on the EC2 host"
+  type        = string
+  sensitive   = true
+  default     = "replace-with-a-strong-password"
+}
+
+variable "postgres_db" {
+  description = "Postgres database name written into infra/.env on the EC2 host"
+  type        = string
+  default     = "cosmix"
+}
+
+variable "strava_client_id" {
+  description = "Optional Strava client id written into infra/.env on the EC2 host"
+  type        = string
+  default     = ""
+}
+
+variable "strava_client_secret" {
+  description = "Optional Strava client secret written into infra/.env on the EC2 host"
+  type        = string
+  sensitive   = true
+  default     = ""
+}

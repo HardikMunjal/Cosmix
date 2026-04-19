@@ -31,6 +31,17 @@ if [ -n "${repo_url}" ]; then
     git -C ${app_directory} checkout ${repo_branch}
     git -C ${app_directory} pull --ff-only origin ${repo_branch}
   fi
+
+  cat > ${app_directory}/infra/.env <<EOF
+POSTGRES_USER=${postgres_user}
+POSTGRES_PASSWORD=${postgres_password}
+POSTGRES_DB=${postgres_db}
+DATABASE_URL=postgres://${postgres_user}:${postgres_password}@postgres:5432/${postgres_db}
+STRAVA_CLIENT_ID=${strava_client_id}
+STRAVA_CLIENT_SECRET=${strava_client_secret}
+EOF
+
+  docker compose -f ${app_directory}/infra/docker-compose.ec2.yml up -d --build > /var/log/cosmix-docker-bootstrap.log 2>&1
 fi
 
 chown -R ec2-user:ec2-user ${app_directory}

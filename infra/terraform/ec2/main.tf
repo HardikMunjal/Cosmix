@@ -132,9 +132,14 @@ resource "aws_instance" "cosmix" {
 
   user_data = templatefile("${path.module}/user-data.sh.tftpl", {
     app_directory = var.app_directory
+    postgres_db   = var.postgres_db
+    postgres_password = var.postgres_password
+    postgres_user = var.postgres_user
     repo_branch   = var.repo_branch
     repo_url      = var.repo_url
     swap_size_mb  = var.swap_size_mb
+    strava_client_id = var.strava_client_id
+    strava_client_secret = var.strava_client_secret
   })
 
   root_block_device {
