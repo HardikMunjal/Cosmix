@@ -779,7 +779,7 @@ export default function WellnessPage() {
         </div>
 
         {/* scores on top */}
-        <div style={s.scoreStrip} className="score-strip">
+        {planInfo && <div style={s.scoreStrip} className="score-strip">
           <div style={s.scoreCard}>
             <div style={s.scoreIcon}>🏋️</div>
             <div>
@@ -811,7 +811,7 @@ export default function WellnessPage() {
         </div>
 
         {/* weekly summary bar */}
-        <div style={s.weeklySummary} className="score-strip">
+        {planInfo && <div style={s.weeklySummary} className="score-strip">
           <div style={s.weeklyItem}>
             <span style={s.weeklyIcon}>🔥</span>
             <span style={s.weeklyLabel}>Active days</span>
@@ -843,132 +843,62 @@ export default function WellnessPage() {
               <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} style={s.dateInput} max={todayDate()} />
             </div>
 
-            <div style={s.toggleRow}>
-              <button onClick={() => setInputMode('dropdown')} style={inputMode === 'dropdown' ? s.toggleActive : s.toggleBtn}>Dropdown</button>
-              <button onClick={() => setInputMode('text')} style={inputMode === 'text' ? s.toggleActive : s.toggleBtn}>Text / Voice</button>
-            </div>
-
             <div style={s.planCard}>
-              <div>
-                <div style={s.planHeaderRow}>
-                  <div style={s.planTitle}>Plan</div>
+              <div style={s.planHeaderRow}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={s.planTitle}>{planInfo ? 'Active Plan' : 'Wellness Plan'}</div>
+                  {planInfo?.name && (
+                    <button
+                      type="button"
+                      onClick={handlePlanNameClick}
+                      onDoubleClick={() => { setPlanNameDraft(planInfo.name); setShowRenamePlanForm(true); setShowPlanMenu(false); }}
+                      style={s.planNameBtn}
+                      title="Double-click to rename"
+                    >{planInfo.name}</button>
+                  )}
+                  <div style={s.planCopy}>
+                    {planInfo?.startDate
+                      ? `Active since ${formatDisplayDate(planInfo.startDate)} · ${totalPlanDays} day${totalPlanDays === 1 ? '' : 's'} · ${loggedPlanDays} logged`
+                      : 'No active plan. Pick a start date below to begin tracking.'}
+                  </div>
+                </div>
+                {planInfo?.id && (
                   <div style={s.planMenuWrap}>
-                    <button type="button" onClick={() => setShowPlanMenu((current) => !current)} style={s.planIconBtn} aria-label="Open plan actions">
-                      ⋯
-                    </button>
+                    <button type="button" onClick={() => setShowPlanMenu((c) => !c)} style={s.planIconBtn} aria-label="Open plan actions">⋯</button>
                     {showPlanMenu && (
                       <div style={s.planMenu}>
-                        <button type="button" onClick={() => { setPlanNameDraft(''); setShowCreatePlanForm((current) => !current); setShowRenamePlanForm(false); setShowPlanMenu(false); }} style={s.planMenuItem}>
-                          {showCreatePlanForm ? 'Close new plan' : (planInfo ? 'Create new plan' : 'Create plan')}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={!planInfo?.id}
-                          onClick={() => { setPlanNameDraft(planInfo?.name || ''); setShowRenamePlanForm((current) => !current); setShowCreatePlanForm(false); setShowPlanMenu(false); }}
-                          style={planInfo?.id ? s.planMenuItem : s.planMenuItemDisabled}
-                        >
-                          Rename current plan
-                        </button>
-                        <button
-                          type="button"
-                          disabled={!planInfo?.id}
-                          onClick={handleResetCurrentPlan}
-                          style={planInfo?.id ? { ...s.planMenuItem, color: '#fecaca' } : s.planMenuItemDisabled}
-                        >
-                          Reset current plan data
-                        </button>
-                        {!planInfo?.id && <div style={s.planMenuHint}>Start a plan first to rename or reset it.</div>}
+                        <button type="button" onClick={() => { handleClosePlan(); setShowPlanMenu(false); }} style={{ ...s.planMenuItem, color: '#fde68a' }}>Close plan</button>
+                        <button type="button" onClick={handleResetCurrentPlan} style={{ ...s.planMenuItem, color: '#fecaca' }}>Reset plan data</button>
                       </div>
                     )}
                   </div>
-                </div>
-                {planInfo?.name ? (
-                  <button type="button" onClick={handlePlanNameClick} style={s.planNameBtn}>
-                    {planInfo.name}
-                  </button>
-                ) : null}
-                <div style={s.planCopy}>
-                  {planInfo?.startDate
-                    ? `${planInfo.name || 'Plan'} started on ${formatDisplayDate(planInfo.startDate)}. Daily drain has been applied from the start date through today for ${totalPlanDays} day${totalPlanDays === 1 ? '' : 's'}. Logged activity exists on ${loggedPlanDays} day${loggedPlanDays === 1 ? '' : 's'}. Reset marks current plan data inactive, and a new plan moves the old active plan into inactive history.`
-                    : 'Pick a start date to create a plan. If you choose a past date, daily drain will be applied from that start date through today.'}
-                </div>
+                )}
               </div>
-              {showCreatePlanForm && (
+              {showRenamePlanForm && planInfo?.id && (
+                <div style={s.planControls}>
+                  <input type="text" value={planNameDraft} onChange={(e) => setPlanNameDraft(e.target.value)} placeholder="New plan name" style={s.planTextInput} />
+                  <button onClick={handleRenamePlan} style={s.planBtn}>Save</button>
+                  <button type="button" onClick={() => setShowRenamePlanForm(false)} style={{ ...s.planBtn, background: 'rgba(255,255,255,0.12)' }}>Cancel</button>
+                </div>
+              )}
+              {!planInfo && (
                 <div style={s.planControls}>
                   <input type="date" value={planStartDate} onChange={(e) => setPlanStartDate(e.target.value)} style={s.dateInput} max={todayDate()} />
                   <input type="text" value={planNameDraft} onChange={(e) => setPlanNameDraft(e.target.value)} placeholder="Plan name (optional)" style={s.planTextInput} />
-                  <button onClick={handleStartPlan} style={s.planBtn}>{planInfo ? 'Start new plan' : 'Start plan'}</button>
+                  <button onClick={handleStartPlan} style={s.planBtn}>Start Plan</button>
                 </div>
               )}
-              {showRenamePlanForm && planInfo?.id && (
-                <div style={s.planControls}>
-                  <input type="text" value={planNameDraft} onChange={(e) => setPlanNameDraft(e.target.value)} placeholder="Update current plan name" style={s.planTextInput} />
-                  <button onClick={handleRenamePlan} style={s.planBtn}>Save name</button>
+              {planInfo && (
+                <div style={s.planStatsGrid} className="plan-stats-grid">
+                  <div style={s.planStatCard}><span style={s.planStatLabel}>Plan days</span><span style={s.planStatValue}>{totalPlanDays}</span></div>
+                  <div style={s.planStatCard}><span style={s.planStatLabel}>Physical</span><span style={s.planStatValue}>{formatMetric(planTotals.physical)}</span></div>
+                  <div style={s.planStatCard}><span style={s.planStatLabel}>Mental</span><span style={s.planStatValue}>{formatMetric(planTotals.mental)}</span></div>
+                  <div style={s.planStatCard}><span style={s.planStatLabel}>Total</span><span style={{ ...s.planStatValue, color: planTotals.total >= 0 ? '#4ade80' : '#f87171' }}>{formatMetric(planTotals.total)}</span></div>
                 </div>
               )}
-              <div style={s.planStatsGrid} className="plan-stats-grid">
-                <div style={s.planStatCard}><span style={s.planStatLabel}>Plan days</span><span style={s.planStatValue}>{totalPlanDays}</span></div>
-                <div style={s.planStatCard}><span style={s.planStatLabel}>Physical total</span><span style={s.planStatValue}>{formatMetric(planTotals.physical)}</span></div>
-                <div style={s.planStatCard}><span style={s.planStatLabel}>Mental total</span><span style={s.planStatValue}>{formatMetric(planTotals.mental)}</span></div>
-                <div style={s.planStatCard}><span style={s.planStatLabel}>Plan total</span><span style={s.planStatValue}>{formatMetric(planTotals.total)}</span></div>
-              </div>
-              {latestPlanScore && (
+              {planInfo && latestPlanScore && (
                 <div style={s.planMeta}>
-                  Latest score {formatMetric(latestPlanScore.totalScore)} on {formatDisplayDate(latestPlanScore.date)}. Cumulative total {formatMetric(latestPlanScore.cumulativeTotalScore || 0)}. Auto-only days: {autoScoredDays}. Click {planInfo?.name || 'plan'} to open transaction logs.
-                            <div style={s.planCard}>
-                              <div style={s.planHeaderRow}>
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                  <div style={s.planTitle}>{planInfo ? 'Active Plan' : 'Wellness Plan'}</div>
-                                  {planInfo?.name && (
-                                    <button type="button" onClick={handlePlanNameClick} style={s.planNameBtn}>{planInfo.name}</button>
-                                  )}
-                                  <div style={s.planCopy}>
-                                    {planInfo?.startDate
-                                      ? `Active since ${formatDisplayDate(planInfo.startDate)} · ${totalPlanDays} day${totalPlanDays === 1 ? '' : 's'} · ${loggedPlanDays} logged · daily drain applied.`
-                                      : 'No active plan. Create one to start tracking. Choosing a past start date applies daily drain from that date through today.'}
-                                  </div>
-                                </div>
-                                {planInfo?.id && (
-                                  <div style={s.planMenuWrap}>
-                                    <button type="button" onClick={() => setShowPlanMenu((current) => !current)} style={s.planIconBtn} aria-label="Open plan actions">⋯</button>
-                                    {showPlanMenu && (
-                                      <div style={s.planMenu}>
-                                        <button type="button" onClick={() => { setPlanNameDraft(planInfo?.name || ''); setShowRenamePlanForm((c) => !c); setShowCreatePlanForm(false); setShowPlanMenu(false); }} style={s.planMenuItem}>✏️ Rename plan</button>
-                                        <button type="button" onClick={() => { handleClosePlan(); }} style={{ ...s.planMenuItem, color: '#fde68a' }}>✅ Close plan (keep data)</button>
-                                        <button type="button" onClick={handleResetCurrentPlan} style={{ ...s.planMenuItem, color: '#fecaca' }}>🗑️ Reset plan data</button>
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                              {showRenamePlanForm && planInfo?.id && (
-                                <div style={s.planControls}>
-                                  <input type="text" value={planNameDraft} onChange={(e) => setPlanNameDraft(e.target.value)} placeholder="New plan name" style={s.planTextInput} />
-                                  <button onClick={handleRenamePlan} style={s.planBtn}>Save</button>
-                                  <button type="button" onClick={() => setShowRenamePlanForm(false)} style={{ ...s.planBtn, background: 'rgba(255,255,255,0.12)' }}>Cancel</button>
-                                </div>
-                              )}
-                              {!planInfo && (
-                                <div style={s.planControls}>
-                                  <input type="date" value={planStartDate} onChange={(e) => setPlanStartDate(e.target.value)} style={s.dateInput} max={todayDate()} />
-                                  <input type="text" value={planNameDraft} onChange={(e) => setPlanNameDraft(e.target.value)} placeholder="Plan name (optional)" style={s.planTextInput} />
-                                  <button onClick={handleStartPlan} style={s.planBtn}>🚀 Start Plan</button>
-                                </div>
-                              )}
-                              {planInfo && (
-                                <div style={s.planStatsGrid} className="plan-stats-grid">
-                                  <div style={s.planStatCard}><span style={s.planStatLabel}>Plan days</span><span style={s.planStatValue}>{totalPlanDays}</span></div>
-                                  <div style={s.planStatCard}><span style={s.planStatLabel}>Physical</span><span style={s.planStatValue}>{formatMetric(planTotals.physical)}</span></div>
-                                  <div style={s.planStatCard}><span style={s.planStatLabel}>Mental</span><span style={s.planStatValue}>{formatMetric(planTotals.mental)}</span></div>
-                                  <div style={s.planStatCard}><span style={s.planStatLabel}>Total</span><span style={{ ...s.planStatValue, color: planTotals.total >= 0 ? '#4ade80' : '#f87171' }}>{formatMetric(planTotals.total)}</span></div>
-                                </div>
-                              )}
-                              {planInfo && latestPlanScore && (
-                                <div style={s.planMeta}>
-                                  Latest: {formatMetric(latestPlanScore.totalScore)} pts on {formatDisplayDate(latestPlanScore.date)} · Cumulative: {formatMetric(latestPlanScore.cumulativeTotalScore || 0)} pts · Click plan name for logs.
-                                </div>
-                              )}
-                            </div>
+                  Latest: {formatMetric(latestPlanScore.totalScore)} pts on {formatDisplayDate(latestPlanScore.date)} · Cumulative: {formatMetric(latestPlanScore.cumulativeTotalScore || 0)} pts · Double-click plan name to rename.
                 </div>
               )}
             </div>
@@ -1087,7 +1017,7 @@ export default function WellnessPage() {
           </div>
 
           {/* right: readiness targets */}
-          <div style={s.card}>
+          {planInfo && <div style={s.card}>
             <div style={s.cardTitle}>Readiness Targets</div>
             {readinessCards.map((t) => (
               <div key={t.label} style={s.targetCard}>
@@ -1109,9 +1039,10 @@ export default function WellnessPage() {
               <div style={s.breakdownItem}><span style={{ fontSize: 12, opacity: 0.7 }}>Workout mins</span><span style={{ fontWeight: 800 }}>{formatMetric(visibleTodayScores.workoutMinutes)}</span></div>
               <div style={s.breakdownItem}><span style={{ fontSize: 12, opacity: 0.7 }}>Sleep effect</span><span style={{ fontWeight: 800, color: visibleTodayScores.sleepPhysical > 0 ? '#4ade80' : visibleTodayScores.sleepPhysical < 0 ? '#f87171' : '#94a3b8' }}>{visibleTodayScores.sleepPhysical > 0 ? '+' : ''}{formatMetric(visibleTodayScores.sleepPhysical)}</span></div>
             </div>
-          </div>
+          </div>}
         </div>
 
+        {planInfo && (<>
         {/* ---- Charts Section ---- */}
         <div style={s.dashSection}>
           <div style={s.dashGrid} className="dash-grid">
@@ -1270,6 +1201,7 @@ export default function WellnessPage() {
             </div>
           </div>
         </div>
+        </>)}
 
         {planScoreChartData.length > 0 && (
           <div style={{ ...s.card, marginTop: 14 }}>
