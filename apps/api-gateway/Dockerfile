@@ -3,7 +3,7 @@ FROM node:20-slim AS builder
 WORKDIR /usr/src/app
 
 COPY apps/api-gateway/package*.json ./
-RUN npm install
+RUN npm install --legacy-peer-deps
 
 COPY tsconfig.base.json ./
 COPY services ./services
@@ -17,7 +17,7 @@ WORKDIR /usr/src/app
 ENV NODE_ENV=production
 
 COPY apps/api-gateway/package*.json ./
-RUN npm install --omit=dev
+RUN npm install --omit=dev --legacy-peer-deps
 
 COPY --from=builder /usr/src/app/apps/api-gateway/dist ./apps/api-gateway/dist
 
