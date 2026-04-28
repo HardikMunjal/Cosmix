@@ -35,6 +35,7 @@ function summarizeAddedActivities(selectedDate, activityNames, updates) {
 function inferActivityNamesFromUpdates(updates) {
   return Array.from(new Set(updates.map((update) => {
     if (update.key.startsWith('running')) return 'Running';
+    if (update.key.startsWith('cycling')) return 'Cycling';
     if (update.key.startsWith('walking')) return 'Walking';
     if (update.key === 'exerciseMinutes') return 'Workout';
     if (update.key === 'badmintonMinutes') return 'Badminton';
@@ -64,7 +65,7 @@ function formatFormula(multiplier, divisor, unit) {
 }
 
 const SCORE_FIELDS = [
-  'runningMinutes', 'runningDistanceKm', 'walkingMinutes', 'walkingDistanceKm',
+  'runningMinutes', 'runningDistanceKm', 'cyclingMinutes', 'cyclingDistanceKm', 'walkingMinutes', 'walkingDistanceKm',
   'exerciseMinutes', 'yogaMinutes', 'badmintonMinutes', 'footballMinutes',
   'cricketMinutes', 'swimmingMinutes', 'meditationMinutes', 'whiskyPegs',
   'fastFoodServings', 'sugarServings', 'headacheLevel', 'sleepHours',
@@ -89,6 +90,7 @@ const ZERO_SCORES = {
 /* ---------- activity dropdown config ---------- */
 const ACTIVITY_OPTIONS = [
   { id: 'running', label: 'Running', icon: '🏃', fields: [{ key: 'runningDistanceKm', label: 'Distance', unit: 'km', step: 0.1 }, { key: 'runningMinutes', label: 'Time', unit: 'mins', step: 1 }] },
+  { id: 'cycling', label: 'Cycling', icon: '🚴', fields: [{ key: 'cyclingDistanceKm', label: 'Distance', unit: 'km', step: 0.1 }, { key: 'cyclingMinutes', label: 'Time', unit: 'mins', step: 1 }] },
   { id: 'walking', label: 'Walking', icon: '🚶', fields: [{ key: 'walkingDistanceKm', label: 'Distance', unit: 'km', step: 0.1 }, { key: 'walkingMinutes', label: 'Time', unit: 'mins', step: 1 }] },
   { id: 'exercise', label: 'Workout', icon: '💪', fields: [{ key: 'exerciseMinutes', label: 'Time', unit: 'mins', step: 1 }] },
   { id: 'yoga', label: 'Yoga', icon: '🧘', fields: [{ key: 'yogaMinutes', label: 'Time', unit: 'mins', step: 1 }] },
@@ -184,6 +186,9 @@ export default function WellnessPage() {
   const [showPlanMenu, setShowPlanMenu] = useState(false);
   const [showRenamePlanForm, setShowRenamePlanForm] = useState(false);
   const [planNameDraft, setPlanNameDraft] = useState('');
+  const [allPlans, setAllPlans] = useState([]);
+  const [historyPlan, setHistoryPlan] = useState(null);
+  const [showPlanHistory, setShowPlanHistory] = useState(false);
 
   const showMicSecurityWarning = typeof window !== 'undefined' && !window.isSecureContext && window.location.hostname !== 'localhost';
 
@@ -207,6 +212,7 @@ export default function WellnessPage() {
     setPlanNameDraft(serverData.plan?.name || '');
     setDailyScores(Array.isArray(serverData.dailyScores) ? serverData.dailyScores : []);
     setPlanTransactions(Array.isArray(serverData.planTransactions) ? serverData.planTransactions : []);
+    setAllPlans(Array.isArray(serverData.plans) ? serverData.plans : []);
     if (serverData.plan?.startDate) {
       setPlanStartDate(serverData.plan.startDate);
     }
@@ -390,6 +396,38 @@ export default function WellnessPage() {
       .catch(() => setAssistantReply('Could not reset the current plan right now.'));
   }
 
+  function handleClosePlan() {
+    const uid = userIdRef.current;
+    if (!uid || !planInfo?.id) return;
+    if (typeof window !== 'undefined' && !window.confirm(`Close "${planInfo.name}"? All logged data will be saved to plan history.`)) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    fetch(`${API_BASE}/wellness/plan/${encodeURIComponent(uid)}/close`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((serverData) => {
+        if (!serverData) return;
+        applyServerState(serverData, { syncLocal: true });
+        setShowPlanTransactions(false);
+        setShowCreatePlanForm(false);
+        setShowRenamePlanForm(false);
+        setShowPlanMenu(false);
+        setAssistantReply(`Plan closed and saved to history. Create a new plan to continue tracking.`);
+      })
+      .catch(() => setAssistantReply('Could not close the plan right now.'));
+  }
+
+  function handleLoadHistoryPlan(planId) {
+    const uid = userIdRef.current;
+    if (!uid || !planId) return;
+    setHistoryPlan(null);
+    fetch(`${API_BASE}/wellness/plan/${encodeURIComponent(uid)}/${encodeURIComponent(planId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => { if (data) setHistoryPlan(data); })
+      .catch(() => {});
+  }
+
   function handlePlanNameClick() {
     setShowPlanTransactions((current) => {
       const next = !current;
@@ -512,7 +550,7 @@ export default function WellnessPage() {
 
   /* ---- dropdown save ---- */
   function handleDropdownSave() {
-    const actCfg = ACTIVITY_OPTIONS.find((a) => a.id === selectedActivity);
+    const actCfg = activityOptions.find((a) => a.id === selectedActivity);
     if (!actCfg) { setAssistantReply('Pick an activity first.'); return; }
     const next = { ...form, date: selectedDate };
     const updates = [];
@@ -595,7 +633,20 @@ export default function WellnessPage() {
     [entries, form],
   );
 
-  const selectedActivityConfig = ACTIVITY_OPTIONS.find((a) => a.id === selectedActivity);
+  const activityOptions = useMemo(() => {
+    const configuredFields = new Set(ACTIVITY_OPTIONS.flatMap((option) => option.fields.map((field) => field.key)));
+    const dynamicOptions = (scoringRules?.activities || [])
+      .filter((rule) => !configuredFields.has(rule.key))
+      .map((rule) => ({
+        id: `custom-${rule.key}`,
+        label: rule.label || rule.key,
+        icon: rule.icon || '✨',
+        fields: [{ key: rule.key, label: rule.label || rule.key, unit: rule.unit || 'mins', step: 0.1 }],
+      }));
+    return [...ACTIVITY_OPTIONS, ...dynamicOptions];
+  }, [scoringRules]);
+
+  const selectedActivityConfig = activityOptions.find((a) => a.id === selectedActivity);
   const autoScoredDays = dailyScores.filter((score) => score.source === 'auto').length;
   const loggedPlanDays = dailyScores.filter((score) => score.source === 'entry').length;
   const latestPlanScore = dailyScores[0] || null;
@@ -655,6 +706,7 @@ export default function WellnessPage() {
     const week = [form, ...entries.filter((e) => e.date !== form.date)].slice(0, 7);
     const totals = [
       { label: 'Running', icon: '🏃', mins: week.reduce((s, e) => s + Number(e.runningMinutes || 0), 0), color: '#fb7185' },
+      { label: 'Cycling', icon: '🚴', mins: week.reduce((s, e) => s + Number(e.cyclingMinutes || 0), 0), color: '#38bdf8' },
       { label: 'Walking', icon: '🚶', mins: week.reduce((s, e) => s + Number(e.walkingMinutes || 0), 0), color: '#a3e635' },
       { label: 'Workout', icon: '💪', mins: week.reduce((s, e) => s + Number(e.exerciseMinutes || 0), 0), color: '#f59e0b' },
       { label: 'Yoga', icon: '🧘', mins: week.reduce((s, e) => s + Number(e.yogaMinutes || 0), 0), color: '#fbbf24' },
@@ -671,6 +723,7 @@ export default function WellnessPage() {
   const todayActivities = useMemo(() => {
     const list = [];
     if (Number(form.runningDistanceKm || 0) > 0 || Number(form.runningMinutes || 0) > 0) list.push({ icon: '🏃', label: 'Running', detail: `${formatMetric(form.runningDistanceKm)} km · ${formatMetric(form.runningMinutes)} mins` });
+    if (Number(form.cyclingDistanceKm || 0) > 0 || Number(form.cyclingMinutes || 0) > 0) list.push({ icon: '🚴', label: 'Cycling', detail: `${formatMetric(form.cyclingDistanceKm)} km · ${formatMetric(form.cyclingMinutes)} mins` });
     if (Number(form.walkingDistanceKm || 0) > 0 || Number(form.walkingMinutes || 0) > 0) list.push({ icon: '🚶', label: 'Walking', detail: `${formatMetric(form.walkingDistanceKm)} km · ${formatMetric(form.walkingMinutes)} mins` });
     if (Number(form.exerciseMinutes || 0) > 0) list.push({ icon: '💪', label: 'Workout', detail: `${formatMetric(form.exerciseMinutes)} mins` });
       if (Number(form.yogaMinutes || 0) > 0) list.push({ icon: '🧘', label: 'Yoga', detail: `${formatMetric(form.yogaMinutes)} mins` });
@@ -862,14 +915,73 @@ export default function WellnessPage() {
               {latestPlanScore && (
                 <div style={s.planMeta}>
                   Latest score {formatMetric(latestPlanScore.totalScore)} on {formatDisplayDate(latestPlanScore.date)}. Cumulative total {formatMetric(latestPlanScore.cumulativeTotalScore || 0)}. Auto-only days: {autoScoredDays}. Click {planInfo?.name || 'plan'} to open transaction logs.
+                            <div style={s.planCard}>
+                              <div style={s.planHeaderRow}>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={s.planTitle}>{planInfo ? 'Active Plan' : 'Wellness Plan'}</div>
+                                  {planInfo?.name && (
+                                    <button type="button" onClick={handlePlanNameClick} style={s.planNameBtn}>{planInfo.name}</button>
+                                  )}
+                                  <div style={s.planCopy}>
+                                    {planInfo?.startDate
+                                      ? `Active since ${formatDisplayDate(planInfo.startDate)} · ${totalPlanDays} day${totalPlanDays === 1 ? '' : 's'} · ${loggedPlanDays} logged · daily drain applied.`
+                                      : 'No active plan. Create one to start tracking. Choosing a past start date applies daily drain from that date through today.'}
+                                  </div>
+                                </div>
+                                {planInfo?.id && (
+                                  <div style={s.planMenuWrap}>
+                                    <button type="button" onClick={() => setShowPlanMenu((current) => !current)} style={s.planIconBtn} aria-label="Open plan actions">⋯</button>
+                                    {showPlanMenu && (
+                                      <div style={s.planMenu}>
+                                        <button type="button" onClick={() => { setPlanNameDraft(planInfo?.name || ''); setShowRenamePlanForm((c) => !c); setShowCreatePlanForm(false); setShowPlanMenu(false); }} style={s.planMenuItem}>✏️ Rename plan</button>
+                                        <button type="button" onClick={() => { handleClosePlan(); }} style={{ ...s.planMenuItem, color: '#fde68a' }}>✅ Close plan (keep data)</button>
+                                        <button type="button" onClick={handleResetCurrentPlan} style={{ ...s.planMenuItem, color: '#fecaca' }}>🗑️ Reset plan data</button>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                              {showRenamePlanForm && planInfo?.id && (
+                                <div style={s.planControls}>
+                                  <input type="text" value={planNameDraft} onChange={(e) => setPlanNameDraft(e.target.value)} placeholder="New plan name" style={s.planTextInput} />
+                                  <button onClick={handleRenamePlan} style={s.planBtn}>Save</button>
+                                  <button type="button" onClick={() => setShowRenamePlanForm(false)} style={{ ...s.planBtn, background: 'rgba(255,255,255,0.12)' }}>Cancel</button>
+                                </div>
+                              )}
+                              {!planInfo && (
+                                <div style={s.planControls}>
+                                  <input type="date" value={planStartDate} onChange={(e) => setPlanStartDate(e.target.value)} style={s.dateInput} max={todayDate()} />
+                                  <input type="text" value={planNameDraft} onChange={(e) => setPlanNameDraft(e.target.value)} placeholder="Plan name (optional)" style={s.planTextInput} />
+                                  <button onClick={handleStartPlan} style={s.planBtn}>🚀 Start Plan</button>
+                                </div>
+                              )}
+                              {planInfo && (
+                                <div style={s.planStatsGrid} className="plan-stats-grid">
+                                  <div style={s.planStatCard}><span style={s.planStatLabel}>Plan days</span><span style={s.planStatValue}>{totalPlanDays}</span></div>
+                                  <div style={s.planStatCard}><span style={s.planStatLabel}>Physical</span><span style={s.planStatValue}>{formatMetric(planTotals.physical)}</span></div>
+                                  <div style={s.planStatCard}><span style={s.planStatLabel}>Mental</span><span style={s.planStatValue}>{formatMetric(planTotals.mental)}</span></div>
+                                  <div style={s.planStatCard}><span style={s.planStatLabel}>Total</span><span style={{ ...s.planStatValue, color: planTotals.total >= 0 ? '#4ade80' : '#f87171' }}>{formatMetric(planTotals.total)}</span></div>
+                                </div>
+                              )}
+                              {planInfo && latestPlanScore && (
+                                <div style={s.planMeta}>
+                                  Latest: {formatMetric(latestPlanScore.totalScore)} pts on {formatDisplayDate(latestPlanScore.date)} · Cumulative: {formatMetric(latestPlanScore.cumulativeTotalScore || 0)} pts · Click plan name for logs.
+                                </div>
+                              )}
+                            </div>
                 </div>
               )}
             </div>
 
+            {planInfo ? (<>
+            <div style={s.toggleRow}>
+              <button onClick={() => setInputMode('dropdown')} style={inputMode === 'dropdown' ? s.toggleActive : s.toggleBtn}>Dropdown</button>
+              <button onClick={() => setInputMode('text')} style={inputMode === 'text' ? s.toggleActive : s.toggleBtn}>Text / Voice</button>
+            </div>
             {inputMode === 'dropdown' ? (
               <>
                 <div style={s.activityGrid} className="activity-grid">
-                  {ACTIVITY_OPTIONS.map((a) => (
+                  {activityOptions.map((a) => (
                     <button
                       key={a.id}
                       onClick={() => { setSelectedActivity(a.id); setFieldValues({}); }}
@@ -968,6 +1080,9 @@ export default function WellnessPage() {
                   ))}
                 </div>
               </div>
+            )}
+            </>) : (
+              <div style={s.noPlanMsg}>☝️ Create the plan above to start logging your daily activities.</div>
             )}
           </div>
 
@@ -1221,15 +1336,30 @@ export default function WellnessPage() {
             <div style={s.sectionContent}>
               {planTransactions.length > 0 ? (
                 <div style={s.planTimeline}>
-                  {planTransactions.map((transaction, index) => (
-                    <div key={`${transaction.date}-${transaction.activityName}-${index}`} style={s.planTimelineRow}>
-                      <div style={s.planTimelineDate}>{formatDisplayDate(transaction.date)}</div>
-                      <div style={s.planTimelineBody}>
-                        <div style={s.planTimelineName}>{transaction.activityName}</div>
-                        <div style={s.planTimelineDetail}>{transaction.detail}</div>
+                  {planTransactions.map((transaction, index) => {
+                    const isDrain = transaction.source === 'daily-drain';
+                    const isSleep = transaction.activityName === 'Sleep';
+                    const rowStyle = isDrain
+                      ? { ...s.planTimelineRow, background: 'rgba(239,68,68,0.10)', border: '1px solid rgba(239,68,68,0.22)' }
+                      : isSleep
+                        ? { ...s.planTimelineRow, background: 'rgba(96,165,250,0.10)', border: '1px solid rgba(96,165,250,0.22)' }
+                        : s.planTimelineRow;
+                    const nameStyle = isDrain
+                      ? { ...s.planTimelineName, color: '#fca5a5' }
+                      : isSleep
+                        ? { ...s.planTimelineName, color: '#93c5fd' }
+                        : s.planTimelineName;
+                    const icon = isDrain ? '📉' : isSleep ? '😴' : '🏃';
+                    return (
+                      <div key={`${transaction.date}-${transaction.activityName}-${index}`} style={rowStyle}>
+                        <div style={s.planTimelineDate}>{formatDisplayDate(transaction.date)}</div>
+                        <div style={s.planTimelineBody}>
+                          <div style={nameStyle}>{icon} {transaction.activityName}</div>
+                          <div style={s.planTimelineDetail}>{transaction.detail}</div>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
                 <div style={s.metaText}>Create a plan to see the transaction log.</div>
@@ -1237,6 +1367,131 @@ export default function WellnessPage() {
             </div>
           )}
         </div>
+
+        {/* Plan History */}
+        {allPlans.filter((p) => p.status === 'inactive').length > 0 && (
+          <div style={{ ...s.card, marginTop: 14 }}>
+            <button type="button" onClick={() => setShowPlanHistory((c) => !c)} style={s.sectionToggleBtn}>
+              <span>📚 Plan History ({allPlans.filter((p) => p.status === 'inactive').length})</span>
+              <span>{showPlanHistory ? 'Hide' : 'Show'}</span>
+            </button>
+            {showPlanHistory && (
+              <div style={s.sectionContent}>
+                <div style={{ display: 'grid', gap: 10 }}>
+                  {allPlans.filter((p) => p.status === 'inactive').map((plan) => (
+                    <div key={plan.id} style={s.historyPlanRow}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={s.historyPlanName}>{plan.name}</div>
+                        <div style={s.historyPlanDates}>
+                          {formatDisplayDate(plan.startDate)} → {plan.endedAt ? formatDisplayDate(plan.endedAt) : '—'}
+                          {plan.finalTotals ? ` · ${plan.finalTotals.days} days` : ''}
+                        </div>
+                      </div>
+                      {plan.finalTotals && (
+                        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexShrink: 0 }}>
+                          <div style={{ textAlign: 'center' }}>
+                            <div style={{ fontSize: 10, opacity: 0.6, fontWeight: 700, textTransform: 'uppercase' }}>Phys</div>
+                            <div style={{ fontWeight: 800, fontSize: 14 }}>{formatMetric(plan.finalTotals.physical)}</div>
+                          </div>
+                          <div style={{ textAlign: 'center' }}>
+                            <div style={{ fontSize: 10, opacity: 0.6, fontWeight: 700, textTransform: 'uppercase' }}>Mental</div>
+                            <div style={{ fontWeight: 800, fontSize: 14 }}>{formatMetric(plan.finalTotals.mental)}</div>
+                          </div>
+                          <div style={{ textAlign: 'center' }}>
+                            <div style={{ fontSize: 10, opacity: 0.6, fontWeight: 700, textTransform: 'uppercase' }}>Total</div>
+                            <div style={{ fontWeight: 900, fontSize: 18, color: plan.finalTotals.total >= 0 ? '#4ade80' : '#f87171' }}>{formatMetric(plan.finalTotals.total)}</div>
+                          </div>
+                        </div>
+                      )}
+                      <button type="button" onClick={() => handleLoadHistoryPlan(plan.id)} style={{ ...s.chipBtn, flexShrink: 0 }}>
+                        {historyPlan?.plan?.id === plan.id ? 'Close ✕' : 'View →'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                {historyPlan && (
+                  <div style={{ marginTop: 16, padding: '14px 16px', background: 'rgba(255,255,255,0.06)', borderRadius: 14, border: '1px solid rgba(255,255,255,0.10)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10, gap: 12 }}>
+                      <div>
+                        <div style={{ fontWeight: 900, fontSize: 17, color: '#fde68a' }}>{historyPlan.plan.name}</div>
+                        <div style={{ fontSize: 12, opacity: 0.65, marginTop: 2 }}>
+                          {formatDisplayDate(historyPlan.plan.startDate)} → {historyPlan.plan.endedAt ? formatDisplayDate(historyPlan.plan.endedAt) : '—'} · {historyPlan.dailyScores.length} days
+                        </div>
+                      </div>
+                      <button type="button" onClick={() => setHistoryPlan(null)} style={{ ...s.chipBtn, fontSize: 11, flexShrink: 0 }}>✕ Close</button>
+                    </div>
+
+                    {historyPlan.dailyScores.length > 0 && (() => {
+                      const chartData = historyPlan.dailyScores;
+                      const minScore = Math.min(...chartData.map((d) => Math.min(d.totalScore, d.cumulativeTotalScore || 0)), 0);
+                      const maxScore = Math.max(...chartData.map((d) => Math.max(d.totalScore, d.cumulativeTotalScore || 0)), 1);
+                      const chartW = 580;
+                      const chartH = 160;
+                      const range = Math.max(1, maxScore - minScore);
+                      const px = (i) => (chartData.length === 1 ? chartW / 2 : (i / (chartData.length - 1)) * chartW);
+                      const py = (score) => chartH - (((score - minScore) / range) * (chartH - 24)) - 12;
+                      const cumPts = chartData.map((d, i) => `${px(i)},${py(d.cumulativeTotalScore || 0)}`).join(' ');
+                      const dayPts = chartData.map((d, i) => `${px(i)},${py(d.totalScore)}`).join(' ');
+                      const zeroY = py(0);
+                      return (
+                        <div style={{ overflowX: 'auto', marginBottom: 12 }}>
+                          <svg viewBox={`0 0 ${chartW} ${chartH + 26}`} style={{ width: '100%', height: chartH + 26, minWidth: 280 }}>
+                            <line x1="0" x2={chartW} y1={zeroY} y2={zeroY} stroke="rgba(255,255,255,0.18)" strokeWidth="1" strokeDasharray="4" />
+                            <polyline fill="none" stroke="#fde68a" strokeWidth="2" strokeDasharray="5 4" points={dayPts} />
+                            <polyline fill="none" stroke="#4ade80" strokeWidth="3" points={cumPts} />
+                            {chartData.map((d, i) => {
+                              const cy = py(d.cumulativeTotalScore || 0);
+                              const x = px(i);
+                              const showLabel = i === 0 || i === chartData.length - 1 || i % Math.max(1, Math.ceil(chartData.length / 7)) === 0;
+                              return (
+                                <g key={d.date}>
+                                  <circle cx={x} cy={cy} r="3.5" fill="#4ade80" />
+                                  {showLabel && <text x={x} y={chartH + 16} textAnchor="middle" fill="#fff" fontSize="9" opacity="0.7">{d.date.slice(5)}</text>}
+                                  {showLabel && <text x={x} y={cy - 6} textAnchor="middle" fill="#4ade80" fontSize="9" fontWeight="700">{formatMetric(d.cumulativeTotalScore || 0)}</text>}
+                                </g>
+                              );
+                            })}
+                            <text x="8" y="16" fill="#4ade80" fontSize="10" fontWeight="700">● Cumulative</text>
+                            <text x="100" y="16" fill="#fde68a" fontSize="10" fontWeight="700">╌ Daily</text>
+                          </svg>
+                        </div>
+                      );
+                    })()}
+
+                    {historyPlan.planTransactions.length > 0 && (
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, opacity: 0.8 }}>Transaction Log</div>
+                        <div style={{ ...s.planTimeline, maxHeight: 240 }}>
+                          {historyPlan.planTransactions.map((tx, index) => {
+                            const isDrain = tx.source === 'daily-drain';
+                            const isSleep = tx.activityName === 'Sleep';
+                            const rowStyle = isDrain
+                              ? { ...s.planTimelineRow, background: 'rgba(239,68,68,0.10)', border: '1px solid rgba(239,68,68,0.22)' }
+                              : isSleep
+                                ? { ...s.planTimelineRow, background: 'rgba(96,165,250,0.10)', border: '1px solid rgba(96,165,250,0.22)' }
+                                : s.planTimelineRow;
+                            const nameStyle = isDrain ? { ...s.planTimelineName, color: '#fca5a5' } : isSleep ? { ...s.planTimelineName, color: '#93c5fd' } : s.planTimelineName;
+                            const icon = isDrain ? '📉' : isSleep ? '😴' : '🏃';
+                            return (
+                              <div key={`hist-${tx.date}-${tx.activityName}-${index}`} style={rowStyle}>
+                                <div style={s.planTimelineDate}>{formatDisplayDate(tx.date)}</div>
+                                <div style={s.planTimelineBody}>
+                                  <div style={nameStyle}>{icon} {tx.activityName}</div>
+                                  <div style={s.planTimelineDetail}>{tx.detail}</div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Scoring Rules */}
         <div style={{ ...s.card, marginTop: 14 }}>
@@ -1375,6 +1630,10 @@ const s = {
   planTimelineBody: { display: 'grid', gap: 4 },
   planTimelineName: { fontSize: 14, fontWeight: 800, color: '#fff' },
   planTimelineDetail: { fontSize: 12, lineHeight: 1.5, opacity: 0.8 },
+  noPlanMsg: { padding: '20px 4px 8px', textAlign: 'center', color: 'rgba(255,255,255,0.5)', fontSize: 14, lineHeight: 1.7 },
+  historyPlanRow: { display: 'flex', gap: 12, alignItems: 'center', padding: '12px 14px', borderRadius: 12, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)', flexWrap: 'wrap' },
+  historyPlanName: { fontWeight: 800, fontSize: 15 },
+  historyPlanDates: { fontSize: 12, opacity: 0.65, marginTop: 2 },
   sectionToggleBtn: { width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, border: '1px solid rgba(255,255,255,0.12)', borderRadius: 14, padding: '12px 14px', background: 'rgba(255,255,255,0.06)', color: '#fff', fontSize: 15, fontWeight: 800, cursor: 'pointer', textAlign: 'left' },
   sectionContent: { marginTop: 12 },
   toggleBtn: { border: '1px solid rgba(255,255,255,0.14)', borderRadius: 999, padding: '7px 14px', background: 'transparent', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer' },

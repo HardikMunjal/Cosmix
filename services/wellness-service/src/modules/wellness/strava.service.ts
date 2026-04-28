@@ -218,8 +218,8 @@ export class StravaService {
       } else if (type === 'swim') {
         fields.swimmingMinutes = (fields.swimmingMinutes || 0) + mins;
       } else if (type === 'ride' || type === 'virtualride') {
-        // cycling → treat as exercise
-        fields.exerciseMinutes = (fields.exerciseMinutes || 0) + mins;
+        fields.cyclingDistanceKm = +(((fields.cyclingDistanceKm || 0) + distKm).toFixed(2));
+        fields.cyclingMinutes = (fields.cyclingMinutes || 0) + mins;
       } else if (type === 'workout' || type === 'weighttraining' || type === 'crossfit') {
         fields.exerciseMinutes = (fields.exerciseMinutes || 0) + mins;
       }

@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  Line,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import { restoreUserSession } from '../lib/auth-client';
 import { useTheme } from '../lib/ThemePicker';
 import { applyTheme } from '../lib/themes';
@@ -1223,6 +1233,28 @@ function formatLeg(leg) {
   return `${leg.side} ${qty} lot${qty > 1 ? 's' : ''} ${leg.optionType} ${leg.strike} @ ${Number(leg.premium || 0).toFixed(2)}`;
 }
 
+function formatChartDate(value) {
+  if (!value) return '-';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '-';
+  return parsed.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+}
+
+function toLocalDateTimeInputValue(value) {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  const offsetMs = parsed.getTimezoneOffset() * 60000;
+  return new Date(parsed.getTime() - offsetMs).toISOString().slice(0, 16);
+}
+
+function toIsoFromLocalDateTimeInputValue(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString();
+}
+
 export default function NiftyStrategiesPage() {
   const router = useRouter();
   const [user, setUser] = useState(null);
@@ -1368,7 +1400,7 @@ export default function NiftyStrategiesPage() {
       } catch (_) {}
     };
     loadIndices();
-    const iv = setInterval(loadIndices, 3000);
+    const iv = setInterval(loadIndices, 30000);
     return () => clearInterval(iv);
   }, []);
 
@@ -1394,10 +1426,30 @@ export default function NiftyStrategiesPage() {
   const [closingLegInfo, setClosingLegInfo] = useState(null);
   const [closePrice, setClosePrice] = useState('');
   const [legEditor, setLegEditor] = useState(null);
+  const [usePastActionDate, setUsePastActionDate] = useState({});
+  const [actionDateTimeByStrategy, setActionDateTimeByStrategy] = useState({});
+  const [learningModal, setLearningModal] = useState(null); // { strategyId, actionTimestamp }
+  const [learningText, setLearningText] = useState('');
 
-  const updateStrategyStatus = async (strategyId, newStatus) => {
+  const getActionTimestamp = (strategyId) => {
+    if (!usePastActionDate[strategyId]) return new Date().toISOString();
+    return toIsoFromLocalDateTimeInputValue(actionDateTimeByStrategy[strategyId]) || new Date().toISOString();
+  };
+
+  const togglePastActionDate = (strategyId, enabled) => {
+    setUsePastActionDate((current) => ({ ...current, [strategyId]: enabled }));
+    if (enabled) {
+      setActionDateTimeByStrategy((current) => ({
+        ...current,
+        [strategyId]: current[strategyId] || toLocalDateTimeInputValue(new Date().toISOString()),
+      }));
+    }
+  };
+
+  const updateStrategyStatus = async (strategyId, newStatus, actionTimestamp = null, learning = null) => {
     const strategy = savedStrategies.find((s) => s.id === strategyId);
     if (!strategy) return;
+    const eventTimestamp = actionTimestamp || new Date().toISOString();
     try {
       const response = await fetch('/api/options-strategies', {
         method: 'PUT',
@@ -1405,9 +1457,10 @@ export default function NiftyStrategiesPage() {
         body: JSON.stringify({
           ...strategy,
           status: newStatus,
+          ...(learning ? { learning } : {}),
           transactions: [
             ...(strategy.transactions || []),
-            { type: newStatus === 'active' ? 'BOUGHT' : 'STATUS', description: `Status → ${newStatus.toUpperCase()}`, amount: 0, timestamp: new Date().toISOString() },
+            { type: newStatus === 'active' ? 'BOUGHT' : 'STATUS', description: `Status → ${newStatus.toUpperCase()}`, amount: 0, timestamp: eventTimestamp },
           ],
         }),
       });
@@ -1418,11 +1471,12 @@ export default function NiftyStrategiesPage() {
     } catch (e) { alert(e.message); }
   };
 
-  const closeLeg = async (strategyId, legId, exitPrice) => {
+  const closeLeg = async (strategyId, legId, exitPrice, actionTimestamp = null) => {
     const strategy = savedStrategies.find((s) => s.id === strategyId);
     if (!strategy) return;
     const leg = (strategy.legs || []).find((l) => l.id === legId);
     if (!leg) return;
+    const eventTimestamp = actionTimestamp || new Date().toISOString();
     const qty = Math.max(1, parseInt(leg.quantity || 1, 10) || 1);
     const entry = Number(leg.premium) || 0;
     const exit = Number(exitPrice) || 0;
@@ -1433,14 +1487,14 @@ export default function NiftyStrategiesPage() {
     const closedLeg = {
       legId: leg.id, side: leg.side, optionType: leg.optionType, strike: leg.strike,
       quantity: qty, entryPremium: entry, exitPremium: exit, pnl,
-      closedAt: new Date().toISOString(),
+      closedAt: eventTimestamp,
     };
     const remainingLegs = strategy.legs.filter((l) => l.id !== legId);
     const transaction = {
       type: 'CLOSE',
       description: `Closed ${leg.side} ${qty}L ${leg.optionType} ${leg.strike} @ ${exit.toFixed(2)} → P/L ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}`,
       amount: pnl,
-      timestamp: new Date().toISOString(),
+      timestamp: eventTimestamp,
     };
     try {
       const payload = {
@@ -1569,6 +1623,56 @@ export default function NiftyStrategiesPage() {
     return { totalMtm, profitable, totalLots, activeCount, watchingCount, closedCount, activeMtm, totalRealizedPL };
   }, [savedStrategies]);
 
+  const strategyPerformanceSeries = useMemo(() => {
+    if (!savedStrategies.length) return [];
+
+    const byDate = new Map();
+    savedStrategies.forEach((strategy) => {
+      const realizedPL = (strategy.closedLegs || []).reduce((sum, leg) => sum + (Number(leg.pnl) || 0), 0);
+      const activeMtm = Number(strategy.liveMetrics?.markToMarket || 0);
+      const totalPL = realizedPL + activeMtm;
+
+      const latestTxTime = (strategy.transactions || []).reduce((latest, tx) => {
+        const nextTime = new Date(tx.timestamp || 0).getTime();
+        if (Number.isNaN(nextTime)) return latest;
+        return nextTime > latest ? nextTime : latest;
+      }, 0);
+
+      const fallbackTime = new Date(
+        strategy.entryAt || strategy.createdAt || strategy.savedAt || strategy.updatedAt || strategy.modifiedAt || Date.now(),
+      ).getTime();
+
+      const snapshotTime = latestTxTime || (Number.isNaN(fallbackTime) ? Date.now() : fallbackTime);
+      const dateKey = new Date(snapshotTime).toISOString().slice(0, 10);
+      const existing = byDate.get(dateKey) || { dayPL: 0, activeMtm: 0, realizedPL: 0, strategyCount: 0 };
+
+      byDate.set(dateKey, {
+        dayPL: existing.dayPL + totalPL,
+        activeMtm: existing.activeMtm + activeMtm,
+        realizedPL: existing.realizedPL + realizedPL,
+        strategyCount: existing.strategyCount + 1,
+      });
+    });
+
+    let cumulativePL = 0;
+    return Array.from(byDate.entries())
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([dateKey, values]) => {
+        cumulativePL += values.dayPL;
+        return {
+          dateKey,
+          dateLabel: formatChartDate(dateKey),
+          dayPL: Number(values.dayPL.toFixed(2)),
+          cumulativePL: Number(cumulativePL.toFixed(2)),
+          activeMtm: Number(values.activeMtm.toFixed(2)),
+          realizedPL: Number(values.realizedPL.toFixed(2)),
+          strategyCount: values.strategyCount,
+        };
+      });
+  }, [savedStrategies]);
+
+  const latestPerformancePoint = strategyPerformanceSeries[strategyPerformanceSeries.length - 1] || null;
+
   const highlightedId = router.query?.saved ? String(router.query.saved) : '';
 
   if (!user) return <div style={styles.loading}>Loading...</div>;
@@ -1588,6 +1692,7 @@ export default function NiftyStrategiesPage() {
           .nifty-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
           .nifty-metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
           .nifty-analyzer-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+          .nifty-performance-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
           .nifty-leg-breakdown { flex-direction: column !important; align-items: flex-start !important; }
           .nifty-leg-prices { text-align: left !important; }
           .nifty-leg-pl { text-align: left !important; min-width: auto !important; }
@@ -1601,6 +1706,7 @@ export default function NiftyStrategiesPage() {
           .nifty-page-container { padding: 12px !important; }
           .nifty-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 8px !important; }
           .nifty-metrics-grid { grid-template-columns: 1fr !important; }
+          .nifty-performance-kpis { grid-template-columns: 1fr !important; }
           .nifty-header { flex-direction: column !important; }
           .nifty-header-actions { width: 100% !important; }
           .nifty-header-actions button { flex: 1 !important; min-height: 44px !important; font-size: 13px !important; }
@@ -1609,6 +1715,8 @@ export default function NiftyStrategiesPage() {
           .nifty-strategy-body { padding: 0 12px 12px !important; }
           .nifty-card-actions { flex-direction: column !important; }
           .nifty-card-actions button { width: 100% !important; min-height: 44px !important; }
+          .nifty-past-date-controls { width: 100% !important; }
+          .nifty-past-date-controls input[type="datetime-local"] { width: 100% !important; }
           .nifty-analyzer-grid { grid-template-columns: 1fr !important; }
           .nifty-analyzer-header { flex-direction: column !important; align-items: flex-start !important; }
           .nifty-close-form { flex-direction: column !important; align-items: stretch !important; }
@@ -1630,7 +1738,44 @@ export default function NiftyStrategiesPage() {
           .nifty-page-container { padding: 8px !important; }
           .nifty-summary-grid { grid-template-columns: 1fr !important; }
         }
+        @keyframes learnings-scroll {
+          0% { transform: translateX(100%); }
+          100% { transform: translateX(-100%); }
+        }
       `}</style>
+
+      {/* ── Learnings Ticker ── */}
+      {(() => {
+        const allLearnings = savedStrategies.filter((s) => s.learning).map((s) => ({
+          id: s.id, name: s.name || 'Strategy', learning: s.learning,
+        }));
+        if (!allLearnings.length) return null;
+        const items = [...allLearnings, ...allLearnings]; // duplicate for seamless loop
+        return (
+          <div style={styles.learningsTicker}>
+            <span style={styles.learningsTickerLabel}>💡 Lessons</span>
+            <div style={styles.learningsTickerTrack}>
+              <div className="learnings-scroll-inner" style={styles.learningsScrollInner}>
+                {items.map((item, i) => (
+                  <span key={`${item.id}-${i}`} style={styles.learningsTickerItem}>
+                    <span style={styles.learningsTickerName}>{item.name}:</span>
+                    &nbsp;{item.learning}
+                    <span style={styles.learningsTickerSep}>•</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+            <style>{`
+              .learnings-scroll-inner {
+                animation: learnings-scroll 40s linear infinite;
+              }
+              .learnings-scroll-inner:hover {
+                animation-play-state: paused;
+              }
+            `}</style>
+          </div>
+        );
+      })()}
 
       {/* ── Global Market Ticker ── */}
       {marketIndices.length > 0 && (
@@ -1668,6 +1813,14 @@ export default function NiftyStrategiesPage() {
                   <div style={{ ...styles.tickerChangeLine, color: up ? theme.green : theme.red }}>
                     {up ? '+' : '-'}{Math.abs(Number(idx.change) || 0).toFixed(idx.key === 'INDIAVIX' ? 2 : 0)} today
                   </div>
+                  <div style={{ ...styles.tickerMetaLine, color: idx.isStale ? theme.yellow : theme.textSecondary }}>
+                    {idx.sourceLabel || idx.source || 'Unknown source'}
+                  </div>
+                  {idx.warning ? (
+                    <div style={styles.tickerWarningLine} title={idx.warning}>
+                      {idx.warning}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             );
@@ -1682,25 +1835,44 @@ export default function NiftyStrategiesPage() {
         </div>
         <div style={styles.headerActions} className="nifty-header-actions">
           <button onClick={loadSavedStrategies} style={styles.secondaryButton}>Refresh</button>
-          <button onClick={() => router.push('/options-strategy')} style={styles.primaryButton}>Add / Modify Strategy</button>
+          <button
+            type="button"
+            onClick={() => {
+              try { sessionStorage.removeItem('nifty-strategy-legs'); sessionStorage.removeItem('nifty-strategy-meta'); } catch (_) {}
+              router.push('/options-strategy').catch(() => {
+                if (typeof window !== 'undefined') {
+                  window.location.assign('/options-strategy');
+                }
+              });
+            }}
+            style={styles.primaryButton}
+          >Create Strategy</button>
+          <button onClick={() => router.push('/strategy-history')} style={styles.secondaryButton}>📋 History</button>
           <button onClick={() => router.push('/dashboard')} style={styles.secondaryButton}>Back to Dashboard</button>
         </div>
       </div>
 
-      <div style={styles.valuationBar}>
-        <div>
-          <div style={styles.valuationTitle}>Current price calculation</div>
-          <div style={styles.valuationHint}>
-            Active MTM now uses a separate live/formula selector. Live / Chain is the most accurate when NSE premiums are available.
-          </div>
-        </div>
+      <div
+        style={{
+          ...styles.valuationBar,
+          borderColor: theme.cardBorder,
+          borderLeftColor: theme.blue,
+          background: theme.cardBgGradient,
+          boxShadow: `0 10px 22px ${theme.shadow}`,
+        }}
+      >
         <div style={styles.valuationControlWrap}>
-          <label htmlFor="current-valuation-source" style={styles.valuationLabel}>Valuation method</label>
+          <label htmlFor="current-valuation-source" style={{ ...styles.valuationLabel, color: theme.textHeading }}>MTM valuation method</label>
           <select
             id="current-valuation-source"
             value={currentValuationSource}
             onChange={(e) => setCurrentValuationSource(e.target.value)}
-            style={styles.valuationSelect}
+            style={{
+              ...styles.valuationSelect,
+              borderColor: theme.inputBorder,
+              background: theme.inputBg,
+              color: theme.textPrimary,
+            }}
           >
             {CURRENT_VALUATION_OPTIONS.map((option) => (
               <option key={option} value={option}>{getPricingSourceLabel(option)}</option>
@@ -1708,6 +1880,107 @@ export default function NiftyStrategiesPage() {
           </select>
         </div>
       </div>
+
+      {strategyPerformanceSeries.length > 0 ? (
+        <div
+          style={{
+            ...styles.performancePanel,
+            borderColor: theme.cardBorder,
+            background: theme.panelBg,
+            boxShadow: `0 10px 26px ${theme.shadow}`,
+          }}
+        >
+          <div style={styles.performanceHeader}>
+            <div>
+              <div style={{ ...styles.performanceTitle, color: theme.textHeading }}>Strategy P/L Timeline</div>
+              <div style={{ ...styles.performanceSubtitle, color: theme.textSecondary }}>Daily snapshot of realized + active MTM, grouped by date.</div>
+            </div>
+            <div style={{ ...styles.performanceDatePill, borderColor: theme.cardBorderHover, color: theme.textPrimary, background: theme.badgeBg }}>
+              {latestPerformancePoint ? `Latest: ${latestPerformancePoint.dateLabel}` : 'Latest: -'}
+            </div>
+          </div>
+
+          <div style={styles.performanceKpiGrid} className="nifty-performance-kpis">
+            <div style={{ ...styles.performanceKpiCard, borderColor: theme.cardBorder }}>
+              <div style={{ ...styles.performanceKpiLabel, color: theme.textSecondary }}>Cumulative P/L</div>
+              <div style={{ ...styles.performanceKpiValue, color: (latestPerformancePoint?.cumulativePL || 0) >= 0 ? theme.green : theme.red }}>
+                {formatCurrency(latestPerformancePoint?.cumulativePL || 0)}
+              </div>
+            </div>
+            <div style={{ ...styles.performanceKpiCard, borderColor: theme.cardBorder }}>
+              <div style={{ ...styles.performanceKpiLabel, color: theme.textSecondary }}>Day Snapshot</div>
+              <div style={{ ...styles.performanceKpiValue, color: (latestPerformancePoint?.dayPL || 0) >= 0 ? theme.green : theme.red }}>
+                {formatCurrency(latestPerformancePoint?.dayPL || 0)}
+              </div>
+            </div>
+            <div style={{ ...styles.performanceKpiCard, borderColor: theme.cardBorder }}>
+              <div style={{ ...styles.performanceKpiLabel, color: theme.textSecondary }}>Strategies Counted</div>
+              <div style={{ ...styles.performanceKpiValue, color: theme.textPrimary }}>
+                {latestPerformancePoint?.strategyCount || 0}
+              </div>
+            </div>
+          </div>
+
+          <div style={styles.performanceChartWrap}>
+            <ResponsiveContainer width="100%" height={260}>
+              <AreaChart
+                data={strategyPerformanceSeries}
+                margin={{ top: 8, right: 10, left: -8, bottom: 0 }}
+              >
+                <defs>
+                  <linearGradient id="timelineCumulativeFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={theme.blue} stopOpacity={0.35} />
+                    <stop offset="95%" stopColor={theme.blue} stopOpacity={0.03} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid stroke={theme.graphGridLine} strokeDasharray="3 3" />
+                <XAxis
+                  dataKey="dateLabel"
+                  tick={{ fill: theme.textSecondary, fontSize: 12 }}
+                  axisLine={{ stroke: theme.divider }}
+                  tickLine={false}
+                />
+                <YAxis
+                  tick={{ fill: theme.textSecondary, fontSize: 12 }}
+                  axisLine={{ stroke: theme.divider }}
+                  tickLine={false}
+                  tickFormatter={(value) => formatCurrency(value)}
+                />
+                <Tooltip
+                  contentStyle={{
+                    borderRadius: 10,
+                    border: `1px solid ${theme.cardBorder}`,
+                    background: theme.cardBg,
+                    color: theme.textPrimary,
+                    fontSize: 12,
+                  }}
+                  formatter={(value, key) => {
+                    if (key === 'dayPL') return [formatCurrency(Number(value) || 0), 'Day P/L'];
+                    if (key === 'cumulativePL') return [formatCurrency(Number(value) || 0), 'Cumulative P/L'];
+                    return [String(value), String(key)];
+                  }}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="cumulativePL"
+                  stroke={theme.blue}
+                  strokeWidth={2}
+                  fill="url(#timelineCumulativeFill)"
+                  dot={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="dayPL"
+                  stroke={theme.green}
+                  strokeWidth={2}
+                  dot={{ r: 2, fill: theme.green }}
+                  activeDot={{ r: 5 }}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      ) : null}
 
       <div style={styles.summaryGrid} className="nifty-summary-grid">
         <div style={{ ...styles.summaryCard, borderTopColor: theme.green }}>
@@ -1765,6 +2038,8 @@ export default function NiftyStrategiesPage() {
           const isClosed = strategy.status === 'closed';
           const statusLabel = isActive ? '✅ BOUGHT' : isClosed ? '🔒 CLOSED' : '👁 WATCHING';
           const statusColor = isActive ? theme.green : isClosed ? theme.textSecondary : theme.blue;
+          const isPastDateEnabled = Boolean(usePastActionDate[strategy.id]);
+          const actionDateTime = actionDateTimeByStrategy[strategy.id] || '';
 
           return (
             <details key={strategy.id} style={{ ...styles.strategyPanel, borderColor: isActive ? theme.greenDim : theme.cardBorder }} open={highlightedId === String(strategy.id) || defaultOpen}>
@@ -1964,7 +2239,7 @@ export default function NiftyStrategiesPage() {
                                 );
                               })()}
                               <div style={styles.closeLegFormBtns}>
-                                <button onClick={() => closeLeg(strategy.id, leg.id, closePrice)} style={styles.closeLegConfirm}>✅ Confirm Close</button>
+                                <button onClick={() => closeLeg(strategy.id, leg.id, closePrice, getActionTimestamp(strategy.id))} style={styles.closeLegConfirm}>✅ Confirm Close</button>
                                 <button onClick={() => { setClosingLegInfo(null); setClosePrice(''); }} style={styles.closeLegCancel}>Cancel</button>
                               </div>
                             </div>
@@ -1979,11 +2254,30 @@ export default function NiftyStrategiesPage() {
                 )}
 
                 <div style={styles.cardActions} className="nifty-card-actions">
+                  <div style={styles.pastDateControls} className="nifty-past-date-controls">
+                    <label style={styles.pastDateToggleLabel}>
+                      <input
+                        type="checkbox"
+                        checked={isPastDateEnabled}
+                        onChange={(e) => togglePastActionDate(strategy.id, e.target.checked)}
+                      />
+                      Past date entry
+                    </label>
+                    {isPastDateEnabled ? (
+                      <input
+                        type="datetime-local"
+                        value={actionDateTime}
+                        onChange={(e) => setActionDateTimeByStrategy((current) => ({ ...current, [strategy.id]: e.target.value }))}
+                        style={styles.pastDateInput}
+                        title="Select action date/time for bought and close"
+                      />
+                    ) : null}
+                  </div>
                   {(!strategy.status || strategy.status === 'watching') && (
-                    <button onClick={() => updateStrategyStatus(strategy.id, 'active')} style={styles.buyButton}>✅ Mark as Bought</button>
+                    <button onClick={() => updateStrategyStatus(strategy.id, 'active', getActionTimestamp(strategy.id))} style={styles.buyButton}>✅ Mark as Bought</button>
                   )}
                   {isActive && (strategy.legs || []).length > 0 && (
-                    <button onClick={() => { if (confirm('Close all remaining legs at current market price?')) updateStrategyStatus(strategy.id, 'closed'); }} style={styles.closeStratBtn}>🔒 Close Strategy</button>
+                    <button onClick={() => { setLearningModal({ strategyId: strategy.id, actionTimestamp: getActionTimestamp(strategy.id) }); setLearningText(''); }} style={styles.closeStratBtn}>🔒 Close Strategy</button>
                   )}
                   {isClosed && (
                     <button onClick={() => updateStrategyStatus(strategy.id, 'watching')} style={styles.secondaryButton}>↩ Move to Watchlist</button>
@@ -2036,6 +2330,47 @@ export default function NiftyStrategiesPage() {
           </>
         );
       })()}
+
+      {/* ── Learning Modal ── */}
+      {learningModal ? (
+        <div style={styles.learningModalOverlay} onClick={() => setLearningModal(null)}>
+          <div style={styles.learningModalBox} onClick={(e) => e.stopPropagation()}>
+            <div style={styles.learningModalHeader}>
+              <span style={styles.learningModalIcon}>📓</span>
+              <span style={styles.learningModalTitle}>Before you close…</span>
+            </div>
+            <p style={styles.learningModalHint}>
+              What did you learn from this trade? Any mistake you don&apos;t want to repeat?
+              <span style={styles.learningModalOptional}>&nbsp;(optional — press Skip to close without noting)</span>
+            </p>
+            <textarea
+              autoFocus
+              rows={4}
+              placeholder="e.g. Exited too early due to panic. Should have held till expiry…"
+              value={learningText}
+              onChange={(e) => setLearningText(e.target.value)}
+              style={styles.learningTextarea}
+            />
+            <div style={styles.learningModalBtns}>
+              <button
+                style={styles.learningModalClose}
+                onClick={() => {
+                  updateStrategyStatus(learningModal.strategyId, 'closed', learningModal.actionTimestamp, learningText.trim() || null);
+                  setLearningModal(null);
+                }}
+              >🔒 Close Strategy</button>
+              <button
+                style={styles.learningModalSkip}
+                onClick={() => {
+                  updateStrategyStatus(learningModal.strategyId, 'closed', learningModal.actionTimestamp, null);
+                  setLearningModal(null);
+                }}
+              >Skip</button>
+              <button style={styles.learningModalCancel} onClick={() => setLearningModal(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2133,6 +2468,20 @@ const darkStyles = {
     fontWeight: '700',
     letterSpacing: '0.02em',
   },
+  tickerMetaLine: {
+    fontSize: '10px',
+    color: '#94a3b8',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  tickerWarningLine: {
+    fontSize: '10px',
+    color: '#f59e0b',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
   riskBanner: {
     display: 'flex',
     alignItems: 'center',
@@ -2198,15 +2547,17 @@ const darkStyles = {
   },
   valuationBar: {
     display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    justifyContent: 'flex-start',
+    alignItems: 'flex-end',
     gap: '16px',
     flexWrap: 'wrap',
-    marginBottom: '16px',
-    padding: '14px 16px',
-    border: '1px solid #1e293b',
+    marginBottom: '18px',
+    padding: '16px 18px',
+    border: '1px solid #334155',
+    borderLeft: '4px solid #0ea5e9',
     borderRadius: '14px',
-    background: 'linear-gradient(135deg, rgba(15,23,42,0.96), rgba(30,41,59,0.52))',
+    background: 'linear-gradient(135deg, rgba(15,23,42,0.98), rgba(2,6,23,0.94))',
+    boxShadow: '0 10px 28px rgba(2, 6, 23, 0.35)',
   },
   valuationTitle: {
     fontSize: '14px',
@@ -2223,24 +2574,26 @@ const darkStyles = {
   valuationControlWrap: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '6px',
-    minWidth: '220px',
+    gap: '8px',
+    minWidth: '260px',
+    maxWidth: '360px',
   },
   valuationLabel: {
-    fontSize: '11px',
+    fontSize: '12px',
     fontWeight: '700',
     letterSpacing: '0.04em',
     textTransform: 'uppercase',
-    color: '#94a3b8',
+    color: '#e2e8f0',
   },
   valuationSelect: {
     minHeight: '44px',
     borderRadius: '10px',
-    border: '1px solid #334155',
-    background: '#0f172a',
+    border: '1px solid #475569',
+    background: '#020617',
     color: '#f8fafc',
     padding: '10px 12px',
     fontSize: '13px',
+    fontWeight: '600',
     outline: 'none',
   },
   primaryButton: {
@@ -2279,6 +2632,60 @@ const darkStyles = {
     gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
     gap: '10px',
     marginBottom: '16px',
+  },
+  performancePanel: {
+    border: '1px solid #1e293b',
+    borderRadius: '14px',
+    marginBottom: '16px',
+    padding: '14px',
+  },
+  performanceHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: '12px',
+    flexWrap: 'wrap',
+    marginBottom: '12px',
+  },
+  performanceTitle: {
+    fontSize: '15px',
+    fontWeight: '700',
+  },
+  performanceSubtitle: {
+    fontSize: '12px',
+    marginTop: '4px',
+  },
+  performanceDatePill: {
+    border: '1px solid #334155',
+    borderRadius: '999px',
+    padding: '6px 10px',
+    fontSize: '12px',
+    fontWeight: '600',
+  },
+  performanceKpiGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+    gap: '10px',
+    marginBottom: '12px',
+  },
+  performanceKpiCard: {
+    border: '1px solid #1e293b',
+    borderRadius: '10px',
+    padding: '10px 12px',
+    background: 'rgba(15, 23, 42, 0.35)',
+  },
+  performanceKpiLabel: {
+    fontSize: '11px',
+    fontWeight: '600',
+    marginBottom: '6px',
+  },
+  performanceKpiValue: {
+    fontSize: '18px',
+    fontWeight: '700',
+  },
+  performanceChartWrap: {
+    height: '260px',
+    width: '100%',
   },
   summaryCard: {
     background: 'linear-gradient(135deg, #0f172a, #1e293b40)',
@@ -2659,6 +3066,34 @@ const darkStyles = {
     display: 'flex',
     gap: '10px',
     flexWrap: 'wrap',
+  },
+  pastDateControls: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    flexWrap: 'wrap',
+    padding: '8px 10px',
+    borderRadius: '8px',
+    border: '1px dashed #334155',
+    background: 'rgba(15, 23, 42, 0.35)',
+  },
+  pastDateToggleLabel: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '6px',
+    color: '#cbd5e1',
+    fontSize: '12px',
+    cursor: 'pointer',
+    userSelect: 'none',
+  },
+  pastDateInput: {
+    minHeight: '38px',
+    borderRadius: '6px',
+    border: '1px solid #334155',
+    background: '#020617',
+    color: '#e2e8f0',
+    padding: '6px 8px',
+    fontSize: '12px',
   },
   sectionHeader: {
     display: 'flex',
@@ -3204,5 +3639,144 @@ const darkStyles = {
   addLegActions: {
     display: 'flex',
     gap: '8px',
+  },
+  learningsTicker: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    background: 'linear-gradient(90deg, #0f172a, #1e293b40)',
+    border: '1px solid #1e293b',
+    borderRadius: '10px',
+    padding: '8px 14px',
+    marginBottom: '14px',
+    overflow: 'hidden',
+    minHeight: '38px',
+  },
+  learningsTickerLabel: {
+    flexShrink: 0,
+    fontSize: '11px',
+    fontWeight: '700',
+    color: '#fbbf24',
+    textTransform: 'uppercase',
+    letterSpacing: '0.5px',
+    paddingRight: '10px',
+    borderRight: '1px solid #334155',
+  },
+  learningsTickerTrack: {
+    flex: 1,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  learningsScrollInner: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    whiteSpace: 'nowrap',
+    willChange: 'transform',
+  },
+  learningsTickerItem: {
+    fontSize: '12px',
+    color: '#cbd5e1',
+    marginRight: '24px',
+  },
+  learningsTickerName: {
+    color: '#fbbf24',
+    fontWeight: '700',
+  },
+  learningsTickerSep: {
+    color: '#334155',
+    marginLeft: '24px',
+  },
+  learningModalOverlay: {
+    position: 'fixed',
+    inset: 0,
+    background: 'rgba(2,6,23,0.82)',
+    zIndex: 1000,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '16px',
+  },
+  learningModalBox: {
+    background: 'linear-gradient(135deg, #0f172a, #1e293b)',
+    border: '1px solid #334155',
+    borderRadius: '16px',
+    padding: '28px 24px',
+    width: '100%',
+    maxWidth: '480px',
+    boxShadow: '0 24px 60px rgba(0,0,0,0.7)',
+  },
+  learningModalHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    marginBottom: '10px',
+  },
+  learningModalIcon: {
+    fontSize: '24px',
+  },
+  learningModalTitle: {
+    fontSize: '18px',
+    fontWeight: '700',
+    color: '#f8fafc',
+  },
+  learningModalHint: {
+    fontSize: '13px',
+    color: '#94a3b8',
+    marginBottom: '14px',
+    lineHeight: '1.6',
+  },
+  learningModalOptional: {
+    color: '#64748b',
+    fontSize: '12px',
+  },
+  learningTextarea: {
+    width: '100%',
+    background: '#020617',
+    border: '1px solid #334155',
+    borderRadius: '10px',
+    color: '#e2e8f0',
+    padding: '12px',
+    fontSize: '13px',
+    lineHeight: '1.6',
+    resize: 'vertical',
+    outline: 'none',
+    boxSizing: 'border-box',
+    marginBottom: '16px',
+  },
+  learningModalBtns: {
+    display: 'flex',
+    gap: '10px',
+    flexWrap: 'wrap',
+  },
+  learningModalClose: {
+    background: '#1e3a2a',
+    border: '1px solid #22c55e',
+    color: '#bbf7d0',
+    borderRadius: '8px',
+    padding: '10px 18px',
+    cursor: 'pointer',
+    fontWeight: 'bold',
+    fontSize: '13px',
+    minHeight: '44px',
+  },
+  learningModalSkip: {
+    background: '#1e293b',
+    border: '1px solid #475569',
+    color: '#94a3b8',
+    borderRadius: '8px',
+    padding: '10px 18px',
+    cursor: 'pointer',
+    fontSize: '13px',
+    minHeight: '44px',
+  },
+  learningModalCancel: {
+    background: 'none',
+    border: '1px solid #334155',
+    color: '#64748b',
+    borderRadius: '8px',
+    padding: '10px 14px',
+    cursor: 'pointer',
+    fontSize: '13px',
+    minHeight: '44px',
   },
 };

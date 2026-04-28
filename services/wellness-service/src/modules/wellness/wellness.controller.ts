@@ -86,6 +86,23 @@ export class WellnessController {
     return { ...state, scoringRules };
   }
 
+  @Post('plan/:userId/close')
+  async closePlan(@Param('userId') userId: string) {
+    const [state, scoringRules] = await Promise.all([
+      this.storageService.closePlan(userId),
+      this.storageService.loadScoringRules(),
+    ]);
+    return { ...state, scoringRules };
+  }
+
+  @Get('plan/:userId/:planId')
+  async getPlanDetails(
+    @Param('userId') userId: string,
+    @Param('planId') planId: string,
+  ) {
+    return this.storageService.loadPlanDetails(userId, planId);
+  }
+
   @Get('scoring-rules')
   getScoringRules() {
     return this.storageService.loadScoringRules();

@@ -251,7 +251,7 @@ function nextExpiryDates(n = 4) {
   const fmt = (d) => `${String(d.getDate()).padStart(2, '0')}-${moNames[d.getMonth()]}-${d.getFullYear()}`;
   const result = [];
   const cur = new Date();
-  cur.setHours(23, 59, 59, 0); // start from end-of-today so we never pick today
+  cur.setHours(0, 0, 0, 0); // midnight local — adding +1 day before first check ensures today is never picked
   while (result.length < n) {
     cur.setDate(cur.getDate() + 1);
     if (cur.getDay() === 2) { // 2 = Tuesday

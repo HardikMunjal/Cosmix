@@ -1,6 +1,7 @@
 export const DEFAULT_SCORING_RULES = {
   activities: [
     { key: 'runningDistanceKm', label: 'Running', icon: '🏃', unit: 'km', physicalMultiplier: 0.9, physicalDivisor: 1, mentalMultiplier: 0.4, mentalDivisor: 1 },
+    { key: 'cyclingDistanceKm', label: 'Cycling', icon: '🚴', unit: 'km', physicalMultiplier: 0.8, physicalDivisor: 1, mentalMultiplier: 0.3, mentalDivisor: 1 },
     { key: 'walkingDistanceKm', label: 'Walking distance', icon: '🚶', unit: 'km', physicalMultiplier: 0.3, physicalDivisor: 1, mentalMultiplier: 0, mentalDivisor: 1 },
     { key: 'walkingMinutes', label: 'Walking time', icon: '🚶', unit: 'mins', physicalMultiplier: 0, physicalDivisor: 1, mentalMultiplier: 0.25, mentalDivisor: 30 },
     { key: 'exerciseMinutes', label: 'Workout', icon: '💪', unit: 'mins', physicalMultiplier: 0.8, physicalDivisor: 30, mentalMultiplier: 0.5, mentalDivisor: 30 },
@@ -22,6 +23,7 @@ export const DEFAULT_SCORING_RULES = {
     baselineHours: 6.5,
     stepHours: 0.5,
     scorePerStep: 0.5,
+    defaultHours: 7,
   },
   targets: {
     hamptaPass: 90,
@@ -33,20 +35,34 @@ export const DEFAULT_SCORING_RULES = {
 export const DAILY_PENALTY = DEFAULT_SCORING_RULES.dailyPenalty;
 
 export function normalizeScoringRules(input) {
-  const activityMap = new Map((input?.activities || []).map((rule) => [rule.key, rule]));
+  const activityMap = new Map((input?.activities || []).map((rule) => [String(rule.key || ''), rule]));
+  const defaultActivityKeys = new Set(DEFAULT_SCORING_RULES.activities.map((rule) => rule.key));
+
+  const normalizeRule = (baseRule, override = {}) => ({
+    key: String(override?.key || baseRule?.key || ''),
+    label: String(override?.label || baseRule?.label || 'Custom activity'),
+    icon: String(override?.icon || baseRule?.icon || '✨'),
+    unit: String(override?.unit || baseRule?.unit || 'mins'),
+    physicalMultiplier: Number(override?.physicalMultiplier ?? baseRule?.physicalMultiplier ?? 0),
+    physicalDivisor: Math.max(1, Number(override?.physicalDivisor ?? baseRule?.physicalDivisor ?? 1)),
+    mentalMultiplier: Number(override?.mentalMultiplier ?? baseRule?.mentalMultiplier ?? 0),
+    mentalDivisor: Math.max(1, Number(override?.mentalDivisor ?? baseRule?.mentalDivisor ?? 1)),
+  });
+
+  const defaultRules = DEFAULT_SCORING_RULES.activities.map((defaultRule) => {
+    const override = activityMap.get(defaultRule.key);
+    return normalizeRule(defaultRule, override);
+  });
+
+  const customRules = (input?.activities || [])
+    .filter((rule) => {
+      const key = String(rule?.key || '');
+      return Boolean(key) && !defaultActivityKeys.has(key);
+    })
+    .map((rule) => normalizeRule(rule, rule));
 
   return {
-    activities: DEFAULT_SCORING_RULES.activities.map((defaultRule) => {
-      const override = activityMap.get(defaultRule.key);
-      return {
-        ...defaultRule,
-        ...override,
-        physicalMultiplier: Number(override?.physicalMultiplier ?? defaultRule.physicalMultiplier),
-        physicalDivisor: Math.max(1, Number(override?.physicalDivisor ?? defaultRule.physicalDivisor)),
-        mentalMultiplier: Number(override?.mentalMultiplier ?? defaultRule.mentalMultiplier),
-        mentalDivisor: Math.max(1, Number(override?.mentalDivisor ?? defaultRule.mentalDivisor)),
-      };
-    }),
+    activities: [...defaultRules, ...customRules],
     dailyPenalty: {
       physical: Number(input?.dailyPenalty?.physical ?? DEFAULT_SCORING_RULES.dailyPenalty.physical),
       mental: Number(input?.dailyPenalty?.mental ?? DEFAULT_SCORING_RULES.dailyPenalty.mental),
@@ -55,6 +71,7 @@ export function normalizeScoringRules(input) {
       baselineHours: Number(input?.sleep?.baselineHours ?? DEFAULT_SCORING_RULES.sleep.baselineHours),
       stepHours: Math.max(0.1, Number(input?.sleep?.stepHours ?? DEFAULT_SCORING_RULES.sleep.stepHours)),
       scorePerStep: Number(input?.sleep?.scorePerStep ?? DEFAULT_SCORING_RULES.sleep.scorePerStep),
+      defaultHours: Number(input?.sleep?.defaultHours ?? DEFAULT_SCORING_RULES.sleep.defaultHours),
     },
     targets: {
       hamptaPass: Number(input?.targets?.hamptaPass ?? DEFAULT_SCORING_RULES.targets.hamptaPass),
@@ -69,7 +86,8 @@ export function roundScore(value) {
 }
 
 function sleepScore(sleepHours, rules) {
-  const hrs = Number(sleepHours || 0);
+  const explicitHours = Number(sleepHours || 0);
+  const hrs = explicitHours > 0 ? explicitHours : Number(rules.sleep.defaultHours || 0);
   if (hrs === 0) return 0;
   const diff = hrs - rules.sleep.baselineHours;
   return (diff / rules.sleep.stepHours) * rules.sleep.scorePerStep;
@@ -82,6 +100,7 @@ function computeContribution(value, multiplier, divisor) {
 
 export function getWorkoutMinutes(entry) {
   return Number(entry.runningMinutes || 0)
+    + Number(entry.cyclingMinutes || 0)
     + Number(entry.walkingMinutes || 0)
     + Number(entry.exerciseMinutes || 0)
     + Number(entry.yogaMinutes || 0)

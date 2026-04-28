@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import dynamic from 'next/dynamic';
 import { restoreUserSession } from '../lib/auth-client';
+import { useTheme } from '../lib/ThemePicker';
+import { applyTheme } from '../lib/themes';
 
 const RechartsComponents = dynamic(
   () => import('recharts').then((mod) => ({
@@ -44,6 +46,32 @@ function normalizePremium(value) {
   return Number((Number(value) || 0).toFixed(2));
 }
 
+// Format expiry unix timestamp as IST date string regardless of browser timezone.
+// IST = UTC+5:30. Using UTC methods on an IST-shifted Date avoids day-shift bugs.
+function formatExpiryDisplay(unixSeconds) {
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+  const ms = Number(unixSeconds) * 1000 + IST_OFFSET_MS;
+  const d = new Date(ms);
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${days[d.getUTCDay()]} ${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+
+function toLocalDateTimeInputValue(value) {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  const offsetMs = parsed.getTimezoneOffset() * 60000;
+  return new Date(parsed.getTime() - offsetMs).toISOString().slice(0, 16);
+}
+
+function fromLocalDateTimeInputValue(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString();
+}
+
 function resolveStrategyStrike(spot, strikesList = [], offset = 0) {
   const target = Math.max(0, (Number(spot) || 0) + offset);
   if (strikesList.length) {
@@ -55,7 +83,7 @@ function resolveStrategyStrike(spot, strikesList = [], offset = 0) {
   return Math.max(0, Math.round(target / STRIKE_STEP) * STRIKE_STEP);
 }
 
-function createLeg(id, side, optionType, strike, chainMap) {
+function createLeg(id, side, optionType, strike, chainMap, expiry = null) {
   const marketPremium = normalizePremium(chainMap?.[optionType]?.[strike]);
   return {
     id,
@@ -66,19 +94,20 @@ function createLeg(id, side, optionType, strike, chainMap) {
     premium: marketPremium,
     marketPremium,
     locked: false,
+    expiry: expiry || null,
   };
 }
 
-function buildDefaultLegs(spot, strikesList, chainMap, getNextLegId) {
+function buildDefaultLegs(spot, strikesList, chainMap, getNextLegId, expiry = null) {
   const shortStrike = resolveStrategyStrike(spot, strikesList, 0);
   const upperHedgeStrike = resolveStrategyStrike(spot, strikesList, WING_DISTANCE);
   const lowerHedgeStrike = resolveStrategyStrike(spot, strikesList, -WING_DISTANCE);
 
   return [
-    createLeg(getNextLegId(), 'SELL', 'CE', shortStrike, chainMap),
-    createLeg(getNextLegId(), 'SELL', 'PE', shortStrike, chainMap),
-    createLeg(getNextLegId(), 'BUY', 'CE', upperHedgeStrike, chainMap),
-    createLeg(getNextLegId(), 'BUY', 'PE', lowerHedgeStrike, chainMap),
+    createLeg(getNextLegId(), 'SELL', 'CE', shortStrike, chainMap, expiry),
+    createLeg(getNextLegId(), 'SELL', 'PE', shortStrike, chainMap, expiry),
+    createLeg(getNextLegId(), 'BUY', 'CE', upperHedgeStrike, chainMap, expiry),
+    createLeg(getNextLegId(), 'BUY', 'PE', lowerHedgeStrike, chainMap, expiry),
   ];
 }
 
@@ -173,7 +202,7 @@ function mergeQuoteMaps(baseMap = { CE: {}, PE: {} }, overlayMap = { CE: {}, PE:
   };
 }
 
-function PayoffChart({ points, minY, maxY, currentSpot, breakEvens = [] }) {
+function PayoffChart({ points, minY, maxY, currentSpot, breakEvens = [], styles, theme = {} }) {
   if (!points.length) {
     return null;
   }
@@ -255,7 +284,7 @@ function PayoffChart({ points, minY, maxY, currentSpot, breakEvens = [] }) {
           className="strategy-payoff-chart"
           viewBox={`0 0 ${W} ${H}`}
           preserveAspectRatio="none"
-          style={{ width: '100%', height: '280px', borderRadius: '12px', background: 'linear-gradient(180deg, #031525, #020617)', display: 'block' }}
+          style={{ width: '100%', height: '280px', borderRadius: '12px', background: theme.graphBg || 'linear-gradient(180deg, #031525, #020617)', display: 'block' }}
         >
           {/* grid lines */}
           {yTicks.map((v) => (
@@ -271,10 +300,10 @@ function PayoffChart({ points, minY, maxY, currentSpot, breakEvens = [] }) {
           <path d={lossPath} fill="rgba(248,113,113,0.18)" />
 
           {/* zero line */}
-          <line x1={pad.left} y1={zeroY} x2={W - pad.right} y2={zeroY} stroke="#94a3b8" strokeWidth="0.3" strokeDasharray="1 1" />
+          <line x1={pad.left} y1={zeroY} x2={W - pad.right} y2={zeroY} stroke={theme.textSecondary || '#94a3b8'} strokeWidth="0.3" strokeDasharray="1 1" />
 
           {/* current spot vertical */}
-          <line x1={xForSpot(currentSpot)} y1={pad.top} x2={xForSpot(currentSpot)} y2={H - pad.bottom} stroke="#38bdf8" strokeDasharray="1 0.8" strokeWidth="0.4" />
+          <line x1={xForSpot(currentSpot)} y1={pad.top} x2={xForSpot(currentSpot)} y2={H - pad.bottom} stroke={theme.cyan || '#38bdf8'} strokeDasharray="1 0.8" strokeWidth="0.4" />
 
           {/* breakeven verticals */}
           {breakEvens.map((v) => (
@@ -282,36 +311,36 @@ function PayoffChart({ points, minY, maxY, currentSpot, breakEvens = [] }) {
           ))}
 
           {/* payoff curve */}
-          <polyline fill="none" stroke="#22c55e" strokeWidth="0.8" points={polyline} />
+          <polyline fill="none" stroke={theme.green || '#22c55e'} strokeWidth="0.8" points={polyline} />
 
           {/* max/min markers */}
-          <circle cx={xForSpot(maxPoint.spot)} cy={yForValue(maxPoint.value)} r="0.8" fill="#22c55e" stroke="#fff" strokeWidth="0.3" />
-          <circle cx={xForSpot(minPoint.spot)} cy={yForValue(minPoint.value)} r="0.8" fill="#f87171" stroke="#fff" strokeWidth="0.3" />
+          <circle cx={xForSpot(maxPoint.spot)} cy={yForValue(maxPoint.value)} r="0.8" fill={theme.green || '#22c55e'} stroke="#fff" strokeWidth="0.3" />
+          <circle cx={xForSpot(minPoint.spot)} cy={yForValue(minPoint.value)} r="0.8" fill={theme.red || '#f87171'} stroke="#fff" strokeWidth="0.3" />
 
           {/* Y axis labels */}
           {yTicks.map((v) => (
-            <text key={`yl-${v}`} x={pad.left - 1} y={yForValue(v) + 0.8} fill="#94a3b8" fontSize="2.5" textAnchor="end" dominantBaseline="middle">
+            <text key={`yl-${v}`} x={pad.left - 1} y={yForValue(v) + 0.8} fill={theme.textSecondary || '#94a3b8'} fontSize="2.5" textAnchor="end" dominantBaseline="middle">
               {Math.abs(v) >= 100000 ? `${(v / 1000).toFixed(0)}k` : v.toLocaleString()}
             </text>
           ))}
 
           {/* X axis labels */}
           {xTicks.map((s) => (
-            <text key={`xl-${s}`} x={xForSpot(s)} y={H - pad.bottom + 4} fill="#94a3b8" fontSize="2.3" textAnchor="middle">
+            <text key={`xl-${s}`} x={xForSpot(s)} y={H - pad.bottom + 4} fill={theme.textSecondary || '#94a3b8'} fontSize="2.3" textAnchor="middle">
               {s.toLocaleString()}
             </text>
           ))}
 
           {/* axis labels */}
-          <text x={pad.left - 1} y={pad.top - 1.5} fill="#64748b" fontSize="2" textAnchor="end">P/L (₹)</text>
-          <text x={W - pad.right} y={H - pad.bottom + 7} fill="#64748b" fontSize="2" textAnchor="end">Spot →</text>
+          <text x={pad.left - 1} y={pad.top - 1.5} fill={theme.textMuted || '#64748b'} fontSize="2" textAnchor="end">P/L (₹)</text>
+          <text x={W - pad.right} y={H - pad.bottom + 7} fill={theme.textMuted || '#64748b'} fontSize="2" textAnchor="end">Spot →</text>
 
           {/* hover crosshair */}
           {hover && (
             <>
               <line x1={xForSpot(hover.spot)} y1={pad.top} x2={xForSpot(hover.spot)} y2={H - pad.bottom} stroke="rgba(255,255,255,0.5)" strokeWidth="0.2" />
               <line x1={pad.left} y1={yForValue(hover.value)} x2={W - pad.right} y2={yForValue(hover.value)} stroke="rgba(255,255,255,0.3)" strokeWidth="0.2" strokeDasharray="0.5 0.5" />
-              <circle cx={xForSpot(hover.spot)} cy={yForValue(hover.value)} r="0.7" fill={hover.value >= 0 ? '#22c55e' : '#f87171'} stroke="#fff" strokeWidth="0.3" />
+              <circle cx={xForSpot(hover.spot)} cy={yForValue(hover.value)} r="0.7" fill={hover.value >= 0 ? (theme.green || '#22c55e') : (theme.red || '#f87171')} stroke="#fff" strokeWidth="0.3" />
             </>
           )}
         </svg>
@@ -322,16 +351,16 @@ function PayoffChart({ points, minY, maxY, currentSpot, breakEvens = [] }) {
             position: 'absolute',
             left: Math.min(hover.x + 10, (containerRef.current?.offsetWidth || 400) - 160),
             top: Math.max(hover.y - 50, 4),
-            background: 'rgba(2,6,23,0.92)',
-            border: '1px solid rgba(148,163,184,0.3)',
+            background: theme.panelBg || 'rgba(2,6,23,0.92)',
+            border: `1px solid ${theme.cardBorder || 'rgba(148,163,184,0.3)'}`,
             borderRadius: 8,
             padding: '6px 10px',
             pointerEvents: 'none',
             zIndex: 10,
             minWidth: 120,
           }}>
-            <div style={{ fontSize: 11, color: '#94a3b8' }}>Spot: <strong style={{ color: '#e2e8f0' }}>{hover.spot.toLocaleString()}</strong></div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: hover.value >= 0 ? '#22c55e' : '#f87171', marginTop: 2 }}>
+            <div style={{ fontSize: 11, color: theme.textSecondary || '#94a3b8' }}>Spot: <strong style={{ color: theme.textPrimary || '#e2e8f0' }}>{hover.spot.toLocaleString()}</strong></div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: hover.value >= 0 ? (theme.green || '#22c55e') : (theme.red || '#f87171'), marginTop: 2 }}>
               {hover.value >= 0 ? '+' : ''}{hover.value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
           </div>
@@ -348,7 +377,7 @@ function PayoffChart({ points, minY, maxY, currentSpot, breakEvens = [] }) {
   );
 }
 
-function RangeMapChart({ points, profitZones = [], lossZones = [], currentSpot, breakEvens = [] }) {
+function RangeMapChart({ points, profitZones = [], lossZones = [], currentSpot, breakEvens = [], styles }) {
   if (!points.length) {
     return null;
   }
@@ -401,7 +430,7 @@ function RangeMapChart({ points, profitZones = [], lossZones = [], currentSpot, 
   );
 }
 
-function MetricBarChart({ items = [] }) {
+function MetricBarChart({ items = [], styles }) {
   const scale = Math.max(...items.map((item) => Math.abs(Number(item.value) || 0)), 1);
 
   return (
@@ -427,6 +456,8 @@ function MetricBarChart({ items = [] }) {
 
 export default function OptionsStrategy() {
   const router = useRouter();
+  const { theme, themeId } = useTheme();
+  const styles = useMemo(() => applyTheme(darkStyles, themeId, theme), [themeId, theme]);
   const nextLegIdRef = useRef(1);
   const getNextLegId = () => {
     const nextId = nextLegIdRef.current;
@@ -461,6 +492,7 @@ export default function OptionsStrategy() {
   const [rateInput, setRateInput] = useState('');
   const [pricingSource, setPricingSource] = useState('blend');
   const [strategyName, setStrategyName] = useState('My Saved Strategy');
+  const [entryDateTime, setEntryDateTime] = useState(() => toLocalDateTimeInputValue(new Date().toISOString()));
   const [savedStrategies, setSavedStrategies] = useState([]);
   const [saveLoading, setSaveLoading] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
@@ -472,10 +504,10 @@ export default function OptionsStrategy() {
     try {
       sessionStorage.setItem('nifty-strategy-legs', JSON.stringify(legs));
       sessionStorage.setItem('nifty-strategy-meta', JSON.stringify({
-        spotPrice, lotSize, pricingSource, ivInput, rateInput, selectedExpiry, strategyName, editingStrategyId,
+        spotPrice, lotSize, pricingSource, ivInput, rateInput, selectedExpiry, strategyName, entryDateTime, editingStrategyId,
       }));
     } catch (_) { /* ignore */ }
-  }, [legs, spotPrice, lotSize, pricingSource, ivInput, rateInput, selectedExpiry, strategyName, editingStrategyId]);
+  }, [legs, spotPrice, lotSize, pricingSource, ivInput, rateInput, selectedExpiry, strategyName, entryDateTime, editingStrategyId]);
 
   // Restore legs from sessionStorage on mount (before first market data fetch)
   useEffect(() => {
@@ -497,7 +529,12 @@ export default function OptionsStrategy() {
         if (meta.ivInput) setIvInput(meta.ivInput);
         if (meta.rateInput) setRateInput(meta.rateInput);
         if (meta.strategyName) setStrategyName(meta.strategyName);
-        if (meta.editingStrategyId) setEditingStrategyId(meta.editingStrategyId);
+        if (meta.entryDateTime) setEntryDateTime(meta.entryDateTime);
+        // Only restore editingStrategyId when a strategyId param is present in the URL
+        // (i.e. editing an existing strategy). For fresh creates we skip this.
+        if (meta.editingStrategyId && typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('strategyId')) {
+          setEditingStrategyId(meta.editingStrategyId);
+        }
       }
     } catch (_) { /* ignore */ }
   }, []);
@@ -710,6 +747,7 @@ export default function OptionsStrategy() {
         initializedDefaultsRef.current = true;
         setEditingStrategyId(strategy.id);
         setStrategyName(strategy.name || 'My Saved Strategy');
+        setEntryDateTime(toLocalDateTimeInputValue(strategy.entryAt || strategy.createdAt || new Date().toISOString()));
         setLotSize(Number(strategy.lotSize) || 65);
         setPricingSource(strategy.pricingSource || 'blend');
         if (strategy.ivInput != null) setIvInput(String(strategy.ivInput));
@@ -742,7 +780,8 @@ export default function OptionsStrategy() {
         const nifty = (data.indices || []).find((index) => index.key === 'NIFTY50');
         if (nifty) {
           setSpotPrice(Number(nifty.price.toFixed(2)));
-          setLiveSource(nifty.source || 'market-indices');
+          setLiveSource(nifty.sourceLabel || nifty.source || 'market-indices');
+          setSourceWarning(nifty.warning || '');
         }
         // also load options expiries & chain
         try {
@@ -758,7 +797,7 @@ export default function OptionsStrategy() {
             // fallback: next 4 Tuesdays from tomorrow (never add today — NSE handles holiday-moved dates)
             const nextTuesdays = [];
             const cursor = new Date();
-            cursor.setHours(23, 59, 59, 0); // start from end-of-today
+            cursor.setHours(0, 0, 0, 0); // midnight local — +1 day before first check ensures today is never picked
             while (nextTuesdays.length < 4) {
               cursor.setDate(cursor.getDate() + 1);
               if (cursor.getDay() === 2) nextTuesdays.push(Math.floor(cursor.getTime() / 1000));
@@ -859,14 +898,18 @@ export default function OptionsStrategy() {
       const response = await fetch('/api/market-indices');
       const data = await response.json();
       const nifty = (data.indices || []).find((index) => index.key === 'NIFTY50');
-      if (nifty) setSpotPrice(Number(nifty.price.toFixed(2)));
+      if (nifty) {
+        setSpotPrice(Number(nifty.price.toFixed(2)));
+        setLiveSource(nifty.sourceLabel || nifty.source || 'market-indices');
+        setSourceWarning(nifty.warning || '');
+      }
     } catch (_) { /* ignore */ }
   };
 
   const addStrategySet = async () => {
     await fetchAndSetSpot();
     setLegs((current) => {
-      const defaults = buildDefaultLegs(spotPriceRef.current, strikesList, chainMapRef.current, getNextLegId);
+      const defaults = buildDefaultLegs(spotPriceRef.current, strikesList, chainMapRef.current, getNextLegId, selectedExpiryRef.current);
       const room = MAX_LEGS - current.length;
       if (room <= 0) return current;
       return [...current, ...defaults.slice(0, room)];
@@ -878,7 +921,7 @@ export default function OptionsStrategy() {
     setLegs((current) => {
       if (current.length >= MAX_LEGS) return current;
       const strike = resolveStrategyStrike(spotPriceRef.current, strikesList, 0);
-      return [...current, createLeg(getNextLegId(), 'SELL', 'CE', strike, chainMapRef.current)];
+      return [...current, createLeg(getNextLegId(), 'SELL', 'CE', strike, chainMapRef.current, selectedExpiryRef.current)];
     });
   };
 
@@ -946,6 +989,11 @@ export default function OptionsStrategy() {
     const existingStrategy = editingStrategyId
       ? savedStrategies.find((strategy) => String(strategy.id) === String(editingStrategyId))
       : null;
+    const nowIso = new Date().toISOString();
+    const selectedEntryAt = fromLocalDateTimeInputValue(entryDateTime)
+      || existingStrategy?.entryAt
+      || existingStrategy?.createdAt
+      || nowIso;
     setSaveLoading(true);
     setSaveMessage('');
 
@@ -953,10 +1001,11 @@ export default function OptionsStrategy() {
       const payload = {
         id: editingStrategyId || `opt-${Date.now()}`,
         name: cleanName,
-        createdAt: existingStrategy?.createdAt || new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        entryAt: selectedEntryAt,
+        createdAt: existingStrategy?.createdAt || selectedEntryAt || nowIso,
+        updatedAt: nowIso,
         selectedExpiry,
-        expiryLabel: selectedExpiry ? new Date(Number(selectedExpiry) * 1000).toDateString() : 'Not selected',
+        expiryLabel: selectedExpiry ? formatExpiryDisplay(selectedExpiry) : 'Not selected',
         lotSize,
         savedAtSpot: Number(spotPrice.toFixed(2)),
         liveSource,
@@ -1240,7 +1289,7 @@ export default function OptionsStrategy() {
           <div style={styles.heroCard} className="strategy-hero-card">
             <div style={styles.heroLabel}>Nifty Live Price</div>
             <div style={styles.heroPrice}>Rs. {spotPrice.toFixed(2)}</div>
-            <div style={{ fontSize: 11, marginTop: 4, color: ['nse', 'angel-one'].includes(liveSource) ? '#22c55e' : '#f59e0b' }}>
+            <div style={{ fontSize: 11, marginTop: 4, color: ['nse', 'angel-one'].includes(liveSource) ? theme.green : theme.yellow }}>
               {liveSource === 'nse' ? '● NSE LIVE' : liveSource === 'angel-one' ? '● Angel One LIVE' : liveSource === 'synthetic-fallback' ? '⚠ Synthetic (no live source)' : `Source: ${liveSource}`}
               {lastUpdated ? ` · ${secsAgo < 5 ? 'just now' : `${secsAgo}s ago`}` : ''}
               {liveLoading ? ' · updating…' : ''}
@@ -1292,24 +1341,25 @@ export default function OptionsStrategy() {
           <div style={styles.legsHeader} className="strategy-legs-header">
             <span>Side</span>
             <span>Type</span>
+            <span>Expiry</span>
             <span>Strike</span>
             <span>Lots</span>
             <span>Entry Premium</span>
             <span>Actions</span>
           </div>
           <div style={{ marginTop: 8, marginBottom: 12 }}>
-            <label style={{ marginRight: 8, color: '#94a3b8', fontSize: 12 }}>Expiry</label>
-            <select value={selectedExpiry || ''} onChange={(e) => setSelectedExpiry(Number(e.target.value) || null)} style={{ padding: '6px 8px', borderRadius: 6, background: '#020617', color: '#e2e8f0', border: '1px solid #334155' }}>
+            <label style={{ marginRight: 8, color: theme.textSecondary, fontSize: 12 }}>Expiry</label>
+            <select value={selectedExpiry || ''} onChange={(e) => setSelectedExpiry(Number(e.target.value) || null)} style={{ padding: '6px 8px', borderRadius: 6, background: theme.inputBg, color: theme.textPrimary, border: `1px solid ${theme.inputBorder}` }}>
               <option value="">Select expiry</option>
               {expiryOptions.map((d) => (
-                <option key={d} value={d}>{new Date(Number(d) * 1000).toDateString()}</option>
+                <option key={d} value={d}>{formatExpiryDisplay(d)}</option>
               ))}
             </select>
           </div>
           <div style={styles.legActionsBar}>
             <button onClick={addStrategySet} disabled={legs.length >= MAX_LEGS} style={legs.length >= MAX_LEGS ? { ...styles.secondaryButton, opacity: 0.4, cursor: 'not-allowed' } : styles.secondaryButton}>+ Add Default Set</button>
             <button onClick={addCustomLeg} disabled={legs.length >= MAX_LEGS} style={legs.length >= MAX_LEGS ? { ...styles.secondaryButton, opacity: 0.4, cursor: 'not-allowed' } : styles.secondaryButton}>+ Add Custom Leg</button>
-            <span style={{ color: '#94a3b8', fontSize: 12, alignSelf: 'center' }}>{legs.length} / {MAX_LEGS} legs</span>
+            <span style={{ color: theme.textSecondary, fontSize: 12, alignSelf: 'center' }}>{legs.length} / {MAX_LEGS} legs</span>
           </div>
           {legs.map((leg) => (
             <div key={leg.id} style={styles.legWrap}>
@@ -1321,6 +1371,16 @@ export default function OptionsStrategy() {
                 <select value={leg.optionType} disabled={leg.locked} onChange={(e) => updateLeg(leg.id, 'optionType', e.target.value)} style={styles.input}>
                   <option value="PE">PE</option>
                   <option value="CE">CE</option>
+                </select>
+                <select
+                  value={leg.expiry || selectedExpiry || ''}
+                  onChange={(e) => updateLeg(leg.id, 'expiry', Number(e.target.value) || null)}
+                  style={{ ...styles.input, minWidth: 110 }}
+                >
+                  <option value="">Select</option>
+                  {expiryOptions.map((d) => (
+                    <option key={d} value={d}>{formatExpiryDisplay(d)}</option>
+                  ))}
                 </select>
                 {strikesList && strikesList.length ? (
                   (() => {
@@ -1379,7 +1439,7 @@ export default function OptionsStrategy() {
           </div>
           <div style={styles.metricCard}>
             <div style={styles.metricLabel}>Premium Captured</div>
-            <div style={{ ...styles.metricValue, color: metrics.capturedPremium >= 0 ? '#22c55e' : '#f87171' }}>Rs. {metrics.capturedPremium.toFixed(2)}</div>
+            <div style={{ ...styles.metricValue, color: metrics.capturedPremium >= 0 ? theme.green : theme.red }}>Rs. {metrics.capturedPremium.toFixed(2)}</div>
           </div>
           <div style={styles.metricCard}>
             <div style={styles.metricLabel}>Premium Capture %</div>
@@ -1387,19 +1447,19 @@ export default function OptionsStrategy() {
           </div>
           <div style={styles.metricCard}>
             <div style={styles.metricLabel}>Live MTM From Premiums</div>
-            <div style={{ ...styles.metricValue, color: metrics.markToMarket >= 0 ? '#22c55e' : '#f87171' }}>Rs. {metrics.markToMarket.toFixed(2)}</div>
+            <div style={{ ...styles.metricValue, color: metrics.markToMarket >= 0 ? theme.green : theme.red }}>Rs. {metrics.markToMarket.toFixed(2)}</div>
           </div>
           <div style={styles.metricCard}>
             <div style={styles.metricLabel}>Maximum Profit</div>
-            <div style={{ ...styles.metricValue, color: '#22c55e' }}>{metrics.isUnlimitedProfit ? '∞ Unlimited' : `Rs. ${metrics.maxProfit.toFixed(2)}`}</div>
+            <div style={{ ...styles.metricValue, color: theme.green }}>{metrics.isUnlimitedProfit ? '∞ Unlimited' : `Rs. ${metrics.maxProfit.toFixed(2)}`}</div>
           </div>
           <div style={styles.metricCard}>
             <div style={styles.metricLabel}>Maximum Loss</div>
-            <div style={{ ...styles.metricValue, color: '#f87171' }}>{metrics.isUnlimitedLoss ? '∞ Unlimited' : `Rs. ${Math.abs(metrics.maxLoss).toFixed(2)}`}</div>
+            <div style={{ ...styles.metricValue, color: theme.red }}>{metrics.isUnlimitedLoss ? '∞ Unlimited' : `Rs. ${Math.abs(metrics.maxLoss).toFixed(2)}`}</div>
           </div>
           <div style={styles.metricCard}>
             <div style={styles.metricLabel}>Payoff At Current Spot</div>
-            <div style={{ ...styles.metricValue, color: metrics.currentPayoff >= 0 ? '#22c55e' : '#f87171' }}>Rs. {metrics.currentPayoff.toFixed(2)}</div>
+            <div style={{ ...styles.metricValue, color: metrics.currentPayoff >= 0 ? theme.green : theme.red }}>Rs. {metrics.currentPayoff.toFixed(2)}</div>
           </div>
         </div>
 
@@ -1418,16 +1478,23 @@ export default function OptionsStrategy() {
               placeholder="Example: Weekly iron condor #1"
               style={styles.input}
             />
+            <input
+              type="datetime-local"
+              value={entryDateTime}
+              onChange={(e) => setEntryDateTime(e.target.value)}
+              style={styles.input}
+              title="Entry date and time"
+            />
             <button onClick={saveCurrentStrategy} style={styles.saveButton}>
               {saveLoading ? 'Saving…' : editingStrategyId ? 'Update Strategy' : 'Save to Nifty Tracker'}
             </button>
             <button onClick={() => router.push('/nifty-strategies')} style={styles.secondaryButton}>Open Nifty Tracker</button>
           </div>
           <p style={styles.explanation}>
-            Saving writes this setup into a JSON file and freezes the current entry premiums. After save, the separate Nifty tracker page shows the strategy with live P/L, up/down movement, and expandable graphs.
+            Saving writes this setup into storage, freezes the current entry premiums, and uses the selected entry date/time for historical tracking. After save, the Nifty tracker page shows live P/L with correct timeline placement.
           </p>
           <div style={styles.saveHint}>Saved strategies: {savedStrategies.length} · strike selection now shows about 2000 points up and down from spot.</div>
-          {saveMessage ? <div style={styles.saveMessage}>{saveMessage}</div> : null}
+          {saveMessage ? <div style={{ ...styles.saveMessage, color: theme.infoText, background: `${theme.cyan}1a`, borderColor: `${theme.cyan}50` }}>{saveMessage}</div> : null}
         </div>
 
         <div style={styles.card}>
@@ -1440,7 +1507,7 @@ export default function OptionsStrategy() {
               {optimizerLoading ? 'Analyzing…' : 'Run Optimizer'}
             </button>
             {optimizerResult && !optimizerLoading ? (
-              <span style={{ color: '#22c55e', fontSize: 13 }}>
+              <span style={{ color: theme.green, fontSize: 13 }}>
                 ✓ Evaluated {optimizerResult.totalCombinationsEvaluated?.toLocaleString()} combinations · {optimizerResult.viableCandidates?.toLocaleString()} viable{optimizerResult.computeTimeMs ? ` · ${(optimizerResult.computeTimeMs / 1000).toFixed(1)}s` : ''}
               </span>
             ) : null}
@@ -1451,8 +1518,8 @@ export default function OptionsStrategy() {
                 <div style={styles.loaderInner} />
               </div>
               <div style={styles.loaderText}>
-                <div style={{ fontSize: 15, fontWeight: 'bold', color: '#e2e8f0', marginBottom: 6 }}>Finding best strategies…</div>
-                <div style={{ fontSize: 12, color: '#94a3b8' }}>Evaluating Iron Condors, Butterflies, Jade Lizards, Ratio Spreads, Call/Put Ladders, Layered Condors and more across all combinations</div>
+                <div style={{ fontSize: 15, fontWeight: 'bold', color: theme.textPrimary, marginBottom: 6 }}>Finding best strategies…</div>
+                <div style={{ fontSize: 12, color: theme.textSecondary }}>Evaluating Iron Condors, Butterflies, Jade Lizards, Ratio Spreads, Call/Put Ladders, Layered Condors and more across all combinations</div>
               </div>
               <style>{`
                 @keyframes optimizerSpin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -1460,28 +1527,28 @@ export default function OptionsStrategy() {
               `}</style>
             </div>
           ) : null}
-          {optimizerError ? <div style={{ ...styles.saveMessage, borderColor: 'rgba(248,113,113,0.3)', color: '#fecaca' }}>{optimizerError}</div> : null}
+          {optimizerError ? <div style={{ ...styles.saveMessage, borderColor: `${theme.red}50`, color: theme.red, background: `${theme.red}15` }}>{optimizerError}</div> : null}
           {optimizerResult && !optimizerLoading ? (
             <div>
-              <details style={{ marginBottom: 14, background: '#0c1829', border: '1px solid #1e293b', borderRadius: 10, padding: '10px 14px' }}>
-                <summary style={{ cursor: 'pointer', color: '#94a3b8', fontSize: 13, fontWeight: 'bold' }}>
+              <details style={{ marginBottom: 14, background: theme.panelDarkBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 10, padding: '10px 14px' }}>
+                <summary style={{ cursor: 'pointer', color: theme.textSecondary, fontSize: 13, fontWeight: 'bold' }}>
                   📊 Combination Details — {optimizerResult.totalCombinationsEvaluated?.toLocaleString()} total checked, {optimizerResult.viableCandidates?.toLocaleString()} viable{optimizerResult.computeTimeMs ? ` (${(optimizerResult.computeTimeMs / 1000).toFixed(1)}s)` : ''}
                 </summary>
-                <div style={{ marginTop: 10, fontSize: 12, color: '#cbd5e1' }}>
-                  <div style={{ marginBottom: 8, color: '#e2e8f0', fontWeight: 'bold' }}>Combinations checked per family:</div>
+                <div style={{ marginTop: 10, fontSize: 12, color: theme.textMid }}>
+                  <div style={{ marginBottom: 8, color: theme.textPrimary, fontWeight: 'bold' }}>Combinations checked per family:</div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 6 }}>
                     {Object.entries(optimizerResult.familyCounts || {}).map(([family, count]) => (
-                      <div key={family} style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 6, padding: '6px 10px', fontSize: 11 }}>
-                        <strong style={{ color: '#38bdf8' }}>{family}</strong>: {count.toLocaleString()} combinations
+                      <div key={family} style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 6, padding: '6px 10px', fontSize: 11 }}>
+                        <strong style={{ color: theme.cyan }}>{family}</strong>: {count.toLocaleString()} combinations
                       </div>
                     ))}
                   </div>
                   {optimizerResult.bestPerFamily && optimizerResult.bestPerFamily.length > 0 ? (
                     <div style={{ marginTop: 12 }}>
-                      <div style={{ color: '#e2e8f0', fontWeight: 'bold', marginBottom: 6 }}>Best strategy found per family (best overall score):</div>
+                      <div style={{ color: theme.textPrimary, fontWeight: 'bold', marginBottom: 6 }}>Best strategy found per family (best overall score):</div>
                       {optimizerResult.bestPerFamily.map((bpf) => (
-                        <div key={bpf.family} style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, padding: '8px 10px', marginBottom: 6, fontSize: 11, color: '#cbd5e1' }}>
-                          <strong style={{ color: '#38bdf8' }}>{bpf.family}</strong> ({bpf.legCount} legs): {bpf.legs.map(l => `${l.side} ${l.strike} ${l.type}`).join(' / ')} — Max Profit: <span style={{ color: '#22c55e' }}>Rs. {bpf.maxProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>, Max Loss: <span style={{ color: '#f87171' }}>Rs. {Math.abs(bpf.maxLoss).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>, Zone: {bpf.profitZoneWidth} pts
+                        <div key={bpf.family} style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 8, padding: '8px 10px', marginBottom: 6, fontSize: 11, color: theme.textMid }}>
+                          <strong style={{ color: theme.cyan }}>{bpf.family}</strong> ({bpf.legCount} legs): {bpf.legs.map(l => `${l.side} ${l.strike} ${l.type}`).join(' / ')} — Max Profit: <span style={{ color: theme.green }}>Rs. {bpf.maxProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>, Max Loss: <span style={{ color: theme.red }}>Rs. {Math.abs(bpf.maxLoss).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>, Zone: {bpf.profitZoneWidth} pts
                         </div>
                       ))}
                     </div>
@@ -1490,19 +1557,19 @@ export default function OptionsStrategy() {
               </details>
               {(optimizerResult.profiles || []).map((profile) => (
                 <details key={profile.key} style={{ marginBottom: 12 }} open={profile.key === 'balanced'}>
-                  <summary style={{ cursor: 'pointer', color: '#f8fafc', fontSize: 15, fontWeight: 'bold', padding: '8px 0' }}>
-                    {profile.label} <span style={{ fontWeight: 'normal', color: '#94a3b8', fontSize: 12 }}>— {profile.description}</span>
+                  <summary style={{ cursor: 'pointer', color: theme.textHeading, fontSize: 15, fontWeight: 'bold', padding: '8px 0' }}>
+                    {profile.label} <span style={{ fontWeight: 'normal', color: theme.textSecondary, fontSize: 12 }}>— {profile.description}</span>
                   </summary>
                   <div style={{ display: 'grid', gap: 10, marginTop: 8 }}>
                     {(profile.strategies || []).map((strat) => (
-                      <div key={`${profile.key}-${strat.rank}`} style={{ background: '#08111f', border: '1px solid #1e293b', borderRadius: 12, padding: 14 }}>
+                      <div key={`${profile.key}-${strat.rank}`} style={{ background: theme.panelDarkBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 12, padding: 14 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
                           <div>
-                            <span style={{ color: '#38bdf8', fontWeight: 'bold', fontSize: 14 }}>#{strat.rank} {strat.family}</span>
-                            <span style={{ color: '#94a3b8', fontSize: 12, marginLeft: 8 }}>{strat.legCount} legs · {strat.totalLots} lots</span>
+                            <span style={{ color: theme.cyan, fontWeight: 'bold', fontSize: 14 }}>#{strat.rank} {strat.family}</span>
+                            <span style={{ color: theme.textSecondary, fontSize: 12, marginLeft: 8 }}>{strat.legCount} legs · {strat.totalLots} lots</span>
                           </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                            <span style={{ background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.4)', borderRadius: 8, padding: '4px 12px', color: '#22c55e', fontWeight: 'bold', fontSize: 15 }}>Profit: Rs. {strat.maxProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
+                            <span style={{ background: `${theme.green}26`, border: `1px solid ${theme.green}66`, borderRadius: 8, padding: '4px 12px', color: theme.green, fontWeight: 'bold', fontSize: 15 }}>Profit: Rs. {strat.maxProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
                             <button
                               onClick={() => loadOptimizedStrategy(strat)}
                               style={{ ...styles.applyButton, padding: '6px 14px', fontSize: 12 }}
@@ -1521,9 +1588,9 @@ export default function OptionsStrategy() {
                                 borderRadius: 999,
                                 fontSize: 11,
                                 fontWeight: 'bold',
-                                background: leg.side === 'SELL' ? 'rgba(239,68,68,0.15)' : 'rgba(34,197,94,0.15)',
-                                color: leg.side === 'SELL' ? '#fca5a5' : '#86efac',
-                                border: `1px solid ${leg.side === 'SELL' ? 'rgba(239,68,68,0.3)' : 'rgba(34,197,94,0.3)'}`,
+                                background: leg.side === 'SELL' ? `${theme.red}26` : `${theme.green}26`,
+                                color: leg.side === 'SELL' ? theme.red : theme.green,
+                                border: `1px solid ${leg.side === 'SELL' ? theme.red : theme.green}66`,
                               }}
                             >
                               {leg.side} {leg.quantity > 1 ? `${leg.quantity}x ` : ''}{leg.strike} {leg.type} @ {leg.premium.toFixed(2)}
@@ -1531,12 +1598,12 @@ export default function OptionsStrategy() {
                           ))}
                         </div>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8, fontSize: 12 }}>
-                          <div style={{ color: '#94a3b8' }}>Credit: <span style={{ color: '#22c55e', fontWeight: 'bold' }}>Rs. {strat.entryCredit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span></div>
-                          <div style={{ color: '#94a3b8' }}>Max Profit: <span style={{ color: '#22c55e', fontWeight: 'bold' }}>Rs. {strat.maxProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span> <span style={{ fontSize: 10, color: '#64748b' }}>(1 lot × {optimizerResult.lotSize || 65} qty)</span></div>
-                          <div style={{ color: '#94a3b8' }}>Max Loss: <span style={{ color: '#f87171', fontWeight: 'bold' }}>Rs. {Math.abs(strat.maxLoss).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span> <span style={{ fontSize: 10, color: '#64748b' }}>(1 lot × {optimizerResult.lotSize || 65} qty)</span></div>
-                          <div style={{ color: '#94a3b8' }}>Profit Zone: <span style={{ color: '#facc15', fontWeight: 'bold' }}>{strat.profitZoneWidth} pts</span></div>
-                          <div style={{ color: '#94a3b8' }}>Risk:Reward: <span style={{ color: '#60a5fa', fontWeight: 'bold' }}>{strat.rewardToRisk ? `1:${strat.rewardToRisk}` : '—'}</span></div>
-                          <div style={{ color: '#94a3b8' }}>Break-evens: <span style={{ color: '#e2e8f0' }}>{strat.breakEvens.length ? strat.breakEvens.join(', ') : '—'}</span></div>
+                          <div style={{ color: theme.textSecondary }}>Credit: <span style={{ color: theme.green, fontWeight: 'bold' }}>Rs. {strat.entryCredit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span></div>
+                          <div style={{ color: theme.textSecondary }}>Max Profit: <span style={{ color: theme.green, fontWeight: 'bold' }}>Rs. {strat.maxProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span> <span style={{ fontSize: 10, color: theme.textMuted }}>(1 lot × {optimizerResult.lotSize || 65} qty)</span></div>
+                          <div style={{ color: theme.textSecondary }}>Max Loss: <span style={{ color: theme.red, fontWeight: 'bold' }}>Rs. {Math.abs(strat.maxLoss).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span> <span style={{ fontSize: 10, color: theme.textMuted }}>(1 lot × {optimizerResult.lotSize || 65} qty)</span></div>
+                          <div style={{ color: theme.textSecondary }}>Profit Zone: <span style={{ color: theme.yellow, fontWeight: 'bold' }}>{strat.profitZoneWidth} pts</span></div>
+                          <div style={{ color: theme.textSecondary }}>Risk:Reward: <span style={{ color: theme.blue, fontWeight: 'bold' }}>{strat.rewardToRisk ? `1:${strat.rewardToRisk}` : '—'}</span></div>
+                          <div style={{ color: theme.textSecondary }}>Break-evens: <span style={{ color: theme.textPrimary }}>{strat.breakEvens.length ? strat.breakEvens.join(', ') : '—'}</span></div>
                         </div>
                       </div>
                     ))}
@@ -1554,20 +1621,20 @@ export default function OptionsStrategy() {
           </p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10, marginTop: 12, marginBottom: 12, alignItems: 'end' }}>
             <div>
-              <label style={{ color: '#94a3b8', fontSize: 12, display: 'block', marginBottom: 4 }}>Sell Expiry (near-term)</label>
+              <label style={{ color: theme.textSecondary, fontSize: 12, display: 'block', marginBottom: 4 }}>Sell Expiry (near-term)</label>
               <select value={calSellExpiry} onChange={(e) => setCalSellExpiry(e.target.value)} style={styles.input}>
                 <option value="">Select expiry to sell</option>
-                {expiryOptions.map((exp) => (
-                  <option key={`sell-${exp.value}`} value={exp.value}>{exp.label}</option>
+                {expiryOptions.map((d) => (
+                  <option key={`sell-${d}`} value={d}>{formatExpiryDisplay(d)}</option>
                 ))}
               </select>
             </div>
             <div>
-              <label style={{ color: '#94a3b8', fontSize: 12, display: 'block', marginBottom: 4 }}>Buy Expiry (far-term)</label>
+              <label style={{ color: theme.textSecondary, fontSize: 12, display: 'block', marginBottom: 4 }}>Buy Expiry (far-term)</label>
               <select value={calBuyExpiry} onChange={(e) => setCalBuyExpiry(e.target.value)} style={styles.input}>
                 <option value="">Select expiry to buy</option>
-                {expiryOptions.map((exp) => (
-                  <option key={`buy-${exp.value}`} value={exp.value}>{exp.label}</option>
+                {expiryOptions.map((d) => (
+                  <option key={`buy-${d}`} value={d}>{formatExpiryDisplay(d)}</option>
                 ))}
               </select>
             </div>
@@ -1583,8 +1650,8 @@ export default function OptionsStrategy() {
                 <div style={styles.loaderInner} />
               </div>
               <div style={styles.loaderText}>
-                <div style={{ fontSize: 15, fontWeight: 'bold', color: '#e2e8f0', marginBottom: 6 }}>Analyzing calendar spreads…</div>
-                <div style={{ fontSize: 12, color: '#94a3b8' }}>Comparing premiums across expiries and evaluating Calendar CE, Calendar PE, Double Calendar and Calendar Condor structures</div>
+                <div style={{ fontSize: 15, fontWeight: 'bold', color: theme.textPrimary, marginBottom: 6 }}>Analyzing calendar spreads…</div>
+                <div style={{ fontSize: 12, color: theme.textSecondary }}>Comparing premiums across expiries and evaluating Calendar CE, Calendar PE, Double Calendar and Calendar Condor structures</div>
               </div>
               <style>{`
                 @keyframes optimizerSpin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -1592,28 +1659,28 @@ export default function OptionsStrategy() {
               `}</style>
             </div>
           ) : null}
-          {calendarError ? <div style={{ ...styles.saveMessage, borderColor: 'rgba(248,113,113,0.3)', color: '#fecaca' }}>{calendarError}</div> : null}
+          {calendarError ? <div style={{ ...styles.saveMessage, borderColor: `${theme.red}50`, color: theme.red, background: `${theme.red}15` }}>{calendarError}</div> : null}
           {calendarResult && !calendarLoading ? (
             <div>
-              <div style={{ color: '#22c55e', fontSize: 13, marginBottom: 12 }}>
+              <div style={{ color: theme.green, fontSize: 13, marginBottom: 12 }}>
                 ✓ Evaluated {calendarResult.totalCombinationsEvaluated?.toLocaleString()} calendar combinations · {calendarResult.viableCandidates?.toLocaleString()} viable · Sell {calendarResult.sellExpiryDays}d / Buy {calendarResult.buyExpiryDays}d
               </div>
               {(calendarResult.profiles || []).map((profile) => (
                 <details key={profile.key} style={{ marginBottom: 12 }} open={profile.key === 'cal-balanced'}>
-                  <summary style={{ cursor: 'pointer', color: '#f8fafc', fontSize: 15, fontWeight: 'bold', padding: '8px 0' }}>
-                    {profile.label} <span style={{ fontWeight: 'normal', color: '#94a3b8', fontSize: 12 }}>— {profile.description}</span>
+                  <summary style={{ cursor: 'pointer', color: theme.textHeading, fontSize: 15, fontWeight: 'bold', padding: '8px 0' }}>
+                    {profile.label} <span style={{ fontWeight: 'normal', color: theme.textSecondary, fontSize: 12 }}>— {profile.description}</span>
                   </summary>
                   <div style={{ display: 'grid', gap: 10, marginTop: 8 }}>
                     {(profile.strategies || []).map((strat) => (
-                      <div key={`${profile.key}-${strat.rank}`} style={{ background: '#08111f', border: '1px solid #1e293b', borderRadius: 12, padding: 14 }}>
+                      <div key={`${profile.key}-${strat.rank}`} style={{ background: theme.panelDarkBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 12, padding: 14 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
                           <div>
-                            <span style={{ color: '#a78bfa', fontWeight: 'bold', fontSize: 14 }}>#{strat.rank} {strat.family}</span>
-                            <span style={{ color: '#94a3b8', fontSize: 12, marginLeft: 8 }}>{strat.legCount} legs · {strat.totalLots} lots</span>
+                            <span style={{ color: theme.purple, fontWeight: 'bold', fontSize: 14 }}>#{strat.rank} {strat.family}</span>
+                            <span style={{ color: theme.textSecondary, fontSize: 12, marginLeft: 8 }}>{strat.legCount} legs · {strat.totalLots} lots</span>
                           </div>
                           <button
                             onClick={() => loadOptimizedStrategy(strat)}
-                            style={{ ...styles.applyButton, padding: '6px 14px', fontSize: 12, background: '#7c3aed' }}
+                            style={{ ...styles.applyButton, padding: '6px 14px', fontSize: 12, background: theme.purple, color: theme.textHeading }}
                           >
                             Use This Strategy
                           </button>
@@ -1628,9 +1695,9 @@ export default function OptionsStrategy() {
                                 borderRadius: 999,
                                 fontSize: 11,
                                 fontWeight: 'bold',
-                                background: leg.side === 'SELL' ? 'rgba(239,68,68,0.15)' : 'rgba(34,197,94,0.15)',
-                                color: leg.side === 'SELL' ? '#fca5a5' : '#86efac',
-                                border: `1px solid ${leg.side === 'SELL' ? 'rgba(239,68,68,0.3)' : 'rgba(34,197,94,0.3)'}`,
+                                background: leg.side === 'SELL' ? `${theme.red}26` : `${theme.green}26`,
+                                color: leg.side === 'SELL' ? theme.red : theme.green,
+                                border: `1px solid ${leg.side === 'SELL' ? theme.red : theme.green}66`,
                               }}
                             >
                               {leg.side} {leg.quantity > 1 ? `${leg.quantity}x ` : ''}{leg.strike} {leg.type} @ {leg.premium.toFixed(2)}
@@ -1638,12 +1705,12 @@ export default function OptionsStrategy() {
                           ))}
                         </div>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8, fontSize: 12 }}>
-                          <div style={{ color: '#94a3b8' }}>Credit: <span style={{ color: '#22c55e', fontWeight: 'bold' }}>Rs. {strat.entryCredit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span></div>
-                          <div style={{ color: '#94a3b8' }}>Max Profit: <span style={{ color: '#22c55e', fontWeight: 'bold' }}>Rs. {strat.maxProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span></div>
-                          <div style={{ color: '#94a3b8' }}>Max Loss: <span style={{ color: '#f87171', fontWeight: 'bold' }}>Rs. {Math.abs(strat.maxLoss).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span></div>
-                          <div style={{ color: '#94a3b8' }}>Profit Zone: <span style={{ color: '#facc15', fontWeight: 'bold' }}>{strat.profitZoneWidth} pts</span></div>
-                          <div style={{ color: '#94a3b8' }}>Risk:Reward: <span style={{ color: '#60a5fa', fontWeight: 'bold' }}>{strat.rewardToRisk ? `1:${strat.rewardToRisk}` : '—'}</span></div>
-                          <div style={{ color: '#94a3b8' }}>Break-evens: <span style={{ color: '#e2e8f0' }}>{strat.breakEvens.length ? strat.breakEvens.join(', ') : '—'}</span></div>
+                          <div style={{ color: theme.textSecondary }}>Credit: <span style={{ color: theme.green, fontWeight: 'bold' }}>Rs. {strat.entryCredit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span></div>
+                          <div style={{ color: theme.textSecondary }}>Max Profit: <span style={{ color: theme.green, fontWeight: 'bold' }}>Rs. {strat.maxProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span></div>
+                          <div style={{ color: theme.textSecondary }}>Max Loss: <span style={{ color: theme.red, fontWeight: 'bold' }}>Rs. {Math.abs(strat.maxLoss).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span></div>
+                          <div style={{ color: theme.textSecondary }}>Profit Zone: <span style={{ color: theme.yellow, fontWeight: 'bold' }}>{strat.profitZoneWidth} pts</span></div>
+                          <div style={{ color: theme.textSecondary }}>Risk:Reward: <span style={{ color: theme.blue, fontWeight: 'bold' }}>{strat.rewardToRisk ? `1:${strat.rewardToRisk}` : '—'}</span></div>
+                          <div style={{ color: theme.textSecondary }}>Break-evens: <span style={{ color: theme.textPrimary }}>{strat.breakEvens.length ? strat.breakEvens.join(', ') : '—'}</span></div>
                         </div>
                       </div>
                     ))}
@@ -1657,47 +1724,47 @@ export default function OptionsStrategy() {
         <div style={styles.card}>
           <h2 style={styles.sectionTitle}>Strategy Dashboard</h2>
           <div style={styles.dashboardGrid}>
-            <div style={{ ...styles.dashboardBox, borderColor: '#166534' }}>
+            <div style={{ ...styles.dashboardBox, borderColor: theme.greenDim }}>
               <div style={styles.dashboardLabel}>Max Profit</div>
-              <div style={{ ...styles.dashboardValue, color: '#22c55e' }}>{metrics.isUnlimitedProfit ? '∞ Unlimited' : `Rs. ${metrics.maxProfit.toFixed(2)}`}</div>
+              <div style={{ ...styles.dashboardValue, color: theme.green }}>{metrics.isUnlimitedProfit ? '∞ Unlimited' : `Rs. ${metrics.maxProfit.toFixed(2)}`}</div>
             </div>
-            <div style={{ ...styles.dashboardBox, borderColor: '#7f1d1d' }}>
+            <div style={{ ...styles.dashboardBox, borderColor: theme.redDim }}>
               <div style={styles.dashboardLabel}>Max Loss</div>
-              <div style={{ ...styles.dashboardValue, color: '#f87171' }}>{metrics.isUnlimitedLoss ? '∞ Unlimited' : `Rs. ${Math.abs(metrics.maxLoss).toFixed(2)}`}</div>
+              <div style={{ ...styles.dashboardValue, color: theme.red }}>{metrics.isUnlimitedLoss ? '∞ Unlimited' : `Rs. ${Math.abs(metrics.maxLoss).toFixed(2)}`}</div>
             </div>
-            <div style={{ ...styles.dashboardBox, borderColor: '#1e40af' }}>
+            <div style={{ ...styles.dashboardBox, borderColor: theme.blue }}>
               <div style={styles.dashboardLabel}>Breakeven(s)</div>
               <div style={styles.dashboardValue}>
                 {metrics.breakEvens.length ? metrics.breakEvens.map((v) => `Rs. ${v}`).join(', ') : '—'}
               </div>
             </div>
-            <div style={{ ...styles.dashboardBox, borderColor: '#166534' }}>
+            <div style={{ ...styles.dashboardBox, borderColor: theme.greenDim }}>
               <div style={styles.dashboardLabel}>Profit Range</div>
-              <div style={{ ...styles.dashboardValue, color: '#22c55e', fontSize: '16px' }}>
+              <div style={{ ...styles.dashboardValue, color: theme.green, fontSize: '16px' }}>
                 {metrics.profitRange}
               </div>
             </div>
-            <div style={{ ...styles.dashboardBox, borderColor: '#7f1d1d' }}>
+            <div style={{ ...styles.dashboardBox, borderColor: theme.redDim }}>
               <div style={styles.dashboardLabel}>Loss Range</div>
-              <div style={{ ...styles.dashboardValue, color: '#f87171', fontSize: '16px' }}>
+              <div style={{ ...styles.dashboardValue, color: theme.red, fontSize: '16px' }}>
                 {metrics.lossRange}
               </div>
             </div>
-            <div style={{ ...styles.dashboardBox, borderColor: '#334155' }}>
+            <div style={{ ...styles.dashboardBox, borderColor: theme.cardBorderHover }}>
               <div style={styles.dashboardLabel}>Risk:Reward</div>
               <div style={styles.dashboardValue}>
                 {metrics.riskRewardRatio ? `1:${metrics.riskRewardRatio.toFixed(2)}` : '—'}
               </div>
             </div>
-            <div style={{ ...styles.dashboardBox, borderColor: '#0f766e' }}>
+            <div style={{ ...styles.dashboardBox, borderColor: theme.emerald }}>
               <div style={styles.dashboardLabel}>Best Profit Near</div>
-              <div style={{ ...styles.dashboardValue, color: '#5eead4' }}>
+              <div style={{ ...styles.dashboardValue, color: theme.emerald }}>
                 {metrics.maxProfitSpot ?? '—'}
               </div>
             </div>
-            <div style={{ ...styles.dashboardBox, borderColor: '#854d0e' }}>
+            <div style={{ ...styles.dashboardBox, borderColor: theme.yellow }}>
               <div style={styles.dashboardLabel}>Profit Zone Width</div>
-              <div style={{ ...styles.dashboardValue, color: '#facc15' }}>
+              <div style={{ ...styles.dashboardValue, color: theme.yellow }}>
                 {metrics.profitRangeWidth > 0 ? `${metrics.profitRangeWidth} pts` : 'None'}
               </div>
             </div>
@@ -1712,6 +1779,8 @@ export default function OptionsStrategy() {
             maxY={metrics.maxY}
             currentSpot={spotPrice}
             breakEvens={metrics.breakEvens}
+            styles={styles}
+            theme={theme}
           />
           <div style={styles.breakEvenRow}>
             <strong>Break-even zones:</strong> {metrics.breakEvens.length > 0 ? metrics.breakEvens.map((value) => `Rs. ${value}`).join(', ') : 'No zero-crossing found in sampled range'}
@@ -1719,21 +1788,21 @@ export default function OptionsStrategy() {
           <div style={styles.chartInfoGrid}>
             <div style={styles.chartInfoCard}>
               <div style={styles.chartInfoLabel}>Max profit</div>
-              <div style={{ ...styles.chartInfoValue, color: '#22c55e' }}>
+              <div style={{ ...styles.chartInfoValue, color: theme.green }}>
                 {metrics.isUnlimitedProfit ? '∞ Unlimited' : formatCurrency(metrics.maxProfit)}
               </div>
-              <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>near spot {metrics.maxProfitSpot ?? '—'}</div>
+              <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 2 }}>near spot {metrics.maxProfitSpot ?? '—'}</div>
             </div>
             <div style={styles.chartInfoCard}>
               <div style={styles.chartInfoLabel}>Max loss</div>
-              <div style={{ ...styles.chartInfoValue, color: '#f87171' }}>
+              <div style={{ ...styles.chartInfoValue, color: theme.red }}>
                 {metrics.isUnlimitedLoss ? '∞ Unlimited' : formatCurrency(Math.abs(metrics.maxLoss))}
               </div>
-              <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>near spot {metrics.maxLossSpot ?? '—'}</div>
+              <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 2 }}>near spot {metrics.maxLossSpot ?? '—'}</div>
             </div>
             <div style={styles.chartInfoCard}>
               <div style={styles.chartInfoLabel}>Payoff at current spot</div>
-              <div style={{ ...styles.chartInfoValue, color: metrics.currentPayoff >= 0 ? '#22c55e' : '#f87171' }}>
+              <div style={{ ...styles.chartInfoValue, color: metrics.currentPayoff >= 0 ? theme.green : theme.red }}>
                 {formatCurrency(metrics.currentPayoff)}
               </div>
             </div>
@@ -1756,6 +1825,7 @@ export default function OptionsStrategy() {
             lossZones={metrics.lossZones}
             currentSpot={spotPrice}
             breakEvens={metrics.breakEvens}
+            styles={styles}
           />
           <p style={styles.explanation}>
             Green stretches show expiry spots where the structure stays profitable. Red stretches show where risk is active, and the blue marker is the live Nifty level.
@@ -1767,11 +1837,12 @@ export default function OptionsStrategy() {
             <h2 style={styles.sectionTitle}>Risk Snapshot</h2>
             <MetricBarChart
               items={[
-                { label: 'Max Profit', value: metrics.maxProfit, color: '#22c55e' },
-                { label: 'Max Loss', value: Math.abs(metrics.maxLoss), color: '#f87171' },
-                { label: 'Current Payoff', value: metrics.currentPayoff, color: metrics.currentPayoff >= 0 ? '#22c55e' : '#f97316' },
-                { label: 'Live MTM', value: metrics.markToMarket, color: metrics.markToMarket >= 0 ? '#38bdf8' : '#f43f5e' },
+                { label: 'Max Profit', value: metrics.maxProfit, color: theme.green },
+                { label: 'Max Loss', value: Math.abs(metrics.maxLoss), color: theme.red },
+                { label: 'Current Payoff', value: metrics.currentPayoff, color: metrics.currentPayoff >= 0 ? theme.green : theme.orange },
+                { label: 'Live MTM', value: metrics.markToMarket, color: metrics.markToMarket >= 0 ? theme.cyan : theme.red },
               ]}
+              styles={styles}
             />
           </div>
 
@@ -1779,11 +1850,12 @@ export default function OptionsStrategy() {
             <h2 style={styles.sectionTitle}>Premium Snapshot</h2>
             <MetricBarChart
               items={[
-                { label: 'Entry Net', value: metrics.entryNetPremium, color: '#c084fc' },
-                { label: 'Premium Left', value: metrics.premiumRemaining, color: '#f59e0b' },
-                { label: 'Captured', value: metrics.capturedPremium, color: '#22c55e' },
-                { label: 'Close Value', value: metrics.liveCloseValue, color: '#60a5fa' },
+                { label: 'Entry Net', value: metrics.entryNetPremium, color: theme.purple },
+                { label: 'Premium Left', value: metrics.premiumRemaining, color: theme.yellow },
+                { label: 'Captured', value: metrics.capturedPremium, color: theme.green },
+                { label: 'Close Value', value: metrics.liveCloseValue, color: theme.blue },
               ]}
+              styles={styles}
             />
           </div>
         </div>
@@ -1807,7 +1879,7 @@ export default function OptionsStrategy() {
   );
 }
 
-const styles = {
+const darkStyles = {
   container: {
     minHeight: '100vh',
     background: 'linear-gradient(180deg, #020617, #0f172a)',
@@ -2072,7 +2144,7 @@ const styles = {
     marginTop: '10px',
     background: 'rgba(8, 145, 178, 0.12)',
     border: '1px solid rgba(34, 211, 238, 0.28)',
-    color: '#cffafe',
+    color: '#bfdbfe',
     borderRadius: '10px',
     padding: '10px 12px',
     fontSize: '13px',

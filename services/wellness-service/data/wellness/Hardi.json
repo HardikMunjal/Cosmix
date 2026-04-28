@@ -1,47 +1,7 @@
 {
-  "entries": [
-    {
-      "date": "2026-04-05",
-      "runningMinutes": 28,
-      "runningDistanceKm": 3.3,
-      "walkingMinutes": 0,
-      "walkingDistanceKm": 0,
-      "exerciseMinutes": 0,
-      "badmintonMinutes": 60,
-      "footballMinutes": 0,
-      "cricketMinutes": 0,
-      "swimmingMinutes": 0,
-      "meditationMinutes": 0,
-      "whiskyPegs": 0,
-      "fastFoodServings": 0,
-      "sugarServings": 0,
-      "headacheLevel": 0,
-      "sleepHours": 0,
-      "moodScore": 7,
-      "notes": "",
-      "trackingStartedAt": null
-    }
-  ],
-  "form": {
-    "date": "2026-04-05",
-    "runningMinutes": 28,
-    "runningDistanceKm": 3.3,
-    "walkingMinutes": 0,
-    "walkingDistanceKm": 0,
-    "exerciseMinutes": 0,
-    "badmintonMinutes": 60,
-    "footballMinutes": 0,
-    "cricketMinutes": 0,
-    "swimmingMinutes": 0,
-    "meditationMinutes": 0,
-    "whiskyPegs": 0,
-    "fastFoodServings": 0,
-    "sugarServings": 0,
-    "headacheLevel": 0,
-    "sleepHours": 0,
-    "moodScore": 7,
-    "notes": "",
-    "trackingStartedAt": null
-  },
-  "updatedAt": "2026-04-05T16:52:52.235Z"
+  "entries": [],
+  "form": null,
+  "plan": null,
+  "dailyScores": [],
+  "updatedAt": "2026-04-19T00:00:00.000Z"
 }

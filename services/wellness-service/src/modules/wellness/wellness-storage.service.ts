@@ -5,6 +5,7 @@ import {
   computeEntryScores,
   DEFAULT_SCORING_RULES,
   normalizeScoringRules,
+  roundScore,
   WellnessScoringRules,
 } from './wellness-scoring';
 
@@ -33,6 +34,7 @@ type WellnessPlanRecord = {
   updatedAt?: string;
   endedAt?: string | null;
   status: WellnessPlanStatus;
+  finalTotals?: { physical: number; mental: number; total: number; days: number } | null;
 };
 
 type WellnessPlan = WellnessPlanRecord | null;
@@ -57,10 +59,20 @@ type WellnessPlanTransaction = {
   sortOrder: number;
 };
 
+type WellnessDerivedCache = {
+  computedOnDate: string;
+  planId: string | null;
+  rulesHash: string;
+  entriesHash: string;
+  dailyScores: WellnessDailyScore[];
+  planTransactions: WellnessPlanTransaction[];
+};
+
 type WellnessStoredState = {
   entries: WellnessEntry[];
   form: Record<string, any> | null;
   plans: WellnessPlanRecord[];
+  derived?: WellnessDerivedCache | null;
   updatedAt?: string;
 };
 
@@ -95,6 +107,14 @@ function buildPlanId(startDate: string, startedAt: string) {
   const safeDate = String(startDate || '').slice(0, 10).replace(/[^0-9]/g, '');
   const safeTs = String(startedAt || '').replace(/[^0-9]/g, '').slice(-12);
   return `plan-${safeDate || '00000000'}-${safeTs || Date.now()}`;
+}
+
+function safeJsonHash(input: unknown) {
+  try {
+    return JSON.stringify(input);
+  } catch {
+    return String(input || '');
+  }
 }
 
 @Injectable()
@@ -160,6 +180,7 @@ export class WellnessStorageService {
       entries: [],
       form: null,
       plans: [],
+      derived: null,
       updatedAt: this.nowIso(),
     };
   }
@@ -192,6 +213,7 @@ export class WellnessStorageService {
       updatedAt: plan.updatedAt || startedAt,
       endedAt: plan.endedAt || null,
       status: plan.status === 'inactive' ? 'inactive' : 'active',
+      finalTotals: (plan as any).finalTotals || null,
     };
   }
 
@@ -217,7 +239,61 @@ export class WellnessStorageService {
       entries,
       form: data?.form || null,
       plans,
+      derived: data?.derived || null,
       updatedAt: data?.updatedAt || this.nowIso(),
+    };
+  }
+
+  private buildEntriesHash(entries: WellnessEntry[]) {
+    return entries
+      .map((entry) => `${this.normalizeDate(entry.date)}:${entry.updatedAt || entry.createdAt || ''}:${entry.planId || ''}:${entry.status || 'active'}`)
+      .join('|');
+  }
+
+  private deriveScoresWithCache(store: WellnessStoredState, scoringRules: WellnessScoringRules) {
+    const plan = this.activePlanForStore(store);
+    const entries = this.activeEntriesForPlan(store.entries, plan?.id || null);
+    const rulesHash = safeJsonHash(scoringRules);
+    const entriesHash = this.buildEntriesHash(entries);
+    const computedOnDate = this.normalizeDate();
+    const cache = store.derived || null;
+    const cacheValid = Boolean(
+      cache
+      && cache.computedOnDate === computedOnDate
+      && cache.planId === (plan?.id || null)
+      && cache.rulesHash === rulesHash
+      && cache.entriesHash === entriesHash,
+    );
+
+    if (cacheValid) {
+      return {
+        store,
+        entries,
+        plan,
+        dailyScores: cache?.dailyScores || [],
+        planTransactions: cache?.planTransactions || [],
+      };
+    }
+
+    const dailyScores = this.buildDailyScores(entries, plan, scoringRules);
+    const planTransactions = this.buildPlanTransactions(entries, plan, scoringRules, dailyScores);
+
+    return {
+      store: {
+        ...store,
+        derived: {
+          computedOnDate,
+          planId: plan?.id || null,
+          rulesHash,
+          entriesHash,
+          dailyScores,
+          planTransactions,
+        },
+      },
+      entries,
+      plan,
+      dailyScores,
+      planTransactions,
     };
   }
 
@@ -260,8 +336,37 @@ export class WellnessStorageService {
     }
   }
 
-  async saveScoringRules(rules: Partial<WellnessScoringRules>) {
-    const normalizedRules = normalizeScoringRules(rules);
+  private async rebuildDerivedForAllUsers(scoringRules: WellnessScoringRules) {
+    if (this.hasDatabase()) {
+      const pool = await this.ensureSchema();
+      if (!pool) return;
+      const result = await pool.query('SELECT user_id, payload FROM wellness_user_state');
+      for (const row of result.rows || []) {
+        const normalizedStore = this.normalizeStore(row.payload);
+        const derived = this.deriveScoresWithCache({ ...normalizedStore, derived: null }, scoringRules);
+        await this.persistStoreToDatabase(row.user_id, derived.store);
+      }
+      return;
+    }
+
+    const files = fs.readdirSync(DATA_DIR).filter((name) => name.endsWith('.json') && name !== 'scoring-rules.json');
+    for (const fileName of files) {
+      try {
+        const filePath = path.join(DATA_DIR, fileName);
+        const raw = fs.readFileSync(filePath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        const normalizedStore = this.normalizeStore(parsed);
+        const derived = this.deriveScoresWithCache({ ...normalizedStore, derived: null }, scoringRules);
+        fs.writeFileSync(filePath, JSON.stringify(this.normalizeStore(derived.store), null, 2), 'utf-8');
+      } catch {
+        // Skip malformed local files during backfill.
+      }
+    }
+  }
+
+  async saveScoringRules(payload: Partial<WellnessScoringRules> & { options?: { rebuildAllUsers?: boolean } }) {
+    const rulesInput = payload?.activities || payload?.dailyPenalty || payload?.sleep || payload?.targets ? payload : {};
+    const normalizedRules = normalizeScoringRules(rulesInput);
 
     if (this.hasDatabase()) {
       const pool = await this.ensureSchema();
@@ -273,10 +378,16 @@ export class WellnessStorageService {
              updated_at = NOW()`,
         ['scoring_rules', JSON.stringify(normalizedRules)],
       );
+      if (payload?.options?.rebuildAllUsers) {
+        await this.rebuildDerivedForAllUsers(normalizedRules);
+      }
       return normalizedRules;
     }
 
     fs.writeFileSync(SCORING_RULES_FILE, JSON.stringify(normalizedRules, null, 2), 'utf-8');
+    if (payload?.options?.rebuildAllUsers) {
+      await this.rebuildDerivedForAllUsers(normalizedRules);
+    }
     return normalizedRules;
   }
 
@@ -331,6 +442,9 @@ export class WellnessStorageService {
     if (Number(entry.runningDistanceKm || 0) > 0 || Number(entry.runningMinutes || 0) > 0) {
       pushTransaction('Running', `${formatMetric(entry.runningDistanceKm)} km, ${formatMetric(entry.runningMinutes)} mins`);
     }
+    if (Number(entry.cyclingDistanceKm || 0) > 0 || Number(entry.cyclingMinutes || 0) > 0) {
+      pushTransaction('Cycling', `${formatMetric(entry.cyclingDistanceKm)} km, ${formatMetric(entry.cyclingMinutes)} mins`);
+    }
     if (Number(entry.walkingDistanceKm || 0) > 0 || Number(entry.walkingMinutes || 0) > 0) {
       pushTransaction('Walking', `${formatMetric(entry.walkingDistanceKm)} km, ${formatMetric(entry.walkingMinutes)} mins`);
     }
@@ -364,10 +478,6 @@ export class WellnessStorageService {
     if (Number(entry.sugarServings || 0) > 0) {
       pushTransaction('Sugar', `${formatMetric(entry.sugarServings)} count`);
     }
-    if (Number(entry.sleepHours || 0) > 0) {
-      pushTransaction('Sleep', `${formatMetric(entry.sleepHours)} hrs`);
-    }
-
     return transactions;
   }
 
@@ -386,13 +496,32 @@ export class WellnessStorageService {
       const date = cursor.toISOString().slice(0, 10);
       const entry = entryMap.get(date);
       const score = scoreMap.get(date);
+      const computed = computeEntryScores(entry || { date }, scoringRules);
+
       transactions.push({
         date,
         activityName: 'Daily drain',
         source: 'daily-drain',
-        detail: `Physical -${formatMetric(scoringRules.dailyPenalty.physical)}, Mental -${formatMetric(scoringRules.dailyPenalty.mental)}. Day total ${formatMetric(score?.totalScore || 0)}. Cumulative ${formatMetric(score?.cumulativeTotalScore || 0)}`,
+        detail: `Physical -${formatMetric(scoringRules.dailyPenalty.physical)}, Mental -${formatMetric(scoringRules.dailyPenalty.mental)} → Day ${formatMetric(score?.totalScore || 0)} pts · Cumulative ${formatMetric(score?.cumulativeTotalScore || 0)} pts`,
         sortOrder: 0,
       });
+
+      // Sleep score row — always shown (uses default hours when no explicit entry)
+      const hasExplicitSleep = Number(entry?.sleepHours || 0) > 0;
+      const sleepHours = hasExplicitSleep
+        ? Number(entry!.sleepHours)
+        : Number(scoringRules.sleep.defaultHours || 0);
+      const sleepTotal = roundScore(computed.sleepPhysical + computed.sleepMental);
+      if (sleepHours > 0 || sleepTotal !== 0) {
+        transactions.push({
+          date,
+          activityName: 'Sleep',
+          source: 'activity',
+          detail: `${formatMetric(sleepHours)} hrs${hasExplicitSleep ? '' : ' (default)'} → +${formatMetric(sleepTotal)} pts (Physical +${formatMetric(computed.sleepPhysical)}, Mental +${formatMetric(computed.sleepMental)})`,
+          sortOrder: 1,
+        });
+      }
+
       if (entry) {
         transactions.push(...this.buildActivityTransactions(entry));
       }
@@ -408,16 +537,14 @@ export class WellnessStorageService {
   }
 
   private buildPublicState(store: WellnessStoredState, scoringRules: WellnessScoringRules): WellnessState {
-    const plan = this.activePlanForStore(store);
-    const entries = this.activeEntriesForPlan(store.entries, plan?.id || null);
-    const dailyScores = this.buildDailyScores(entries, plan, scoringRules);
+    const derived = this.deriveScoresWithCache(store, scoringRules);
     return {
-      entries,
-      form: this.resolveForm(entries, store.form),
-      plan,
-      plans: this.sortPlans(store.plans),
-      dailyScores,
-      planTransactions: this.buildPlanTransactions(entries, plan, scoringRules, dailyScores),
+      entries: derived.entries,
+      form: this.resolveForm(derived.entries, derived.store.form),
+      plan: derived.plan,
+      plans: this.sortPlans(derived.store.plans),
+      dailyScores: derived.dailyScores,
+      planTransactions: derived.planTransactions,
     };
   }
 
@@ -573,8 +700,9 @@ export class WellnessStorageService {
   async load(userId: string): Promise<WellnessState> {
     const [store, scoringRules] = await Promise.all([this.loadStore(userId), this.loadScoringRules()]);
     const normalizedStore = this.normalizeStore(store);
-    await this.persistStore(userId, normalizedStore);
-    return this.buildPublicState(normalizedStore, scoringRules);
+    const derived = this.deriveScoresWithCache(normalizedStore, scoringRules);
+    await this.persistStore(userId, derived.store);
+    return this.buildPublicState(derived.store, scoringRules);
   }
 
   async save(userId: string, payload: { entries: WellnessEntry[]; form: Record<string, any> | null; plan?: WellnessPlan | null }): Promise<WellnessState> {
@@ -599,8 +727,9 @@ export class WellnessStorageService {
       updatedAt: this.nowIso(),
     });
 
-    await this.persistStore(userId, nextStore);
-    return this.buildPublicState(nextStore, scoringRules);
+    const derived = this.deriveScoresWithCache(nextStore, scoringRules);
+    await this.persistStore(userId, derived.store);
+    return this.buildPublicState(derived.store, scoringRules);
   }
 
   async clear(userId: string): Promise<WellnessState> {
@@ -644,8 +773,9 @@ export class WellnessStorageService {
       updatedAt: now,
     });
 
-    await this.persistStore(userId, nextStore);
-    return this.buildPublicState(nextStore, scoringRules);
+    const derived = this.deriveScoresWithCache(nextStore, scoringRules);
+    await this.persistStore(userId, derived.store);
+    return this.buildPublicState(derived.store, scoringRules);
   }
 
   async renamePlan(userId: string, name: string) {
@@ -666,8 +796,9 @@ export class WellnessStorageService {
       updatedAt: this.nowIso(),
     });
 
-    await this.persistStore(userId, nextStore);
-    return this.buildPublicState(nextStore, scoringRules);
+    const derived = this.deriveScoresWithCache(nextStore, scoringRules);
+    await this.persistStore(userId, derived.store);
+    return this.buildPublicState(derived.store, scoringRules);
   }
 
   async resetCurrentPlan(userId: string) {
@@ -694,7 +825,87 @@ export class WellnessStorageService {
       updatedAt: now,
     });
 
+    const derived = this.deriveScoresWithCache(nextStore, scoringRules);
+    await this.persistStore(userId, derived.store);
+    return this.buildPublicState(derived.store, scoringRules);
+  }
+
+  async closePlan(userId: string) {
+    const [store, scoringRules] = await Promise.all([this.loadStore(userId), this.loadScoringRules()]);
+    const normalizedStore = this.normalizeStore(store);
+    const activePlan = this.activePlanForStore(normalizedStore);
+    if (!activePlan) {
+      return this.buildPublicState(normalizedStore, scoringRules);
+    }
+
+    const now = this.nowIso();
+    const planEntries = this.activeEntriesForPlan(normalizedStore.entries, activePlan.id);
+    const dailyScores = this.buildDailyScores(planEntries, activePlan, scoringRules);
+    const lastScore = dailyScores[0] || null; // sorted descending — [0] is most recent
+    const finalTotals = {
+      physical: Number((lastScore?.cumulativePhysicalScore || 0).toFixed(2)),
+      mental: Number((lastScore?.cumulativeMentalScore || 0).toFixed(2)),
+      total: Number((lastScore?.cumulativeTotalScore || 0).toFixed(2)),
+      days: dailyScores.length,
+    };
+
+    const nextStore = this.normalizeStore({
+      ...normalizedStore,
+      plans: normalizedStore.plans.map((plan) => (
+        plan.id === activePlan.id
+          ? { ...plan, status: 'inactive' as WellnessPlanStatus, endedAt: now, updatedAt: now, finalTotals }
+          : plan
+      )),
+      updatedAt: now,
+    });
+
     await this.persistStore(userId, nextStore);
     return this.buildPublicState(nextStore, scoringRules);
+  }
+
+  async loadPlanDetails(userId: string, planId: string) {
+    const [store, scoringRules] = await Promise.all([this.loadStore(userId), this.loadScoringRules()]);
+    const normalizedStore = this.normalizeStore(store);
+    const plan = normalizedStore.plans.find((p) => p.id === planId) || null;
+    if (!plan) return null;
+
+    const planEntries = this.sortEntries(normalizedStore.entries.filter((e) => e.planId === planId));
+    const endDate = plan.endedAt ? this.normalizeDate(plan.endedAt) : this.normalizeDate();
+    const start = new Date(`${plan.startDate}T00:00:00Z`);
+    const end = new Date(`${endDate}T00:00:00Z`);
+
+    if (Number.isNaN(start.getTime()) || start > end) {
+      return { plan, dailyScores: [], planTransactions: [] };
+    }
+
+    const entryMap = new Map(planEntries.map((entry) => [this.normalizeDate(entry.date), entry]));
+    const ascending: WellnessDailyScore[] = [];
+    let cumPhysical = 0;
+    let cumMental = 0;
+    let cumTotal = 0;
+
+    for (const cursor = new Date(start); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+      const date = cursor.toISOString().slice(0, 10);
+      const entry = entryMap.get(date) || { date };
+      const result = computeEntryScores(entry, scoringRules);
+      cumPhysical = Number((cumPhysical + result.physicalScore).toFixed(2));
+      cumMental = Number((cumMental + result.mentalScore).toFixed(2));
+      cumTotal = Number((cumTotal + result.totalScore).toFixed(2));
+      ascending.push({
+        date,
+        source: entryMap.has(date) ? 'entry' : 'auto',
+        physicalScore: result.physicalScore,
+        mentalScore: result.mentalScore,
+        totalScore: result.totalScore,
+        cumulativePhysicalScore: cumPhysical,
+        cumulativeMentalScore: cumMental,
+        cumulativeTotalScore: cumTotal,
+        workoutMinutes: result.workoutMinutes,
+      });
+    }
+
+    const descending = ascending.slice().sort((a, b) => b.date.localeCompare(a.date));
+    const planTransactions = this.buildPlanTransactions(planEntries, plan, scoringRules, descending);
+    return { plan, dailyScores: ascending, planTransactions };
   }
 }

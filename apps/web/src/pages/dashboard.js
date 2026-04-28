@@ -6,12 +6,16 @@ import { buildProfileInsights, buildStrategySummary, buildWellnessSummary, forma
 
 const tradingDeskModules = [
   { icon: 'NT', title: 'Nifty Tracker', desc: 'Track saved strategies, live payoff movement, and execution snapshots.', path: '/nifty-strategies', accent: '#22c55e' },
+  { icon: '📋', title: 'Strategy History', desc: 'View all past strategies with start/end dates, duration, and realized P/L.', path: '/strategy-history', accent: '#a78bfa' },
   { icon: 'SB', title: 'Strategy Builder', desc: 'Build option structures and save them back into your running book.', path: '/options-strategy', accent: '#2563eb' },
   { icon: 'OP', title: 'Option Pricing', desc: 'Compare expected option prices across models and expiries.', path: '/expected-option-prices', accent: '#e11d48' },
 ];
 
 const workspaceModules = [
   { icon: 'AN', title: 'Analytics', desc: 'Review portfolio behavior, exits, and strategy-level performance.', path: '/analytics', accent: '#f59e0b' },
+  { icon: '📊', title: 'Strategy Analytics', desc: 'Comprehensive day-wise and strategy-wise P/L dashboard.', path: '/analytics-enhanced', accent: '#06b6d4' },
+  { icon: '🏃', title: 'Running Dashboard', desc: 'Keep running and wellness analytics separate from strategy tracking.', path: '/running-analytics', accent: '#10b981' },
+  { icon: '🏆', title: 'Leaderboard', desc: 'Compete with friends on running distance, speed, and fitness achievements.', path: '/leaderboard', accent: '#f59e0b' },
   { icon: 'WL', title: 'Wellness', desc: 'Track recovery, fitness score, and routine consistency.', path: '/wellness', accent: '#10b981' },
   { icon: 'CH', title: 'Chat', desc: 'Message live users directly and keep the conversation flow simple.', path: '/chat', accent: '#8b5cf6' },
   { icon: 'MD', title: 'Media', desc: 'Manage your saved screenshots, images, and visual references.', path: '/media', accent: '#fb923c' },

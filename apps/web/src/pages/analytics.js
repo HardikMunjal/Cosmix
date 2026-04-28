@@ -277,12 +277,16 @@ export default function Analytics() {
             {niftyIdx && (
               <div style={s.chartCard} className="analytics-card">
                 <div style={s.chartTitle}>Nifty 50 — Last 20 Sessions</div>
+                <div style={s.chartMeta}>{niftyIdx.sourceLabel || niftyIdx.source || 'Unknown source'}</div>
+                {niftyIdx.warning ? <div style={s.chartWarning}>{niftyIdx.warning}</div> : null}
                 <MiniLineChart data={niftyIdx.history} color={theme.green} theme={theme} label={`${niftyIdx.price.toLocaleString('en-IN')} (${niftyIdx.changePercent >= 0 ? '+' : ''}${niftyIdx.changePercent}%)`} />
               </div>
             )}
             {bnIdx && (
               <div style={s.chartCard} className="analytics-card">
                 <div style={s.chartTitle}>Bank Nifty — Last 20 Sessions</div>
+                <div style={s.chartMeta}>{bnIdx.sourceLabel || bnIdx.source || 'Unknown source'}</div>
+                {bnIdx.warning ? <div style={s.chartWarning}>{bnIdx.warning}</div> : null}
                 <MiniLineChart data={bnIdx.history} color={theme.purple} theme={theme} label={`${bnIdx.price.toLocaleString('en-IN')} (${bnIdx.changePercent >= 0 ? '+' : ''}${bnIdx.changePercent}%)`} />
               </div>
             )}
@@ -427,6 +431,16 @@ const darkS = {
     fontWeight: '700',
     color: '#f8fafc',
     marginBottom: '12px',
+  },
+  chartMeta: {
+    fontSize: '11px',
+    color: '#94a3b8',
+    marginBottom: '6px',
+  },
+  chartWarning: {
+    fontSize: '11px',
+    color: '#f59e0b',
+    marginBottom: '10px',
   },
   emptyChart: {
     color: '#64748b',

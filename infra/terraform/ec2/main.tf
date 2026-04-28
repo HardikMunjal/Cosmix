@@ -13,17 +13,6 @@ provider "aws" {
   region = var.aws_region
 }
 
-data "aws_iam_policy_document" "ec2_assume_role" {
-  statement {
-    actions = ["sts:AssumeRole"]
-
-    principals {
-      type        = "Service"
-      identifiers = ["ec2.amazonaws.com"]
-    }
-  }
-}
-
 locals {
   effective_key_pair_name = var.create_key_pair ? aws_key_pair.cosmix[0].key_name : var.key_pair_name
 }
@@ -133,29 +122,9 @@ resource "aws_key_pair" "cosmix" {
   }
 }
 
-resource "aws_iam_role" "cosmix_ssm" {
-  name               = "cosmix-ec2-ssm-role"
-  assume_role_policy = data.aws_iam_policy_document.ec2_assume_role.json
-
-  tags = {
-    Name = "cosmix-ec2-ssm-role"
-  }
-}
-
-resource "aws_iam_role_policy_attachment" "cosmix_ssm_core" {
-  role       = aws_iam_role.cosmix_ssm.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
-
-resource "aws_iam_instance_profile" "cosmix_ssm" {
-  name = "cosmix-ec2-ssm-profile"
-  role = aws_iam_role.cosmix_ssm.name
-}
-
 resource "aws_instance" "cosmix" {
   ami                         = data.aws_ami.amazon_linux_2023.id
   instance_type               = var.instance_type
-  iam_instance_profile        = aws_iam_instance_profile.cosmix_ssm.name
   subnet_id                   = aws_subnet.public.id
   vpc_security_group_ids      = [aws_security_group.cosmix.id]
   key_name                    = local.effective_key_pair_name

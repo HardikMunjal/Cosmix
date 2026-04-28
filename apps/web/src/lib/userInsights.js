@@ -293,3 +293,209 @@ export function buildProfileInsights({ strategies = [], userId }) {
     completedGoals: wellnessSummary.completedGoals,
   };
 }
+
+// ───── Trading Analytics ─────
+export function buildDayWiseProfitLoss(strategies = []) {
+  const dailyMap = new Map();
+  
+  strategies.forEach((strategy) => {
+    (strategy?.transactions || []).forEach((transaction) => {
+      const amount = Number(transaction?.amount || 0);
+      const timestamp = String(transaction?.timestamp || '');
+      if (!timestamp || !Number.isFinite(amount) || amount === 0) return;
+      const day = timestamp.slice(0, 10);
+      dailyMap.set(day, (dailyMap.get(day) || 0) + amount);
+    });
+  });
+
+  return [...dailyMap.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([day, amount]) => ({
+      date: day,
+      label: day.slice(5),
+      profit: amount >= 0 ? amount : 0,
+      loss: amount < 0 ? Math.abs(amount) : 0,
+      net: amount,
+    }));
+}
+
+export function computeDailyStats(strategies = []) {
+  const dayWise = buildDayWiseProfitLoss(strategies);
+  if (!dayWise.length) {
+    return {
+      bestDay: null,
+      worstDay: null,
+      lastWeekPL: 0,
+      totalPL: 0,
+    };
+  }
+
+  const bestDay = [...dayWise].sort((a, b) => b.net - a.net)[0];
+  const worstDay = [...dayWise].sort((a, b) => a.net - b.net)[0];
+  
+  const weekAgo = new Date();
+  weekAgo.setDate(weekAgo.getDate() - 7);
+  const weekAgoStr = weekAgo.toISOString().slice(0, 10);
+  
+  const lastWeekPL = dayWise
+    .filter((d) => d.date >= weekAgoStr)
+    .reduce((sum, d) => sum + d.net, 0);
+  
+  const totalPL = dayWise.reduce((sum, d) => sum + d.net, 0);
+
+  return {
+    bestDay,
+    worstDay,
+    lastWeekPL: Number(lastWeekPL.toFixed(2)),
+    totalPL: Number(totalPL.toFixed(2)),
+  };
+}
+
+export function computeStrategyStats(strategies = []) {
+  const stratStats = strategies
+    .filter((s) => s && s.name)
+    .map((strategy) => {
+      const realized = (strategy?.closedLegs || []).reduce((sum, leg) => sum + (Number(leg.pnl) || 0), 0);
+      const unrealized = (strategy?.legs || []).reduce((sum, leg) => {
+        const qty = Math.max(1, parseInt(leg.quantity || 1, 10) || 1);
+        const entry = Number(leg.premium) || 0;
+        const current = Number(leg.marketPremium ?? leg.premium) || 0;
+        const lotSize = Number(strategy.lotSize) || 65;
+        return sum + (leg.side === 'SELL' ? (entry - current) * qty * lotSize : (current - entry) * qty * lotSize);
+      }, 0);
+      const totalCost = calculateTransactionCost(strategy.transactions || []);
+      const totalPnl = realized + unrealized - totalCost;
+
+      return {
+        name: String(strategy.name || 'Unnamed').slice(0, 20),
+        realized: Number(realized.toFixed(2)),
+        unrealized: Number(unrealized.toFixed(2)),
+        totalCost,
+        totalPnl: Number(totalPnl.toFixed(2)),
+        status: strategy.status || 'active',
+      };
+    });
+
+  const mostProfit = [...stratStats].sort((a, b) => b.totalPnl - a.totalPnl)[0];
+  const mostLoss = [...stratStats].sort((a, b) => a.totalPnl - b.totalPnl)[0];
+
+  return {
+    all: stratStats,
+    mostProfit,
+    mostLoss,
+  };
+}
+
+// ───── Running/Wellness Analytics ─────
+export function computeRunningStats(userId) {
+  const entries = readWellnessEntries(userId);
+  const runs = entries
+    .filter((e) => Number(e.runningDistanceKm || 0) > 0 && Number(e.runningMinutes || 0) > 0)
+    .map((e) => ({
+      date: e.date,
+      distance: Number(e.runningDistanceKm),
+      minutes: Number(e.runningMinutes),
+      speed: Number(e.runningDistanceKm) / (Number(e.runningMinutes) / 60),
+      pace: Number(e.runningMinutes) / Number(e.runningDistanceKm),
+    }));
+
+  if (!runs.length) {
+    return {
+      totalRuns: 0,
+      totalDistance: 0,
+      averageSpeed: 0,
+      averagePace: null,
+      fastestSpeed: null,
+      fastestSpeedRun: null,
+      slowestSpeed: null,
+      slowestSpeedRun: null,
+      longestDistance: null,
+      longestDistanceRun: null,
+      fastestDistanceRun: null,
+      topDistances: [],
+      topSpeeds: [],
+    };
+  }
+
+  const qualifiedSpeed = runs.filter((r) => r.distance >= 2);
+  const totalDistance = runs.reduce((sum, r) => sum + r.distance, 0);
+  const avgSpeed = totalDistance / runs.reduce((sum, r) => sum + r.minutes, 0) * 60;
+
+  const fastestSpeedRun = qualifiedSpeed.length ? qualifiedSpeed.sort((a, b) => b.speed - a.speed)[0] : null;
+  const slowestSpeedRun = qualifiedSpeed.length ? qualifiedSpeed.sort((a, b) => a.speed - b.speed)[0] : null;
+  const longestDistanceRun = runs.sort((a, b) => b.distance - a.distance)[0];
+  const fastestDistanceRun = runs.sort((a, b) => b.speed - a.speed)[0];
+
+  return {
+    totalRuns: runs.length,
+    totalDistance: Number(totalDistance.toFixed(1)),
+    averageSpeed: Number(avgSpeed.toFixed(2)),
+    averagePace: runs.length > 0 ? Number((runs.reduce((sum, r) => sum + r.pace, 0) / runs.length).toFixed(2)) : null,
+    fastestSpeed: fastestSpeedRun ? Number(fastestSpeedRun.speed.toFixed(2)) : null,
+    fastestSpeedRun: fastestSpeedRun ? {
+      date: fastestSpeedRun.date,
+      distance: Number(fastestSpeedRun.distance.toFixed(1)),
+      time: `${Math.floor(fastestSpeedRun.minutes)}m`,
+      speed: Number(fastestSpeedRun.speed.toFixed(2)),
+    } : null,
+    slowestSpeed: slowestSpeedRun ? Number(slowestSpeedRun.speed.toFixed(2)) : null,
+    slowestSpeedRun: slowestSpeedRun ? {
+      date: slowestSpeedRun.date,
+      distance: Number(slowestSpeedRun.distance.toFixed(1)),
+      time: `${Math.floor(slowestSpeedRun.minutes)}m`,
+      speed: Number(slowestSpeedRun.speed.toFixed(2)),
+    } : null,
+    longestDistance: longestDistanceRun ? Number(longestDistanceRun.distance.toFixed(1)) : null,
+    longestDistanceRun: longestDistanceRun ? {
+      date: longestDistanceRun.date,
+      distance: Number(longestDistanceRun.distance.toFixed(1)),
+      time: `${Math.floor(longestDistanceRun.minutes)}m`,
+      speed: Number(longestDistanceRun.speed.toFixed(2)),
+    } : null,
+    fastestDistanceRun: fastestDistanceRun ? {
+      date: fastestDistanceRun.date,
+      distance: Number(fastestDistanceRun.distance.toFixed(1)),
+      time: `${Math.floor(fastestDistanceRun.minutes)}m`,
+      speed: Number(fastestDistanceRun.speed.toFixed(2)),
+    } : null,
+    topDistances: runs
+      .sort((a, b) => b.distance - a.distance)
+      .slice(0, 5)
+      .map((r) => ({
+        date: r.date,
+        distance: Number(r.distance.toFixed(1)),
+        time: `${Math.floor(r.minutes)}m`,
+        speed: Number(r.speed.toFixed(2)),
+      })),
+    topSpeeds: qualifiedSpeed
+      .sort((a, b) => b.speed - a.speed)
+      .slice(0, 5)
+      .map((r) => ({
+        date: r.date,
+        distance: Number(r.distance.toFixed(1)),
+        time: `${Math.floor(r.minutes)}m`,
+        speed: Number(r.speed.toFixed(2)),
+      })),
+  };
+}
+
+export function computeWellnessStats(userId) {
+  const entries = readWellnessEntries(userId);
+  const scoredEntries = entries
+    .map((entry) => ({
+      date: entry.date,
+      score: computeEntryScores(entry).totalScore,
+      physical: computeEntryScores(entry).physicalScore,
+      mental: computeEntryScores(entry).mentalScore,
+    }))
+    .sort((a, b) => b.score - a.score);
+
+  const highestScore = scoredEntries[0] || null;
+  
+  return {
+    entries,
+    scoredEntries,
+    highestScore,
+    topScores: scoredEntries.slice(0, 5),
+  };
+}
