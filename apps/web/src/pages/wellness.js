@@ -808,7 +808,7 @@ export default function WellnessPage() {
               <div style={s.scoreNum}>{formatMetric(visibleTodayScores.totalScore)}</div>
             </div>
           </div>
-        </div>
+        </div>}
 
         {/* weekly summary bar */}
         {planInfo && <div style={s.weeklySummary} className="score-strip">
@@ -832,7 +832,7 @@ export default function WellnessPage() {
             <span style={s.weeklyLabel}>Avg pace</span>
             <span style={s.weeklyVal}>{stats.averagePace == null ? '--' : `${formatMetric(stats.averagePace)}`}<span style={{ opacity: 0.5, fontWeight: 400, fontSize: 11 }}>{stats.averagePace != null ? ' min/km' : ''}</span></span>
           </div>
-        </div>
+        </div>}
 
         {/* main grid */}
         <div style={s.mainGrid} className="main-grid">
