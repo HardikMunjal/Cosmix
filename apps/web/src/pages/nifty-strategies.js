@@ -31,6 +31,52 @@ function normalizePremium(value) {
   return Number((Number(value) || 0).toFixed(2));
 }
 
+function formatExpiryDisplay(unixSeconds) {
+  const expiry = Number(unixSeconds);
+  if (!Number.isFinite(expiry) || expiry <= 0) return 'No expiry';
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+  const ms = expiry * 1000 + IST_OFFSET_MS;
+  const date = new Date(ms);
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${days[date.getUTCDay()]} ${date.getUTCDate()} ${months[date.getUTCMonth()]}`;
+}
+
+function resolveLegExpiry(leg, strategy = null) {
+  const fromLeg = Number(leg?.expiry);
+  if (Number.isFinite(fromLeg) && fromLeg > 0) return fromLeg;
+  const fromStrategy = Number(strategy?.selectedExpiry);
+  if (Number.isFinite(fromStrategy) && fromStrategy > 0) return fromStrategy;
+  return null;
+}
+
+function getStrategyExpiries(strategy = null) {
+  const expiries = new Set();
+  (strategy?.legs || []).forEach((leg) => {
+    const expiry = resolveLegExpiry(leg, strategy);
+    if (expiry) expiries.add(expiry);
+  });
+  if (!expiries.size) {
+    const selected = Number(strategy?.selectedExpiry);
+    if (Number.isFinite(selected) && selected > 0) expiries.add(selected);
+  }
+  return Array.from(expiries).sort((left, right) => left - right);
+}
+
+function resolveChainPremium(chainMap = { CE: {}, PE: {} }, leg = {}) {
+  const optionType = leg.optionType;
+  const strike = Number(leg.strike);
+  const expiry = Number(leg.expiry);
+  if (!optionType || !Number.isFinite(strike)) return null;
+  if (Number.isFinite(expiry) && expiry > 0) {
+    const byExpiry = chainMap?.byExpiry || {};
+    const direct = byExpiry?.[expiry]?.[optionType]?.[strike];
+    if (direct != null) return direct;
+  }
+  const fallback = chainMap?.[optionType]?.[strike];
+  return fallback == null ? null : fallback;
+}
+
 function getPricingSourceLabel(value = 'blend') {
   const labels = {
     blend: 'Formula Blend',
@@ -69,13 +115,14 @@ function resolveExpectedOptionPrice(contract, pricingSource = 'blend') {
 }
 
 function buildExpectedPricingUrl(strategy) {
+  const expiries = getStrategyExpiries(strategy);
   const params = new URLSearchParams({
     symbol: 'NIFTY',
     strikeGap: '50',
     strikeLevels: '40',
-    expiryCount: '1',
+    expiryCount: String(Math.max(1, expiries.length || 1)),
   });
-  if (strategy?.selectedExpiry) params.set('expiries', String(strategy.selectedExpiry));
+  if (expiries.length) params.set('expiries', expiries.join(','));
   if (strategy?.rateInput) params.set('rate', String(strategy.rateInput));
   if (strategy?.ivInput) params.set('iv', String(strategy.ivInput));
   return `/api/options-expected-price?${params.toString()}`;
@@ -104,16 +151,17 @@ function buildWhatIfSpots(spot) {
 }
 
 function buildWhatIfPricingUrl(strategy, referenceSpot) {
+  const expiries = getStrategyExpiries(strategy);
   const params = new URLSearchParams({
     symbol: 'NIFTY',
     strikeGap: '50',
     strikeLevels: '1',
-    expiryCount: '1',
+    expiryCount: String(Math.max(1, expiries.length || 1)),
     spot: String(Number(referenceSpot || 0).toFixed(2)),
     scenarioSpots: buildWhatIfSpots(referenceSpot).join(','),
     strikes: [...new Set((strategy?.legs || []).map((leg) => Number(leg.strike)).filter((strike) => Number.isFinite(strike) && strike > 0))].join(','),
   });
-  if (strategy?.selectedExpiry) params.set('expiries', String(strategy.selectedExpiry));
+  if (expiries.length) params.set('expiries', expiries.join(','));
   if (strategy?.rateInput) params.set('rate', String(strategy.rateInput));
   if (strategy?.ivInput) params.set('iv', String(strategy.ivInput));
   return `/api/options-expected-price?${params.toString()}`;
@@ -196,7 +244,7 @@ function legPayoffAtExpiry(leg, spot) {
 
 function syncLegsWithChain(legs = [], chainMap = { CE: {}, PE: {} }) {
   return legs.map((leg) => {
-    const latest = chainMap?.[leg.optionType]?.[Number(leg.strike)];
+    const latest = resolveChainPremium(chainMap, leg);
     return {
       ...leg,
       quantity: Math.max(1, parseInt(leg.quantity || 1, 10) || 1),
@@ -208,19 +256,21 @@ function syncLegsWithChain(legs = [], chainMap = { CE: {}, PE: {} }) {
 function computeProjectedScenarioValues(legs = [], lotSize = 1, scenarioContracts = [], pricingSource = 'blend', baseSpot = 0) {
   return scenarioContracts.map((scenario) => {
     const contractLookup = new Map(
-      (scenario.contracts || []).map((contract) => [`${contract.type}:${Number(contract.strike)}`, resolveExpectedOptionPrice(contract, pricingSource)]),
+      (scenario.contracts || []).map((contract) => [`${Number(contract.expiryUnix) || 0}:${contract.type}:${Number(contract.strike)}`, resolveExpectedOptionPrice(contract, pricingSource)]),
     );
 
     const projectedCloseValue = legs.reduce((sum, leg) => {
       const quantity = Math.max(1, parseInt(leg.quantity || 1, 10) || 1);
-      const projectedPremium = contractLookup.get(`${leg.optionType}:${Number(leg.strike)}`) ?? normalizePremium(leg.marketPremium ?? leg.premium);
+      const expiryKey = Number(leg.expiry) || 0;
+      const projectedPremium = contractLookup.get(`${expiryKey}:${leg.optionType}:${Number(leg.strike)}`) ?? normalizePremium(leg.marketPremium ?? leg.premium);
       return sum + ((leg.side === 'BUY' ? projectedPremium : -projectedPremium) * quantity);
     }, 0) * lotSize;
 
     const projectedMtm = legs.reduce((sum, leg) => {
       const quantity = Math.max(1, parseInt(leg.quantity || 1, 10) || 1);
       const entryPremium = Number(leg.premium) || 0;
-      const projectedPremium = contractLookup.get(`${leg.optionType}:${Number(leg.strike)}`) ?? normalizePremium(leg.marketPremium ?? leg.premium);
+      const expiryKey = Number(leg.expiry) || 0;
+      const projectedPremium = contractLookup.get(`${expiryKey}:${leg.optionType}:${Number(leg.strike)}`) ?? normalizePremium(leg.marketPremium ?? leg.premium);
       return sum + ((leg.side === 'SELL' ? entryPremium - projectedPremium : projectedPremium - entryPremium) * quantity);
     }, 0) * lotSize;
 
@@ -486,7 +536,7 @@ function analyzeStrategy(strategy, metrics, t) {
     const legMtm = leg.side === 'SELL'
       ? (entry - current) * qty * lotSize
       : (current - entry) * qty * lotSize;
-    return { ...leg, entry, current, legMtm, qty };
+    return { ...leg, entry, current, legMtm, qty, expiryLabel: formatExpiryDisplay(resolveLegExpiry(leg, strategy)) };
   });
 
   // ── Deep Risk Metrics ──
@@ -1164,7 +1214,7 @@ function StrategyAnalyzer({ strategy, metrics, styles, theme: t }) {
           {analysis.legBreakdown.map((leg) => (
             <div key={`lb-${leg.id}-${leg.strike}`} style={styles.legBreakdownRow} className="nifty-leg-breakdown">
               <span style={styles.legBreakdownLabel}>
-                {leg.side} {leg.qty}L {leg.optionType} {leg.strike}
+                {leg.side} {leg.qty}L {leg.optionType} {leg.strike} ({leg.expiryLabel})
               </span>
               <span style={styles.legBreakdownPrices} className="nifty-leg-prices">
                 Entry: {leg.entry.toFixed(2)} → Now: {leg.current.toFixed(2)}
@@ -1184,7 +1234,7 @@ function StrategyAnalyzer({ strategy, metrics, styles, theme: t }) {
             {strategy.closedLegs.map((cl, idx) => (
               <div key={`cl-${idx}`} style={styles.legBreakdownRow} className="nifty-leg-breakdown">
                 <span style={styles.legBreakdownLabel}>
-                  {cl.side} {cl.quantity}L {cl.optionType} {cl.strike}
+                  {cl.side} {cl.quantity}L {cl.optionType} {cl.strike} ({formatExpiryDisplay(cl.expiry)})
                 </span>
                 <span style={styles.legBreakdownPrices} className="nifty-leg-prices">
                   {cl.entryPremium.toFixed(2)} → {cl.exitPremium.toFixed(2)}
@@ -1230,7 +1280,7 @@ function StrategyAnalyzer({ strategy, metrics, styles, theme: t }) {
 
 function formatLeg(leg) {
   const qty = Math.max(1, parseInt(leg.quantity || 1, 10) || 1);
-  return `${leg.side} ${qty} lot${qty > 1 ? 's' : ''} ${leg.optionType} ${leg.strike} @ ${Number(leg.premium || 0).toFixed(2)}`;
+  return `${leg.side} ${qty} lot${qty > 1 ? 's' : ''} ${leg.optionType} ${leg.strike} ${formatExpiryDisplay(leg.expiry)} @ ${Number(leg.premium || 0).toFixed(2)}`;
 }
 
 function formatChartDate(value) {
@@ -1276,7 +1326,7 @@ export default function NiftyStrategiesPage() {
       const valuationSource = currentValuationSource || 'live';
       let currentSpot = Number(strategy.currentSpot || strategy.whatIfBaseSpot || strategy.savedAtSpot || 0);
       let liveSource = strategy.liveSource || 'saved';
-      let chainMap = { CE: {}, PE: {} };
+      let chainMap = { CE: {}, PE: {}, byExpiry: {} };
       let whatIfScenarios = Array.isArray(strategy.whatIfScenarios) ? strategy.whatIfScenarios : [];
       let whatIfBaseSpot = buildWhatIfBaseSpot(currentSpot);
 
@@ -1291,7 +1341,14 @@ export default function NiftyStrategiesPage() {
         liveSource = `${getPricingSourceLabel(valuationSource)} / current valuation`;
         (formulaData.contracts || []).forEach((contract) => {
           if (!chainMap[contract.type]) return;
-          chainMap[contract.type][Number(contract.strike)] = resolveExpectedOptionPrice(contract, valuationSource);
+          const premium = resolveExpectedOptionPrice(contract, valuationSource);
+          const strike = Number(contract.strike);
+          const expiry = Number(contract.expiryUnix) || 0;
+          chainMap[contract.type][strike] = premium;
+          if (expiry > 0) {
+            if (!chainMap.byExpiry[expiry]) chainMap.byExpiry[expiry] = { CE: {}, PE: {} };
+            chainMap.byExpiry[expiry][contract.type][strike] = premium;
+          }
         });
 
         whatIfBaseSpot = buildWhatIfBaseSpot(currentSpot);
@@ -1313,21 +1370,29 @@ export default function NiftyStrategiesPage() {
         }
       } catch (_) {
         try {
-          const query = strategy?.selectedExpiry ? `?symbol=NIFTY&expiry=${strategy.selectedExpiry}` : '?symbol=NIFTY';
+          const firstExpiry = getStrategyExpiries(strategy)[0];
+          const query = firstExpiry ? `?symbol=NIFTY&expiry=${firstExpiry}` : '?symbol=NIFTY';
           const response = await fetch(`/api/options-chain${query}`);
           const data = await response.json();
           currentSpot = Number(data.spot || fallbackNiftySpot || currentSpot || 0);
           liveSource = data.source || liveSource;
           (data.strikes || []).forEach((item) => {
             if (!chainMap[item.type]) return;
-            chainMap[item.type][Number(item.strike)] = normalizePremium(item.price || item.lastPrice || item.bid || item.ask || 0);
+            const strike = Number(item.strike);
+            const premium = normalizePremium(item.price || item.lastPrice || item.bid || item.ask || 0);
+            chainMap[item.type][strike] = premium;
+            const expiry = Number(firstExpiry) || 0;
+            if (expiry > 0) {
+              if (!chainMap.byExpiry[expiry]) chainMap.byExpiry[expiry] = { CE: {}, PE: {} };
+              chainMap.byExpiry[expiry][item.type][strike] = premium;
+            }
           });
         } catch (_) {
           if (fallbackNiftySpot > 0) {
             currentSpot = fallbackNiftySpot;
             liveSource = 'market-indices fallback';
           }
-          chainMap = { CE: {}, PE: {} };
+          chainMap = { CE: {}, PE: {}, byExpiry: {} };
         }
       }
 
@@ -1486,13 +1551,14 @@ export default function NiftyStrategiesPage() {
       : (exit - entry) * qty * lotSize;
     const closedLeg = {
       legId: leg.id, side: leg.side, optionType: leg.optionType, strike: leg.strike,
+      expiry: resolveLegExpiry(leg, strategy),
       quantity: qty, entryPremium: entry, exitPremium: exit, pnl,
       closedAt: eventTimestamp,
     };
     const remainingLegs = strategy.legs.filter((l) => l.id !== legId);
     const transaction = {
       type: 'CLOSE',
-      description: `Closed ${leg.side} ${qty}L ${leg.optionType} ${leg.strike} @ ${exit.toFixed(2)} → P/L ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}`,
+      description: `Closed ${leg.side} ${qty}L ${leg.optionType} ${leg.strike} ${formatExpiryDisplay(resolveLegExpiry(leg, strategy))} @ ${exit.toFixed(2)} → P/L ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}`,
       amount: pnl,
       timestamp: eventTimestamp,
     };
@@ -2182,7 +2248,7 @@ export default function NiftyStrategiesPage() {
                             <div style={styles.legCardHeader} className="nifty-leg-row">
                               <div style={styles.legRowMain}>
                                 <span style={{ ...styles.legSideBadge, background: leg.side === 'BUY' ? `${theme.blue}20` : `${theme.red}20`, color: leg.side === 'BUY' ? theme.blue : theme.red }}>{leg.side}</span>
-                                <span style={styles.legCardStrike}>{qty}L {leg.optionType} {leg.strike}</span>
+                                <span style={styles.legCardStrike}>{qty}L {leg.optionType} {leg.strike} ({formatExpiryDisplay(resolveLegExpiry(leg, strategy))})</span>
                                 <span style={styles.legCardPrices}>Entry {entryP.toFixed(2)} · Live {currentP.toFixed(2)}</span>
                               </div>
                               <div style={styles.legRowActions}>
@@ -2208,7 +2274,7 @@ export default function NiftyStrategiesPage() {
                               strategy={strategy}
                               styles={styles}
                               theme={theme}
-                              title={`Edit ${leg.optionType} ${leg.strike}`}
+                              title={`Edit ${leg.optionType} ${leg.strike} (${formatExpiryDisplay(resolveLegExpiry(leg, strategy))})`}
                               onFieldChange={(patch) => updateLegEditor(strategy, patch)}
                               onSave={() => saveLegEditor(strategy.id)}
                               onCancel={() => setLegEditor(null)}
@@ -2216,7 +2282,7 @@ export default function NiftyStrategiesPage() {
                           )}
                           {isClosing && (
                             <div style={styles.closeLegForm} className="nifty-close-form">
-                              <div style={styles.closeLegFormHeader}>{closeAction} — {leg.optionType} {leg.strike}</div>
+                              <div style={styles.closeLegFormHeader}>{closeAction} — {leg.optionType} {leg.strike} ({formatExpiryDisplay(resolveLegExpiry(leg, strategy))})</div>
                               <div style={styles.closeLegFormRow}>
                                 <label style={styles.closeLegLabel}>{closeAction}:</label>
                                 <input

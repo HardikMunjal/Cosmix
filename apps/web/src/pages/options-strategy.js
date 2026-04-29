@@ -84,7 +84,7 @@ function resolveStrategyStrike(spot, strikesList = [], offset = 0) {
 }
 
 function createLeg(id, side, optionType, strike, chainMap, expiry = null) {
-  const marketPremium = normalizePremium(chainMap?.[optionType]?.[strike]);
+  const marketPremium = normalizePremium(resolveChainPremium(chainMap, { optionType, strike, expiry }));
   return {
     id,
     side,
@@ -96,6 +96,19 @@ function createLeg(id, side, optionType, strike, chainMap, expiry = null) {
     locked: false,
     expiry: expiry || null,
   };
+}
+
+function resolveChainPremium(chainMap = { CE: {}, PE: {} }, leg = {}) {
+  const optionType = leg.optionType;
+  const strike = Number(leg.strike);
+  const expiry = Number(leg.expiry);
+  if (!optionType || !Number.isFinite(strike)) return null;
+  if (Number.isFinite(expiry) && expiry > 0) {
+    const direct = chainMap?.byExpiry?.[expiry]?.[optionType]?.[strike];
+    if (direct != null) return direct;
+  }
+  const fallback = chainMap?.[optionType]?.[strike];
+  return fallback == null ? null : fallback;
 }
 
 function buildDefaultLegs(spot, strikesList, chainMap, getNextLegId, expiry = null) {
@@ -113,7 +126,7 @@ function buildDefaultLegs(spot, strikesList, chainMap, getNextLegId, expiry = nu
 
 function syncLegsWithMarket(currentLegs, chainMap) {
   return currentLegs.map((leg) => {
-    const latest = chainMap?.[leg.optionType]?.[Number(leg.strike)];
+    const latest = resolveChainPremium(chainMap, leg);
     if (latest == null) {
       return {
         ...leg,
@@ -182,23 +195,48 @@ function getPreferredFormulaPrice(contract, pricingSource = 'blend') {
   return normalizePremium(contract?.livePremium ?? formulaMap.blackScholes ?? formulaMap.intrinsic ?? 0);
 }
 
-function buildQuoteMapsFromRows(rows = [], getPrice = (row) => row.price || row.lastPrice || row.bid || row.ask || 0, getIv = (row) => row.iv ?? row.appliedVolatility ?? null) {
-  const map = { CE: {}, PE: {} };
-  const ivSnapshot = { CE: {}, PE: {} };
+function buildQuoteMapsFromRows(
+  rows = [],
+  getPrice = (row) => row.price || row.lastPrice || row.bid || row.ask || 0,
+  getIv = (row) => row.iv ?? row.appliedVolatility ?? null,
+  defaultExpiry = null,
+) {
+  const map = { CE: {}, PE: {}, byExpiry: {} };
+  const ivSnapshot = { CE: {}, PE: {}, byExpiry: {} };
 
   rows.forEach((row) => {
     if (!map[row.type]) return;
-    map[row.type][Number(row.strike)] = normalizePremium(getPrice(row));
-    ivSnapshot[row.type][Number(row.strike)] = getIv(row);
+    const strike = Number(row.strike);
+    const premium = normalizePremium(getPrice(row));
+    const iv = getIv(row);
+    const expiry = Number(row.expiryUnix || row.expiry || defaultExpiry || 0);
+
+    map[row.type][strike] = premium;
+    ivSnapshot[row.type][strike] = iv;
+
+    if (Number.isFinite(expiry) && expiry > 0) {
+      if (!map.byExpiry[expiry]) map.byExpiry[expiry] = { CE: {}, PE: {} };
+      if (!ivSnapshot.byExpiry[expiry]) ivSnapshot.byExpiry[expiry] = { CE: {}, PE: {} };
+      map.byExpiry[expiry][row.type][strike] = premium;
+      ivSnapshot.byExpiry[expiry][row.type][strike] = iv;
+    }
   });
 
   return { map, ivSnapshot };
 }
 
-function mergeQuoteMaps(baseMap = { CE: {}, PE: {} }, overlayMap = { CE: {}, PE: {} }) {
+function mergeQuoteMaps(baseMap = { CE: {}, PE: {}, byExpiry: {} }, overlayMap = { CE: {}, PE: {}, byExpiry: {} }) {
+  const mergedByExpiry = { ...(baseMap.byExpiry || {}) };
+  Object.entries(overlayMap.byExpiry || {}).forEach(([expiryKey, expiryMap]) => {
+    mergedByExpiry[expiryKey] = {
+      CE: { ...(baseMap.byExpiry?.[expiryKey]?.CE || {}), ...(expiryMap.CE || {}) },
+      PE: { ...(baseMap.byExpiry?.[expiryKey]?.PE || {}), ...(expiryMap.PE || {}) },
+    };
+  });
   return {
     CE: { ...(baseMap.CE || {}), ...(overlayMap.CE || {}) },
     PE: { ...(baseMap.PE || {}), ...(overlayMap.PE || {}) },
+    byExpiry: mergedByExpiry,
   };
 }
 
@@ -477,11 +515,11 @@ export default function OptionsStrategy() {
   const legsRef = useRef([]);
   useEffect(() => { legsRef.current = legs; }, [legs]);
   const [liveSource, setLiveSource] = useState('loading');
-  const [chainMap, setChainMap] = useState({ CE: {}, PE: {} });
-  const chainMapRef = useRef({ CE: {}, PE: {} });
+  const [chainMap, setChainMap] = useState({ CE: {}, PE: {}, byExpiry: {} });
+  const chainMapRef = useRef({ CE: {}, PE: {}, byExpiry: {} });
   useEffect(() => { chainMapRef.current = chainMap; }, [chainMap]);
-  const [ivMap, setIvMap] = useState({ CE: {}, PE: {} });
-  const ivMapRef = useRef({ CE: {}, PE: {} });
+  const [ivMap, setIvMap] = useState({ CE: {}, PE: {}, byExpiry: {} });
+  const ivMapRef = useRef({ CE: {}, PE: {}, byExpiry: {} });
   useEffect(() => { ivMapRef.current = ivMap; }, [ivMap]);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [liveLoading, setLiveLoading] = useState(false);
@@ -641,13 +679,20 @@ export default function OptionsStrategy() {
   };
 
   const buildExpectedPricingUrl = (expiryValue, spotOverride = spotPrice) => {
+    const legExpiries = Array.from(new Set((legsRef.current || [])
+      .map((leg) => Number(leg.expiry))
+      .filter((expiry) => Number.isFinite(expiry) && expiry > 0)));
+    const requestedExpiries = Array.from(new Set([
+      ...legExpiries,
+      Number(expiryValue) || 0,
+    ].filter((expiry) => Number.isFinite(expiry) && expiry > 0)));
     const params = new URLSearchParams({
       symbol: 'NIFTY',
       strikeGap: String(STRIKE_STEP),
       strikeLevels: String(Math.ceil(STRIKE_SELECTOR_DISTANCE / STRIKE_STEP)),
-      expiryCount: '1',
+      expiryCount: String(Math.max(1, requestedExpiries.length || 1)),
     });
-    if (expiryValue) params.set('expiries', String(expiryValue));
+    if (requestedExpiries.length) params.set('expiries', requestedExpiries.join(','));
     if (Number.isFinite(Number(spotOverride))) params.set('spot', String(Number(spotOverride).toFixed(2)));
     if (pricingInputsRef.current.rateInput) params.set('rate', pricingInputsRef.current.rateInput);
     if (pricingInputsRef.current.ivInput) params.set('iv', pricingInputsRef.current.ivInput);
@@ -656,7 +701,7 @@ export default function OptionsStrategy() {
 
   const syncQuoteState = async (quotePayload, expiryValue, fallbackSpot = spotPrice) => {
     const nextSpot = quotePayload?.spot ? Number(quotePayload.spot.toFixed(2)) : Number(fallbackSpot || 0);
-    const baseMaps = buildQuoteMapsFromRows(quotePayload?.strikes || []);
+    const baseMaps = buildQuoteMapsFromRows(quotePayload?.strikes || [], undefined, undefined, expiryValue);
     let nextMap = baseMaps.map;
     let nextIvMap = baseMaps.ivSnapshot;
 
@@ -850,11 +895,12 @@ export default function OptionsStrategy() {
     setLegs((current) => current.map((leg) => {
       if (leg.id !== id) return leg;
       const next = { ...leg, [field]: value };
-      // When strike or type changes, auto-fill premium from cached chainMap
-      if (field === 'strike' || field === 'optionType') {
+      // When strike/type/expiry changes, auto-fill premium from cached quotes.
+      if (field === 'strike' || field === 'optionType' || field === 'expiry') {
         const type = field === 'optionType' ? value : leg.optionType;
         const strike = field === 'strike' ? Number(value) : Number(leg.strike);
-        const p = chainMapRef.current[type]?.[strike];
+        const expiry = field === 'expiry' ? Number(value) || null : Number(leg.expiry) || null;
+        const p = resolveChainPremium(chainMapRef.current, { optionType: type, strike, expiry });
         if (p != null) {
           const normalized = normalizePremium(p);
           next.marketPremium = normalized;
@@ -1415,7 +1461,14 @@ export default function OptionsStrategy() {
                 </div>
               </div>
               <div style={styles.legMeta}>
-                {ivMapRef.current[leg.optionType]?.[Number(leg.strike)] != null ? `IV ${Number(ivMapRef.current[leg.optionType][Number(leg.strike)]).toFixed(2)}%` : 'IV —'}
+                {(() => {
+                  const strike = Number(leg.strike);
+                  const expiry = Number(leg.expiry) || 0;
+                  const expiryIv = expiry > 0 ? ivMapRef.current.byExpiry?.[expiry]?.[leg.optionType]?.[strike] : null;
+                  const fallbackIv = ivMapRef.current[leg.optionType]?.[strike];
+                  const resolvedIv = expiryIv ?? fallbackIv;
+                  return resolvedIv != null ? `IV ${Number(resolvedIv).toFixed(2)}%` : 'IV —';
+                })()}
                 {` · Live ${Number(leg.marketPremium ?? leg.premium).toFixed(2)}`}
                 {leg.locked ? ' · entry locked' : ' · follows live premium'}
               </div>
