@@ -63,6 +63,29 @@ function getStrategyExpiries(strategy = null) {
   return Array.from(expiries).sort((left, right) => left - right);
 }
 
+function getLegEditorExpiryOptions(strategy = null) {
+  const optionSet = new Set(getStrategyExpiries(strategy));
+  (strategy?.availableExpiries || []).forEach((expiry) => {
+    const numeric = Number(expiry);
+    if (Number.isFinite(numeric) && numeric > 0) optionSet.add(numeric);
+  });
+  const selected = Number(strategy?.selectedExpiry);
+  if (Number.isFinite(selected) && selected > 0) optionSet.add(selected);
+  return Array.from(optionSet).sort((left, right) => left - right);
+}
+
+function getExpiryBadgeTone(unixSeconds) {
+  const expiry = Number(unixSeconds);
+  if (!Number.isFinite(expiry) || expiry <= 0) {
+    return { background: '#33415533', color: '#cbd5e1', border: '#47556966' };
+  }
+  const daysLeft = (expiry * 1000 - Date.now()) / (24 * 60 * 60 * 1000);
+  if (daysLeft <= 7) {
+    return { background: '#f59e0b22', color: '#fbbf24', border: '#f59e0b66' };
+  }
+  return { background: '#3b82f622', color: '#93c5fd', border: '#3b82f666' };
+}
+
 function resolveChainPremium(chainMap = { CE: {}, PE: {} }, leg = {}) {
   const optionType = leg.optionType;
   const strike = Number(leg.strike);
@@ -207,9 +230,16 @@ function buildLegEditorDraft(strategy, leg = null) {
   const optionType = leg?.optionType || 'CE';
   const options = getLegCatalogOptions(strategy, optionType);
   const fallbackOption = options[0] || null;
+  const expiryOptions = getLegEditorExpiryOptions(strategy);
+  const fallbackExpiry = Number(leg?.expiry) || Number(strategy?.selectedExpiry) || expiryOptions[0] || '';
   const strike = leg?.strike ?? fallbackOption?.strike ?? '';
   const selectedOption = getLegCatalogOption(strategy, optionType, strike) || fallbackOption;
-  const marketPremium = selectedOption?.premium ?? Number(leg?.marketPremium ?? leg?.premium ?? 0);
+  const directPremium = resolveChainPremium(strategy?.liveChainMap || { CE: {}, PE: {}, byExpiry: {} }, {
+    optionType,
+    strike,
+    expiry: fallbackExpiry,
+  });
+  const marketPremium = directPremium ?? selectedOption?.premium ?? Number(leg?.marketPremium ?? leg?.premium ?? 0);
   const entryPremium = Number(leg?.premium ?? marketPremium ?? 0);
 
   return {
@@ -217,6 +247,7 @@ function buildLegEditorDraft(strategy, leg = null) {
     legId: leg?.id ?? null,
     side: leg?.side || 'SELL',
     optionType,
+    expiry: fallbackExpiry ? String(fallbackExpiry) : '',
     strike: strike ? String(strike) : '',
     premium: entryPremium ? String(normalizePremium(entryPremium).toFixed(2)) : '',
     marketPremium: marketPremium ? String(normalizePremium(marketPremium).toFixed(2)) : '',
@@ -809,6 +840,7 @@ function WhatIfScenarioGrid({ scenarios = [], styles, theme: t }) {
 function LegEditor({ draft, strategy, styles, theme: t, title, onFieldChange, onSave, onCancel }) {
   const strikeOptions = getLegCatalogOptions(strategy, draft.optionType);
   const selectedOption = getLegCatalogOption(strategy, draft.optionType, draft.strike);
+  const expiryOptions = getLegEditorExpiryOptions(strategy);
 
   return (
     <div style={styles.legEditor} className="nifty-leg-editor">
@@ -827,6 +859,13 @@ function LegEditor({ draft, strategy, styles, theme: t, title, onFieldChange, on
         <select value={draft.optionType} onChange={(e) => onFieldChange({ optionType: e.target.value })} style={styles.addLegSelect}>
           <option value="CE">CE</option>
           <option value="PE">PE</option>
+        </select>
+        <select value={draft.expiry} onChange={(e) => onFieldChange({ expiry: e.target.value })} style={{ ...styles.addLegSelect, minWidth: '150px' }}>
+          {expiryOptions.map((expiry) => (
+            <option key={`expiry-${expiry}`} value={expiry}>
+              {formatExpiryDisplay(expiry)}
+            </option>
+          ))}
         </select>
         <select value={draft.strike} onChange={(e) => onFieldChange({ strike: e.target.value })} style={{ ...styles.addLegSelect, minWidth: '190px' }}>
           {strikeOptions.map((entry) => (
@@ -1405,6 +1444,8 @@ export default function NiftyStrategiesPage() {
         liveSource,
         currentValuationSource: valuationSource,
         strategyPricingSource,
+        availableExpiries: Object.keys(chainMap.byExpiry).map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0).sort((left, right) => left - right),
+        liveChainMap: chainMap,
         legCatalog: buildLegCatalog(chainMap, currentSpot, strategy.legs || []),
         whatIfBaseSpot,
         whatIfScenarios,
@@ -1603,9 +1644,14 @@ export default function NiftyStrategiesPage() {
         }
       }
 
-      if (patch.optionType != null || patch.strike != null) {
+      if (patch.optionType != null || patch.strike != null || patch.expiry != null) {
+        const directPremium = resolveChainPremium(strategy?.liveChainMap || { CE: {}, PE: {}, byExpiry: {} }, {
+          optionType: next.optionType,
+          strike: Number(next.strike),
+          expiry: Number(next.expiry),
+        });
         const selectedOption = getLegCatalogOption(strategy, next.optionType, next.strike);
-        const selectedPremium = selectedOption?.premium;
+        const selectedPremium = directPremium ?? selectedOption?.premium;
         next.marketPremium = selectedPremium != null ? String(selectedPremium.toFixed(2)) : '';
         next.premium = selectedPremium != null ? String(selectedPremium.toFixed(2)) : next.premium;
       }
@@ -1619,6 +1665,7 @@ export default function NiftyStrategiesPage() {
     if (!strategy || !legEditor || legEditor.strategyId !== strategyId) return;
 
     const strike = Number(legEditor.strike);
+    const expiry = Number(legEditor.expiry || strategy.selectedExpiry || 0);
     const premium = Number(legEditor.premium);
     const quantity = Math.max(1, parseInt(legEditor.quantity || 1, 10) || 1);
     if (!strike || !premium) { alert('Pick a strike and valid premium'); return; }
@@ -1631,6 +1678,7 @@ export default function NiftyStrategiesPage() {
       id: existingLeg?.id ?? (maxId + 1),
       side: legEditor.side,
       optionType: legEditor.optionType,
+      expiry: Number.isFinite(expiry) && expiry > 0 ? expiry : null,
       strike,
       premium: normalizePremium(premium),
       marketPremium: normalizePremium(marketPremium),
@@ -1645,13 +1693,13 @@ export default function NiftyStrategiesPage() {
     const transaction = existingLeg
       ? {
         type: 'EDIT',
-        description: `Edited leg ${existingLeg.side} ${Math.max(1, parseInt(existingLeg.quantity || 1, 10) || 1)}L ${existingLeg.optionType} ${existingLeg.strike} → ${nextLeg.side} ${quantity}L ${nextLeg.optionType} ${strike} @ ${nextLeg.premium.toFixed(2)}`,
+        description: `Edited leg ${existingLeg.side} ${Math.max(1, parseInt(existingLeg.quantity || 1, 10) || 1)}L ${existingLeg.optionType} ${existingLeg.strike} ${formatExpiryDisplay(resolveLegExpiry(existingLeg, strategy))} → ${nextLeg.side} ${quantity}L ${nextLeg.optionType} ${strike} ${formatExpiryDisplay(resolveLegExpiry(nextLeg, strategy))} @ ${nextLeg.premium.toFixed(2)}`,
         amount: 0,
         timestamp: new Date().toISOString(),
       }
       : {
         type: 'ADD',
-        description: `Added ${nextLeg.side} ${quantity}L ${nextLeg.optionType} ${strike} @ ${nextLeg.premium.toFixed(2)}`,
+        description: `Added ${nextLeg.side} ${quantity}L ${nextLeg.optionType} ${strike} ${formatExpiryDisplay(resolveLegExpiry(nextLeg, strategy))} @ ${nextLeg.premium.toFixed(2)}`,
         amount: 0,
         timestamp: new Date().toISOString(),
       };
@@ -2236,6 +2284,8 @@ export default function NiftyStrategiesPage() {
                     {(strategy.legs || []).map((leg) => {
                       const isClosing = closingLegInfo?.strategyId === strategy.id && closingLegInfo?.legId === leg.id;
                       const isEditing = legEditor?.strategyId === strategy.id && Number(legEditor?.legId) === Number(leg.id);
+                      const legExpiry = resolveLegExpiry(leg, strategy);
+                      const expiryTone = getExpiryBadgeTone(legExpiry);
                       const qty = Math.max(1, parseInt(leg.quantity || 1, 10) || 1);
                       const entryP = Number(leg.premium) || 0;
                       const currentP = Number(leg.marketPremium ?? leg.premium) || 0;
@@ -2248,7 +2298,8 @@ export default function NiftyStrategiesPage() {
                             <div style={styles.legCardHeader} className="nifty-leg-row">
                               <div style={styles.legRowMain}>
                                 <span style={{ ...styles.legSideBadge, background: leg.side === 'BUY' ? `${theme.blue}20` : `${theme.red}20`, color: leg.side === 'BUY' ? theme.blue : theme.red }}>{leg.side}</span>
-                                <span style={styles.legCardStrike}>{qty}L {leg.optionType} {leg.strike} ({formatExpiryDisplay(resolveLegExpiry(leg, strategy))})</span>
+                                <span style={styles.legCardStrike}>{qty}L {leg.optionType} {leg.strike}</span>
+                                <span style={{ ...styles.legExpiryBadge, background: expiryTone.background, color: expiryTone.color, borderColor: expiryTone.border }}>{formatExpiryDisplay(legExpiry)}</span>
                                 <span style={styles.legCardPrices}>Entry {entryP.toFixed(2)} · Live {currentP.toFixed(2)}</span>
                               </div>
                               <div style={styles.legRowActions}>
@@ -3248,6 +3299,9 @@ const darkStyles = {
     border: '1px solid #334155',
     borderRadius: '6px',
     color: '#e2e8f0',
+    WebkitTextFillColor: '#e2e8f0',
+    caretColor: '#e2e8f0',
+    fontWeight: '700',
     padding: '8px 10px',
     fontSize: '14px',
     minHeight: '40px',
@@ -3524,7 +3578,15 @@ const darkStyles = {
     color: '#e2e8f0',
     fontWeight: 'bold',
     fontSize: '14px',
-    flex: 1,
+  },
+  legExpiryBadge: {
+    border: '1px solid',
+    borderRadius: '999px',
+    padding: '3px 8px',
+    fontSize: '11px',
+    fontWeight: '700',
+    lineHeight: 1.2,
+    flexShrink: 0,
   },
   legCardPL: {
     fontWeight: 'bold',

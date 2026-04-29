@@ -113,6 +113,19 @@ function parseStoredJson(key, fallback) {
   try { return JSON.parse(raw); } catch (_) { return fallback; }
 }
 
+function sortDailyScoresByDate(dailyScores = []) {
+  return [...(Array.isArray(dailyScores) ? dailyScores : [])].sort((left, right) => String(left.date || '').localeCompare(String(right.date || '')));
+}
+
+function computeLatestCumulativeScore(dailyScores = []) {
+  const ordered = sortDailyScoresByDate(dailyScores);
+  const latest = ordered[ordered.length - 1];
+  if (!latest) return 0;
+  const direct = Number(latest.cumulativeTotalScore || 0);
+  if (Number.isFinite(direct) && direct !== 0) return direct;
+  return ordered.reduce((sum, score) => sum + Number(score.totalScore || 0), 0);
+}
+
 function weatherIcon(code) {
   if (code === 0) return '☀️';
   if (code <= 3) return '⛅';
@@ -189,6 +202,8 @@ export default function WellnessPage() {
   const [allPlans, setAllPlans] = useState([]);
   const [historyPlan, setHistoryPlan] = useState(null);
   const [showPlanHistory, setShowPlanHistory] = useState(false);
+  const [buddyPlanRows, setBuddyPlanRows] = useState([]);
+  const [buddyPlanLoading, setBuddyPlanLoading] = useState(false);
 
   const showMicSecurityWarning = typeof window !== 'undefined' && !window.isSecureContext && window.location.hostname !== 'localhost';
 
@@ -306,6 +321,98 @@ export default function WellnessPage() {
         .catch(() => {});
     });
   }, [API_BASE, router]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadBuddyLeaderboard() {
+      const selfUserId = String(userIdRef.current || user?.id || user?.email || user?.username || '').trim();
+      const selfUsername = String(user?.username || '').trim();
+      if (!selfUserId || !selfUsername) {
+        if (!cancelled) setBuddyPlanRows([]);
+        return;
+      }
+
+      setBuddyPlanLoading(true);
+      try {
+        const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+        const isLocalHost = host === 'localhost' || host === '127.0.0.1';
+        const chatApiBase = isLocalHost ? `http://${host}:3002/chat` : '/chat-api/chat';
+
+        const bootstrapResponse = await fetch(`${chatApiBase}/bootstrap?username=${encodeURIComponent(selfUsername)}`);
+        const bootstrapData = await bootstrapResponse.json().catch(() => ({}));
+        const friends = Array.isArray(bootstrapData?.friends) ? bootstrapData.friends : [];
+
+        const buddyLookups = await Promise.all(friends.map(async (username) => {
+          const normalized = String(username || '').trim();
+          if (!normalized) return null;
+          try {
+            const searchResponse = await fetch(`/api/chat/buddy-search?q=${encodeURIComponent(normalized)}`);
+            const searchData = await searchResponse.json();
+            const match = (Array.isArray(searchData?.results) ? searchData.results : [])
+              .find((entry) => String(entry?.username || '').toLowerCase() === normalized.toLowerCase());
+            const buddyUserId = String(match?.id || match?.email || match?.username || normalized).trim();
+            return { username: normalized, displayName: String(match?.name || match?.username || normalized).trim(), userId: buddyUserId };
+          } catch (_) {
+            return { username: normalized, displayName: normalized, userId: normalized };
+          }
+        }));
+
+        const participants = [
+          {
+            username: selfUsername,
+            displayName: 'You',
+            userId: selfUserId,
+            isSelf: true,
+          },
+          ...buddyLookups.filter(Boolean).map((entry) => ({ ...entry, isSelf: false })),
+        ];
+
+        const uniqueParticipants = Array.from(new Map(participants.map((entry) => [String(entry.userId).toLowerCase(), entry])).values());
+
+        const leaderboardRows = await Promise.all(uniqueParticipants.map(async (participant) => {
+          try {
+            const response = await fetch(`${API_BASE}/wellness/data/${encodeURIComponent(participant.userId)}`);
+            const data = await response.json();
+            if (!response.ok || !data?.plan || data.plan.status !== 'active') return null;
+            const sortedScores = sortDailyScoresByDate(data.dailyScores || []);
+            const latestScore = sortedScores[sortedScores.length - 1] || null;
+            const cumulativeTotal = computeLatestCumulativeScore(sortedScores);
+            return {
+              id: participant.userId,
+              name: participant.displayName,
+              username: participant.username,
+              isSelf: participant.isSelf,
+              planName: String(data.plan.name || 'Active plan'),
+              planStartDate: data.plan.startDate,
+              cumulativeTotal,
+              lastDayScore: Number(latestScore?.totalScore || 0),
+              days: sortedScores.length,
+              series: sortedScores.map((score) => ({
+                date: score.date,
+                cumulative: Number(score.cumulativeTotalScore || 0),
+              })),
+            };
+          } catch (_) {
+            return null;
+          }
+        }));
+
+        const ranked = leaderboardRows
+          .filter(Boolean)
+          .sort((left, right) => Number(right.cumulativeTotal || 0) - Number(left.cumulativeTotal || 0));
+
+        if (!cancelled) setBuddyPlanRows(ranked);
+      } catch (_) {
+        if (!cancelled) setBuddyPlanRows([]);
+      } finally {
+        if (!cancelled) setBuddyPlanLoading(false);
+      }
+    }
+
+    loadBuddyLeaderboard();
+    return () => { cancelled = true; };
+  }, [API_BASE, user?.id, user?.email, user?.username, planInfo?.id, dailyScores.length]);
 
   /* ---- sync to server (debounced) ---- */
   function syncToServer(newEntries, newForm) {
@@ -657,6 +764,13 @@ export default function WellnessPage() {
     total: sum.total + Number(score.totalScore || 0),
   }), { physical: 0, mental: 0, total: 0 }), [dailyScores]);
   const planScoreChartData = useMemo(() => [...dailyScores].sort((left, right) => left.date.localeCompare(right.date)), [dailyScores]);
+  const buddyLeaderboardMaxScore = useMemo(() => {
+    const max = buddyPlanRows.reduce((best, row) => {
+      const rowMax = (row.series || []).reduce((seriesBest, point) => Math.max(seriesBest, Number(point.cumulative || 0)), 0);
+      return Math.max(best, rowMax, Number(row.cumulativeTotal || 0));
+    }, 0);
+    return Math.max(1, max);
+  }, [buddyPlanRows]);
   const currentPenalty = scoringRules?.dailyPenalty || DAILY_PENALTY;
   const canManageScoringRules = isAdminUser(user);
   const hasActivePlan = Boolean(planInfo?.startDate && totalPlanDays > 0);
@@ -1259,6 +1373,67 @@ export default function WellnessPage() {
           </div>
         )}
 
+        <div style={{ ...s.card, marginTop: 14 }}>
+          <div style={s.cardHead}>
+            <div>
+              <div style={s.cardTitle}>Current Plan Leaderboard</div>
+              <div style={s.metaText}>Shows only active running plans for you and your buddies, with cumulative score trend.</div>
+            </div>
+          </div>
+          {buddyPlanLoading ? (
+            <div style={s.metaText}>Loading buddy leaderboard...</div>
+          ) : buddyPlanRows.length === 0 ? (
+            <div style={s.metaText}>No active running plans found for you and your buddies yet.</div>
+          ) : (
+            <div style={s.buddyLeaderboardWrap}>
+              <div style={s.buddyLeaderboardHead}>
+                <span>#</span>
+                <span>Buddy</span>
+                <span style={{ textAlign: 'right' }}>Cumulative</span>
+                <span style={{ textAlign: 'right' }}>Trend</span>
+              </div>
+              {buddyPlanRows.map((row, index) => {
+                const rank = index + 1;
+                const graphWidth = 156;
+                const graphHeight = 38;
+                const points = (row.series || []).map((point, pointIndex) => {
+                  const x = (row.series.length <= 1)
+                    ? graphWidth / 2
+                    : (pointIndex / (row.series.length - 1)) * graphWidth;
+                  const y = graphHeight - ((Number(point.cumulative || 0) / buddyLeaderboardMaxScore) * (graphHeight - 6)) - 3;
+                  return `${x},${y}`;
+                }).join(' ');
+                const rankColor = rank === 1 ? '#fbbf24' : rank === 2 ? '#cbd5e1' : rank === 3 ? '#fda4af' : '#bfdbfe';
+                return (
+                  <div key={row.id} style={s.buddyLeaderboardRow}>
+                    <span style={{ ...s.buddyRank, color: rankColor }}>{rank}</span>
+                    <div style={s.buddyIdentityCol}>
+                      <div style={s.buddyNameLine}>
+                        <span style={s.buddyName}>{row.name}</span>
+                        {row.isSelf && <span style={s.buddySelfBadge}>You</span>}
+                      </div>
+                      <div style={s.buddyMetaLine}>
+                        {row.planName} · {row.days}d · Last {formatMetric(row.lastDayScore)}
+                      </div>
+                    </div>
+                    <span style={s.buddyScore}>{formatMetric(row.cumulativeTotal)}</span>
+                    <div style={s.buddyTrendWrap}>
+                      {row.series.length > 0 ? (
+                        <svg viewBox={`0 0 ${graphWidth} ${graphHeight}`} style={{ width: graphWidth, height: graphHeight }}>
+                          <polyline fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth="1" points={`0,${graphHeight - 3} ${graphWidth},${graphHeight - 3}`} />
+                          <polyline fill="none" stroke={row.isSelf ? '#22c55e' : '#60a5fa'} strokeWidth="2.2" points={points} />
+                        </svg>
+                      ) : (
+                        <span style={s.metaText}>No score data</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         <div style={{ ...s.card, marginTop: 14 }} ref={transactionLogsRef}>
           <button type="button" onClick={() => setShowPlanTransactions((current) => !current)} style={s.sectionToggleBtn}>
             <span>Transaction Logs {planInfo?.name ? `- ${planInfo.name}` : ''}</span>
@@ -1605,6 +1780,17 @@ const s = {
   statLabel: { fontSize: 11, textTransform: 'uppercase', opacity: 0.7, fontWeight: 700 },
   statVal: { fontSize: 18, fontWeight: 900, marginTop: 2 },
   logRow: { display: 'grid', gridTemplateColumns: '1fr 80px 80px', gap: 8, padding: '8px 10px', borderRadius: 10, background: 'rgba(255,255,255,0.06)', fontSize: 13, marginTop: 4 },
+  buddyLeaderboardWrap: { display: 'grid', gap: 8, marginTop: 8 },
+  buddyLeaderboardHead: { display: 'grid', gridTemplateColumns: '38px minmax(0,1fr) 110px 170px', gap: 8, padding: '0 8px', fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', opacity: 0.68 },
+  buddyLeaderboardRow: { display: 'grid', gridTemplateColumns: '38px minmax(0,1fr) 110px 170px', gap: 8, alignItems: 'center', padding: '10px 8px', borderRadius: 12, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)' },
+  buddyRank: { fontSize: 18, fontWeight: 900, textAlign: 'center' },
+  buddyIdentityCol: { minWidth: 0 },
+  buddyNameLine: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 },
+  buddyName: { fontSize: 14, fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  buddySelfBadge: { fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '2px 8px', color: '#bbf7d0', background: 'rgba(34,197,94,0.18)', border: '1px solid rgba(34,197,94,0.34)' },
+  buddyMetaLine: { fontSize: 11, opacity: 0.72, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  buddyScore: { textAlign: 'right', fontSize: 16, fontWeight: 900, color: '#86efac' },
+  buddyTrendWrap: { display: 'flex', justifyContent: 'flex-end', alignItems: 'center' },
   rulesTable: { width: '100%', borderCollapse: 'collapse', fontSize: 13, lineHeight: 1.6 },
   rulesTh: { textAlign: 'left', padding: '8px 10px', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', opacity: 0.6, borderBottom: '1px solid rgba(255,255,255,0.12)' },
   rulesTd: { padding: '7px 10px', borderBottom: '1px solid rgba(255,255,255,0.05)', whiteSpace: 'nowrap' },
