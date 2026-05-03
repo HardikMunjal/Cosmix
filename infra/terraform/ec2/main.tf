@@ -100,6 +100,14 @@ resource "aws_security_group" "cosmix" {
     cidr_blocks = var.public_ingress_cidrs
   }
 
+  ingress {
+    description = "PostgreSQL (DBeaver / admin access)"
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = [var.admin_cidr]
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
