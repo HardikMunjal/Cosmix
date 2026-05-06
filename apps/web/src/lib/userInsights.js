@@ -78,6 +78,32 @@ function computeRunningStreak(entries = []) {
   return streak;
 }
 
+function computeLongestRunningStreak(entries = []) {
+  const runDates = normalizeWellnessEntries(entries)
+    .filter((entry) => Number(entry.runningDistanceKm || 0) > 0)
+    .map((entry) => String(entry.date || ''))
+    .filter(Boolean)
+    .reverse();
+
+  if (!runDates.length) return 0;
+
+  let best = 1;
+  let current = 1;
+  for (let index = 1; index < runDates.length; index += 1) {
+    const prev = new Date(runDates[index - 1]);
+    const now = new Date(runDates[index]);
+    const diffDays = Math.round((now.getTime() - prev.getTime()) / 86400000);
+    if (diffDays === 1) {
+      current += 1;
+      if (current > best) best = current;
+    } else {
+      current = 1;
+    }
+  }
+
+  return best;
+}
+
 function computeFastestRunPace(entries = []) {
   const qualified = entries
     .filter((entry) => Number(entry.runningDistanceKm || 0) >= 2 && Number(entry.runningMinutes || 0) > 0)
@@ -97,6 +123,45 @@ function computeWeeklyAverageScore(entries = []) {
   if (!recentEntries.length) return 0;
   const total = recentEntries.reduce((sum, entry) => sum + Number(computeEntryScores(entry).totalScore || 0), 0);
   return Number((total / recentEntries.length).toFixed(1));
+}
+
+function computeMaxWellnessScore(entries = []) {
+  if (!entries.length) return 0;
+  const max = entries.reduce((best, entry) => {
+    const score = Number(computeEntryScores(entry).totalScore || 0);
+    return score > best ? score : best;
+  }, 0);
+  return Number(max.toFixed(1));
+}
+
+function computeLongestRun(entries = []) {
+  const runs = entries
+    .map((entry) => ({
+      date: entry?.date || null,
+      distanceKm: Number(entry?.runningDistanceKm || 0),
+      runningMinutes: Number(entry?.runningMinutes || 0),
+    }))
+    .filter((entry) => Number.isFinite(entry.distanceKm) && entry.distanceKm > 0);
+
+  if (!runs.length) {
+    return {
+      distanceKm: null,
+      runningMinutes: null,
+      date: null,
+    };
+  }
+
+  const best = runs.reduce((prev, curr) => {
+    if (curr.distanceKm > prev.distanceKm) return curr;
+    if (curr.distanceKm === prev.distanceKm && curr.runningMinutes > prev.runningMinutes) return curr;
+    return prev;
+  }, runs[0]);
+
+  return {
+    distanceKm: Number(best.distanceKm.toFixed(2)),
+    runningMinutes: Number.isFinite(best.runningMinutes) && best.runningMinutes > 0 ? Number(best.runningMinutes.toFixed(1)) : null,
+    date: best.date || null,
+  };
 }
 
 function buildProfitTrend(strategies = []) {
@@ -264,10 +329,13 @@ export function buildWellnessSummary(userId) {
     trendPoints: buildWellnessTrend(entries),
     totalFitnessScore: Number(scoredRows.reduce((sum, scores) => sum + Number(scores.totalScore || 0), 0).toFixed(2)),
     runningStreak: computeRunningStreak(entries),
+    longestRunningStreak: computeLongestRunningStreak(entries),
     highestRunKm: Number(Math.max(0, ...entries.map((entry) => Number(entry.runningDistanceKm || 0))).toFixed(2)),
+    longestRun: computeLongestRun(entries),
     fastestRunPace: computeFastestRunPace(entries),
     currentWellnessScore: computeCurrentWellnessScore(currentEntry),
     weeklyAverageWellnessScore: computeWeeklyAverageScore(entries),
+    maxWellnessScore: computeMaxWellnessScore(entries),
     plannedGoals: goals.length,
     completedGoals,
   };
@@ -283,12 +351,15 @@ export function buildProfileInsights({ strategies = [], userId }) {
     totalFitnessScore: wellnessSummary.totalFitnessScore,
     totalFriends: contacts.length,
     runningStreak: wellnessSummary.runningStreak,
+    longestRunningStreak: wellnessSummary.longestRunningStreak,
     highestRunKm: wellnessSummary.highestRunKm,
+    longestRun: wellnessSummary.longestRun,
     fastestRunPace: wellnessSummary.fastestRunPace,
     weeklyRunningKm: wellnessSummary.dashboardStats.weeklyRunningKm,
     activeDays: wellnessSummary.dashboardStats.activeDays,
     currentWellnessScore: wellnessSummary.currentWellnessScore,
     weeklyAverageWellnessScore: wellnessSummary.weeklyAverageWellnessScore,
+    maxWellnessScore: wellnessSummary.maxWellnessScore,
     plannedGoals: wellnessSummary.plannedGoals,
     completedGoals: wellnessSummary.completedGoals,
   };

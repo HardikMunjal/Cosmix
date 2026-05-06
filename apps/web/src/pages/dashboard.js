@@ -2,7 +2,7 @@ import { useRouter } from 'next/router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { restoreUserSession } from '../lib/auth-client';
 import { useTheme } from '../lib/ThemePicker';
-import { buildProfileInsights, buildStrategySummary, buildWellnessSummary, formatCurrency, formatPace } from '../lib/userInsights';
+import { buildProfileInsights, buildStrategySummary, buildWellnessSummary, formatCurrency } from '../lib/userInsights';
 
 const tradingDeskModules = [
   { icon: 'NT', title: 'Nifty Tracker', desc: 'Track saved strategies, live payoff movement, and execution snapshots.', path: '/nifty-strategies', accent: '#22c55e' },
@@ -36,10 +36,53 @@ function Avatar({ user, size, theme, square = false }) {
 
   return user?.avatar ? (
     // eslint-disable-next-line @next/next/no-img-element
-    <img src={user.avatar} alt={user.username || 'Profile'} style={{ width: size, height: size, borderRadius: radius, objectFit: 'cover', border: `1px solid ${theme.cardBorder}` }} />
+    <img
+      src={user.avatar}
+      alt={user.username || 'Profile'}
+      style={{
+        width: size,
+        height: size,
+        borderRadius: radius,
+        objectFit: 'cover',
+        border: 'none',
+        background: 'transparent',
+        filter: 'drop-shadow(0 24px 30px rgba(15, 23, 42, 0.5)) drop-shadow(0 6px 8px rgba(56, 189, 248, 0.22))',
+        mixBlendMode: 'screen',
+      }}
+    />
   ) : (
-    <div style={{ width: size, height: size, borderRadius: radius, display: 'grid', placeItems: 'center', fontSize: size * 0.38, fontWeight: 800, color: '#fff', background: `linear-gradient(135deg, ${theme.orange}, ${theme.blue})`, border: `1px solid ${theme.cardBorder}` }}>{fallback}</div>
+    <div style={{ width: size, height: size, borderRadius: radius, display: 'grid', placeItems: 'center', fontSize: size * 0.38, fontWeight: 800, color: '#fff', background: `linear-gradient(135deg, ${theme.orange}, ${theme.blue})`, border: 'none', boxShadow: `0 26px 40px ${theme.shadow}` }}>{fallback}</div>
   );
+}
+
+function displayStatNumber(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return '--';
+  return `${numeric}`;
+}
+
+function displayDistance(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return '--';
+  return `${numeric.toFixed(1)} km`;
+}
+
+function displayPace(value) {
+  if (value == null) return '--';
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return '--';
+  return `${numeric.toFixed(2)} min/km`;
+}
+
+function displayLongestRunMeta(longestRun) {
+  if (!longestRun?.date) return '--';
+  const minutes = Number(longestRun.runningMinutes || 0);
+  const minutesText = Number.isFinite(minutes) && minutes > 0 ? `${minutes.toFixed(0)} min` : '--';
+  const date = new Date(longestRun.date);
+  const dateText = Number.isNaN(date.getTime())
+    ? String(longestRun.date)
+    : date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  return `${minutesText} • ${dateText}`;
 }
 
 function MetricList({ items, theme, compact = false }) {
@@ -57,7 +100,10 @@ function MetricList({ items, theme, compact = false }) {
           }}
         >
           <div style={{ fontSize: compact ? '9px' : '11px', textTransform: 'uppercase', letterSpacing: compact ? '0.08em' : '0.14em', color: theme.textMuted, fontWeight: 700 }}>{item.label}</div>
-          <div style={{ fontSize: compact ? '12px' : '15px', fontWeight: 800, color: item.accent || theme.textHeading, lineHeight: 1, textAlign: 'right' }}>{item.value}</div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: compact ? '12px' : '15px', fontWeight: 800, color: item.accent || theme.textHeading, lineHeight: 1 }}>{item.value}</div>
+            {item.meta ? <div style={{ marginTop: '3px', fontSize: '10px', color: theme.textMuted, fontWeight: 600 }}>{item.meta}</div> : null}
+          </div>
         </div>
       ))}
     </div>
@@ -191,22 +237,19 @@ export default function Dashboard() {
   const profileInsights = useMemo(() => buildProfileInsights({ strategies, userId: user?.id }), [strategies, user?.id]);
 
   const wellnessCards = useMemo(() => ([
-    { label: 'Wellness score', value: String(profileInsights.currentWellnessScore), accent: theme.blue },
-    { label: '7D avg score', value: String(profileInsights.weeklyAverageWellnessScore), accent: theme.cyan },
-    { label: 'Running streak', value: `${profileInsights.runningStreak}d`, accent: theme.emerald },
-    { label: 'Weekly distance', value: `${profileInsights.weeklyRunningKm.toFixed(1)} km`, accent: theme.textHeading },
-    { label: 'Planned goals', value: String(profileInsights.plannedGoals), accent: theme.orange },
-    { label: 'Completed goals', value: String(profileInsights.completedGoals), accent: theme.green },
+    { label: 'Wellness score', value: displayStatNumber(profileInsights.currentWellnessScore), accent: theme.blue },
+    { label: 'Max Wellness score', value: displayStatNumber(profileInsights.maxWellnessScore), accent: theme.cyan },
+    { label: 'Fastest pace', value: displayPace(profileInsights.fastestRunPace), accent: theme.emerald },
+    { label: 'Longest running streak', value: `${displayStatNumber(profileInsights.longestRunningStreak)}${displayStatNumber(profileInsights.longestRunningStreak) === '--' ? '' : 'd'}`, accent: theme.orange },
   ]), [profileInsights, theme]);
   const primaryStats = useMemo(() => ([
-    { label: 'Wellness score', value: String(profileInsights.currentWellnessScore), accent: theme.blue },
-    { label: '7D avg score', value: String(profileInsights.weeklyAverageWellnessScore), accent: theme.cyan },
-    { label: 'Running streak', value: `${profileInsights.runningStreak}d`, accent: theme.emerald },
-    { label: 'Fastest pace', value: formatPace(profileInsights.fastestRunPace), accent: theme.blue },
-    { label: 'Longest distance', value: `${profileInsights.highestRunKm.toFixed(1)} km`, accent: theme.cyan },
-    { label: 'Weekly distance', value: `${profileInsights.weeklyRunningKm.toFixed(1)} km`, accent: theme.textHeading },
-    { label: 'Planned goals', value: String(profileInsights.plannedGoals), accent: theme.orange },
-    { label: 'Completed goals', value: String(profileInsights.completedGoals), accent: theme.green },
+    { label: 'Wellness score', value: displayStatNumber(profileInsights.currentWellnessScore), accent: theme.blue },
+    { label: 'Max Wellness score', value: displayStatNumber(profileInsights.maxWellnessScore), accent: theme.cyan },
+    { label: 'Fastest pace', value: displayPace(profileInsights.fastestRunPace), accent: theme.emerald },
+    { label: 'Longest run', value: displayDistance(profileInsights.longestRun?.distanceKm), accent: theme.textHeading, meta: displayLongestRunMeta(profileInsights.longestRun) },
+    { label: 'Longest running streak', value: `${displayStatNumber(profileInsights.longestRunningStreak)}${displayStatNumber(profileInsights.longestRunningStreak) === '--' ? '' : 'd'}`, accent: theme.orange },
+    { label: 'Planned goals', value: displayStatNumber(profileInsights.plannedGoals), accent: theme.orange },
+    { label: 'Completed goals', value: displayStatNumber(profileInsights.completedGoals), accent: theme.green },
   ]), [profileInsights, theme]);
   const marketCards = useMemo(() => (strategySummary.profitWindows.map((item) => ({
     ...item,
@@ -255,8 +298,9 @@ export default function Dashboard() {
         <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.12fr) minmax(320px, 0.88fr)', gap: '16px' }} className="dashboard-top-grid">
           <div style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: `linear-gradient(135deg, ${theme.cardBg}, ${theme.cyan}10, ${theme.orange}10)`, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '14px' }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) minmax(0, 1fr)', gap: '14px', alignItems: 'stretch' }} className="dashboard-profile-shell">
-              <div style={{ borderRadius: '22px', padding: '12px', background: `linear-gradient(180deg, ${theme.panelBg}, ${theme.cardBg})`, border: `1px solid ${theme.cardBorder}`, display: 'grid', placeItems: 'center' }}>
-                <Avatar user={user} size={236} theme={theme} square />
+              <div style={{ borderRadius: '22px', padding: '12px', background: 'transparent', border: 'none', display: 'grid', placeItems: 'center', position: 'relative', overflow: 'hidden' }}>
+                <div style={{ position: 'absolute', width: '180px', height: '180px', borderRadius: '50%', filter: 'blur(34px)', background: `${theme.blue}44` }} />
+                <Avatar user={user} size={236} theme={theme} />
               </div>
 
               <div style={{ display: 'grid', alignContent: 'stretch' }} className="dashboard-profile-meta">
@@ -265,7 +309,15 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '14px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '8px' }}>
+          <div
+            style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '14px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '8px', cursor: 'pointer' }}
+            role="button"
+            tabIndex={0}
+            onClick={() => router.push('/wellness')}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') router.push('/wellness');
+            }}
+          >
             <div>
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Wellness</div>
             </div>
@@ -277,7 +329,15 @@ export default function Dashboard() {
         </section>
 
         <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.18fr) minmax(300px, 0.82fr)', gap: '16px' }} className="dashboard-market-grid">
-          <div style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '12px' }}>
+          <div
+            style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '12px', cursor: 'pointer' }}
+            role="button"
+            tabIndex={0}
+            onClick={() => router.push('/nifty-strategies')}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') router.push('/nifty-strategies');
+            }}
+          >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Market overview</div>
               <div style={{ display: 'grid', gap: '2px', justifyItems: 'end' }}>

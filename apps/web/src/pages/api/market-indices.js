@@ -69,9 +69,23 @@ const indexConfig = [
     fallback: 8100.0,
     flag: '🇬🇧',
   },
+  {
+    key: 'CRUDEWTI',
+    symbol: 'CL=F',
+    name: 'WTI Crude',
+    fallback: 78.0,
+    flag: '🛢️',
+  },
+  {
+    key: 'CRUDEBRENT',
+    symbol: 'BZ=F',
+    name: 'Brent Crude',
+    fallback: 82.0,
+    flag: '🛢️',
+  },
 ];
 
-const FRESH_CACHE_MS = 30 * 1000;
+const FRESH_CACHE_MS = 15 * 1000;
 const STALE_CACHE_MS = 10 * 60 * 1000;
 const RATE_LIMIT_BACKOFF_MS = 2 * 60 * 1000;
 const indexRuntime = new Map();

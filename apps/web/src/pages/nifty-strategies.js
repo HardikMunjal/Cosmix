@@ -597,6 +597,20 @@ function getTickerAppearance(key, theme) {
       accent: '#d9f99d',
       price: '#f7fee7',
     },
+    CRUDEWTI: {
+      border: '#b45309',
+      background: 'linear-gradient(135deg, rgba(180,83,9,0.24), rgba(41,20,7,0.9))',
+      glow: 'rgba(251,146,60,0.2)',
+      accent: '#fdba74',
+      price: '#fff7ed',
+    },
+    CRUDEBRENT: {
+      border: '#9a3412',
+      background: 'linear-gradient(135deg, rgba(154,52,18,0.24), rgba(60,20,10,0.9))',
+      glow: 'rgba(253,186,116,0.2)',
+      accent: '#fed7aa',
+      price: '#ffedd5',
+    },
   };
 
   return palette[key] || {
@@ -606,6 +620,54 @@ function getTickerAppearance(key, theme) {
     accent: theme.textSecondary,
     price: theme.textPrimary,
   };
+}
+
+function OrbitalLoader({ label = 'Loading saved strategies...' }) {
+  return (
+    <div style={{
+      borderRadius: '18px',
+      border: '1px solid rgba(56, 189, 248, 0.28)',
+      padding: '24px 16px',
+      display: 'grid',
+      justifyItems: 'center',
+      gap: '12px',
+      background: 'radial-gradient(circle at 50% 40%, rgba(14,165,233,0.16), rgba(2,6,23,0.92))',
+      boxShadow: '0 18px 50px rgba(2, 6, 23, 0.5)',
+    }}>
+      <div style={{ position: 'relative', width: '68px', height: '68px' }}>
+        <span style={{
+          position: 'absolute', inset: 0, borderRadius: '50%', border: '2px solid rgba(56, 189, 248, 0.2)', borderTopColor: '#38bdf8', animation: 'nifty-orbit-spin 1.2s linear infinite',
+        }} />
+        <span style={{
+          position: 'absolute', inset: '11px', borderRadius: '50%', border: '2px solid rgba(34, 197, 94, 0.2)', borderTopColor: '#22c55e', animation: 'nifty-orbit-spin 0.9s linear infinite reverse',
+        }} />
+        <span style={{
+          position: 'absolute', inset: '22px', borderRadius: '50%', background: 'linear-gradient(135deg, #22d3ee, #2563eb)', boxShadow: '0 0 20px rgba(56,189,248,0.75)',
+        }} />
+      </div>
+      <div style={{ fontSize: '13px', fontWeight: 700, color: '#e2e8f0', letterSpacing: '0.02em' }}>{label}</div>
+    </div>
+  );
+}
+
+function InlineLoaderChip({ text = 'Updating...' }) {
+  return (
+    <span style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '8px',
+      padding: '4px 10px',
+      borderRadius: '999px',
+      border: '1px solid rgba(56, 189, 248, 0.3)',
+      background: 'rgba(15, 23, 42, 0.75)',
+      color: '#bae6fd',
+      fontSize: '11px',
+      fontWeight: 700,
+    }}>
+      <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#22d3ee', animation: 'nifty-pulse-dot 1s ease-in-out infinite' }} />
+      {text}
+    </span>
+  );
 }
 
 function analyzeStrategy(strategy, metrics, t) {
@@ -1427,6 +1489,8 @@ export default function NiftyStrategiesPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [loadingIndices, setLoadingIndices] = useState(false);
+  const [loadingStrategies, setLoadingStrategies] = useState(false);
   const [marketIndices, setMarketIndices] = useState([]);
   const [currentValuationSource, setCurrentValuationSource] = useState('live');
   const [refreshIntervalSeconds, setRefreshIntervalSeconds] = useState(60);
@@ -1452,6 +1516,7 @@ export default function NiftyStrategiesPage() {
   }, []);
 
   const loadMarketIndices = useCallback(async () => {
+    setLoadingIndices(true);
     try {
       const res = await fetch('/api/market-indices');
       const data = await res.json();
@@ -1463,6 +1528,8 @@ export default function NiftyStrategiesPage() {
       return nextIndices;
     } catch (_) {
       return marketIndicesRef.current;
+    } finally {
+      setLoadingIndices(false);
     }
   }, []);
 
@@ -1488,6 +1555,7 @@ export default function NiftyStrategiesPage() {
     const fallbackNiftySpot = Number((fallbackIndices.find((index) => index.key === 'NIFTY50')?.price) || 0);
 
     return Promise.all(baseStrategies.map(async (strategy) => {
+      const isClosed = strategy.status === 'closed';
       const strategyPricingSource = strategy.pricingSource || 'blend';
       const valuationSource = currentValuationSource || 'live';
       let currentSpot = Number(strategy.currentSpot || strategy.whatIfBaseSpot || strategy.savedAtSpot || 0);
@@ -1496,6 +1564,25 @@ export default function NiftyStrategiesPage() {
       let whatIfScenarios = Array.isArray(strategy.whatIfScenarios) ? strategy.whatIfScenarios : [];
       let whatIfBaseSpot = buildWhatIfBaseSpot(currentSpot);
       let availableExpiries = [...new Set((strategy.availableExpiries || []).map((expiry) => Number(expiry)).filter((expiry) => Number.isFinite(expiry) && expiry > 0))].sort((left, right) => left - right);
+
+      if (isClosed) {
+        const lotSize = Number(strategy.lotSize) || 65;
+        const closedLegs = syncLegsWithChain(strategy.legs || [], chainMap);
+        return {
+          ...strategy,
+          currentSpot: Number(strategy.savedAtSpot || currentSpot || fallbackNiftySpot || 0),
+          liveSource,
+          currentValuationSource: valuationSource,
+          strategyPricingSource,
+          availableExpiries: getStrategyExpiries(strategy),
+          liveChainMap: chainMap,
+          legCatalog: buildLegCatalog(chainMap, currentSpot, strategy.legs || []),
+          whatIfBaseSpot,
+          whatIfScenarios: [],
+          liveMetrics: strategy.liveMetrics || computeStrategyMetrics(closedLegs, lotSize, Number(strategy.savedAtSpot || currentSpot || 0)),
+          legs: closedLegs,
+        };
+      }
 
       try {
         if (!availableExpiries.length) {
@@ -1605,6 +1692,7 @@ export default function NiftyStrategiesPage() {
       } else {
         setRefreshing(true);
       }
+      setLoadingStrategies(true);
       setError('');
       try {
         const indices = refreshIndices ? await loadMarketIndices() : marketIndicesRef.current;
@@ -1622,6 +1710,7 @@ export default function NiftyStrategiesPage() {
       } finally {
         setLoading(false);
         setRefreshing(false);
+        setLoadingStrategies(false);
         refreshPromiseRef.current = null;
       }
     })();
@@ -1676,12 +1765,12 @@ export default function NiftyStrategiesPage() {
 
   useEffect(() => {
     if (!user) return;
-    loadSavedStrategies({ showSpinner: true, includeWhatIf: true, refreshIndices: true });
+    loadSavedStrategies({ showSpinner: true, includeWhatIf: false, refreshIndices: true });
   }, [user, loadSavedStrategies]);
 
   useEffect(() => {
     if (!user) return;
-    loadSavedStrategies({ showSpinner: false, includeWhatIf: true, refreshIndices: false });
+    loadSavedStrategies({ showSpinner: false, includeWhatIf: false, refreshIndices: false });
   }, [currentValuationSource, user, loadSavedStrategies]);
 
   useEffect(() => {
@@ -2057,6 +2146,14 @@ export default function NiftyStrategiesPage() {
           0% { transform: translateX(100%); }
           100% { transform: translateX(-100%); }
         }
+        @keyframes nifty-orbit-spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+        @keyframes nifty-pulse-dot {
+          0%, 100% { transform: scale(0.8); opacity: 0.55; }
+          50% { transform: scale(1.2); opacity: 1; }
+        }
       `}</style>
 
       {/* ── Learnings Ticker ── */}
@@ -2095,6 +2192,7 @@ export default function NiftyStrategiesPage() {
       {/* ── Global Market Ticker ── */}
       {marketIndices.length > 0 && (
         <div style={styles.tickerStrip} className="market-ticker">
+          {loadingIndices ? <InlineLoaderChip text="Refreshing market feed" /> : null}
           {marketIndices.map((idx) => {
             const up = idx.change >= 0;
             const palette = getTickerAppearance(idx.key, theme);
@@ -2332,7 +2430,10 @@ export default function NiftyStrategiesPage() {
 
       <div style={styles.summaryGrid} className="nifty-summary-grid">
         <div style={{ ...styles.summaryCard, borderTopColor: theme.green }}>
-          <div style={styles.summaryLabel}>Active (Bought)</div>
+          <div style={{ ...styles.summaryLabel, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+            Active (Bought)
+            {loadingStrategies ? <InlineLoaderChip text="Syncing" /> : null}
+          </div>
           <div style={{ ...styles.summaryValue, color: theme.green }} className="nifty-summary-value">{totals.activeCount}</div>
         </div>
         <div style={{ ...styles.summaryCard, borderTopColor: theme.blue }}>
@@ -2365,7 +2466,7 @@ export default function NiftyStrategiesPage() {
         </div>
       </div>
 
-      {loading ? <div style={styles.emptyState}>Loading saved strategies…</div> : null}
+      {loading ? <OrbitalLoader label="Loading saved strategies..." /> : null}
       {!loading && error ? <div style={styles.errorText}>{error}</div> : null}
       {!loading && !error && savedStrategies.length === 0 ? (
         <div style={styles.emptyState}>No Nifty options strategy has been saved yet. Open Nifty Options, add legs, and click save.</div>
