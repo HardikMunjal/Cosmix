@@ -96,7 +96,14 @@ function Unprotect-Bytes {
   }
 
   $actualHeader = $EncryptedBytes[0..($magicHeader.Length - 1)]
-  if (-not [System.Linq.Enumerable]::SequenceEqual($actualHeader, $magicHeader)) {
+  $headerMatch = $true
+  for ($i = 0; $i -lt $magicHeader.Length; $i++) {
+    if ($actualHeader[$i] -ne $magicHeader[$i]) {
+      $headerMatch = $false
+      break
+    }
+  }
+  if (-not $headerMatch) {
     throw 'Bundle header is invalid.'
   }
 

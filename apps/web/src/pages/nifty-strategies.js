@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import {
   Area,
@@ -26,6 +26,72 @@ const WHAT_IF_STEPS_EACH_SIDE = 10;
 const LEG_QUANTITY_OPTIONS = Array.from({ length: 10 }, (_, index) => String(index + 1));
 const TRANSACTION_COST_PER_ORDER = 30;
 const CURRENT_VALUATION_OPTIONS = ['live', 'blend', 'blackScholes', 'binomialCrr', 'bachelier', 'monteCarlo', 'intrinsic'];
+const REFRESH_INTERVAL_OPTIONS = [
+  { value: 0, label: 'Manual only' },
+  { value: 15, label: '15 sec' },
+  { value: 30, label: '30 sec' },
+  { value: 60, label: '1 min' },
+  { value: 120, label: '2 min' },
+  { value: 300, label: '5 min' },
+];
+const MARKET_SESSION_OPTIONS = [
+  { value: 'always', label: 'Always on', timezone: 'UTC', days: [0, 1, 2, 3, 4, 5, 6], start: '00:00', end: '23:59' },
+  { value: 'nse', label: 'India NSE: 9:00-15:30 IST', timezone: 'Asia/Kolkata', days: [1, 2, 3, 4, 5], start: '09:00', end: '15:30' },
+  { value: 'us', label: 'US Equities: 9:30-16:00 ET', timezone: 'America/New_York', days: [1, 2, 3, 4, 5], start: '09:30', end: '16:00' },
+  { value: 'europe', label: 'Europe: 8:00-16:30 London', timezone: 'Europe/London', days: [1, 2, 3, 4, 5], start: '08:00', end: '16:30' },
+  { value: 'crypto', label: 'Crypto: 24x7', timezone: 'UTC', days: [0, 1, 2, 3, 4, 5, 6], start: '00:00', end: '23:59' },
+];
+
+function parseTimeParts(value) {
+  const [hoursText, minutesText] = String(value || '00:00').split(':');
+  const hours = Number(hoursText);
+  const minutes = Number(minutesText);
+  return {
+    hours: Number.isFinite(hours) ? hours : 0,
+    minutes: Number.isFinite(minutes) ? minutes : 0,
+  };
+}
+
+function getZonedTimeParts(date, timezone) {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(date);
+  const lookup = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const weekdayMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return {
+    day: weekdayMap[lookup.weekday] ?? 0,
+    hour: Number(lookup.hour || 0),
+    minute: Number(lookup.minute || 0),
+  };
+}
+
+function isWithinMarketSession(sessionKey, now = new Date()) {
+  const session = MARKET_SESSION_OPTIONS.find((entry) => entry.value === sessionKey) || MARKET_SESSION_OPTIONS[0];
+  if (session.value === 'always' || session.value === 'crypto') return true;
+  const zoned = getZonedTimeParts(now, session.timezone);
+  if (!session.days.includes(zoned.day)) return false;
+  const start = parseTimeParts(session.start);
+  const end = parseTimeParts(session.end);
+  const currentMinutes = (zoned.hour * 60) + zoned.minute;
+  const startMinutes = (start.hours * 60) + start.minutes;
+  const endMinutes = (end.hours * 60) + end.minutes;
+  return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
+}
+
+function getRefreshPauseReason({ autoRefreshEnabled, refreshIntervalSeconds, refreshSession, pageVisible }) {
+  if (!autoRefreshEnabled || refreshIntervalSeconds <= 0) return 'Manual refresh only';
+  if (!pageVisible) return 'Paused while this tab is hidden';
+  if (!isWithinMarketSession(refreshSession)) {
+    const session = MARKET_SESSION_OPTIONS.find((entry) => entry.value === refreshSession);
+    return `Paused outside ${session?.label || 'selected market'} hours`;
+  }
+  return null;
+}
 
 function normalizePremium(value) {
   return Number((Number(value) || 0).toFixed(2));
@@ -1349,16 +1415,67 @@ export default function NiftyStrategiesPage() {
   const [user, setUser] = useState(null);
   const [savedStrategies, setSavedStrategies] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [marketIndices, setMarketIndices] = useState([]);
   const [currentValuationSource, setCurrentValuationSource] = useState('live');
+  const [refreshIntervalSeconds, setRefreshIntervalSeconds] = useState(60);
+  const [refreshSession, setRefreshSession] = useState('nse');
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
+  const [pageVisible, setPageVisible] = useState(true);
+  const [lastRefreshAt, setLastRefreshAt] = useState(null);
   const { theme, themeId } = useTheme();
   const styles = useMemo(() => applyTheme(darkStyles, themeId, theme), [themeId]);
+  const marketIndicesRef = useRef([]);
+  const refreshPromiseRef = useRef(null);
 
-  const enrichStrategies = useCallback(async (baseStrategies = []) => {
+  useEffect(() => {
+    marketIndicesRef.current = marketIndices;
+  }, [marketIndices]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+    const syncVisibility = () => setPageVisible(!document.hidden);
+    syncVisibility();
+    document.addEventListener('visibilitychange', syncVisibility);
+    return () => document.removeEventListener('visibilitychange', syncVisibility);
+  }, []);
+
+  const loadMarketIndices = useCallback(async () => {
+    try {
+      const res = await fetch('/api/market-indices');
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Unable to load market indices.');
+      }
+      const nextIndices = data.indices || [];
+      setMarketIndices(nextIndices);
+      return nextIndices;
+    } catch (_) {
+      return marketIndicesRef.current;
+    }
+  }, []);
+
+  const enrichStrategies = useCallback(async (baseStrategies = [], options = {}) => {
     if (!baseStrategies.length) return [];
 
-    const fallbackNiftySpot = Number((marketIndices.find((index) => index.key === 'NIFTY50')?.price) || 0);
+    const { includeWhatIf = true, fallbackIndices = marketIndicesRef.current } = options;
+    const requestCache = new Map();
+    const fetchJson = async (url) => {
+      if (!requestCache.has(url)) {
+        requestCache.set(url, (async () => {
+          const response = await fetch(url);
+          const data = await response.json();
+          if (!response.ok) {
+            throw new Error(data.error || 'Unable to load pricing data.');
+          }
+          return data;
+        })());
+      }
+      return requestCache.get(url);
+    };
+
+    const fallbackNiftySpot = Number((fallbackIndices.find((index) => index.key === 'NIFTY50')?.price) || 0);
 
     return Promise.all(baseStrategies.map(async (strategy) => {
       const strategyPricingSource = strategy.pricingSource || 'blend';
@@ -1370,11 +1487,7 @@ export default function NiftyStrategiesPage() {
       let whatIfBaseSpot = buildWhatIfBaseSpot(currentSpot);
 
       try {
-        const formulaResponse = await fetch(buildExpectedPricingUrl(strategy));
-        const formulaData = await formulaResponse.json();
-        if (!formulaResponse.ok) {
-          throw new Error(formulaData.error || 'Unable to load formula prices.');
-        }
+        const formulaData = await fetchJson(buildExpectedPricingUrl(strategy));
 
         currentSpot = Number(formulaData.referenceSpot || formulaData.liveSpot || fallbackNiftySpot || currentSpot || 0);
         liveSource = `${getPricingSourceLabel(valuationSource)} / current valuation`;
@@ -1391,12 +1504,9 @@ export default function NiftyStrategiesPage() {
         });
 
         whatIfBaseSpot = buildWhatIfBaseSpot(currentSpot);
-        try {
-          const scenarioResponse = await fetch(buildWhatIfPricingUrl(strategy, currentSpot));
-          const scenarioData = await scenarioResponse.json();
-          if (!scenarioResponse.ok) {
-            throw new Error(scenarioData.error || 'Unable to load what-if prices.');
-          }
+        if (includeWhatIf) {
+          try {
+            const scenarioData = await fetchJson(buildWhatIfPricingUrl(strategy, currentSpot));
           whatIfScenarios = computeProjectedScenarioValues(
             strategy.legs || [],
             Number(strategy.lotSize) || 65,
@@ -1404,8 +1514,9 @@ export default function NiftyStrategiesPage() {
             valuationSource,
             whatIfBaseSpot,
           );
-        } catch (_) {
-          whatIfScenarios = [];
+          } catch (_) {
+            whatIfScenarios = [];
+          }
         }
       } catch (_) {
         try {
@@ -1455,26 +1566,41 @@ export default function NiftyStrategiesPage() {
         legs: liveLegs,
       };
     }));
-  }, [currentValuationSource, marketIndices]);
+  }, [currentValuationSource]);
 
-  const loadSavedStrategies = useCallback(async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const response = await fetch('/api/options-strategies');
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Unable to load saved strategies.');
+  const loadSavedStrategies = useCallback(async ({ showSpinner = true, includeWhatIf = true, refreshIndices = false } = {}) => {
+    if (refreshPromiseRef.current) return refreshPromiseRef.current;
+
+    const request = (async () => {
+      if (showSpinner) {
+        setLoading(true);
+      } else {
+        setRefreshing(true);
       }
-      const enriched = await enrichStrategies(data.strategies || []);
-      setSavedStrategies(enriched);
-    } catch (loadError) {
-      setSavedStrategies([]);
-      setError(loadError.message || 'Unable to load saved strategies.');
-    } finally {
-      setLoading(false);
-    }
-  }, [enrichStrategies]);
+      setError('');
+      try {
+        const indices = refreshIndices ? await loadMarketIndices() : marketIndicesRef.current;
+        const response = await fetch('/api/options-strategies');
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || 'Unable to load saved strategies.');
+        }
+        const enriched = await enrichStrategies(data.strategies || [], { includeWhatIf, fallbackIndices: indices });
+        setSavedStrategies(enriched);
+        setLastRefreshAt(new Date().toISOString());
+      } catch (loadError) {
+        setSavedStrategies([]);
+        setError(loadError.message || 'Unable to load saved strategies.');
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+        refreshPromiseRef.current = null;
+      }
+    })();
+
+    refreshPromiseRef.current = request;
+    return request;
+  }, [enrichStrategies, loadMarketIndices]);
 
   useEffect(() => {
     restoreUserSession(router, setUser);
@@ -1482,6 +1608,21 @@ export default function NiftyStrategiesPage() {
     const storedValuationSource = localStorage.getItem('nifty-current-valuation-source');
     if (storedValuationSource && CURRENT_VALUATION_OPTIONS.includes(storedValuationSource)) {
       setCurrentValuationSource(storedValuationSource);
+    }
+
+    const storedRefreshInterval = Number(localStorage.getItem('nifty-refresh-interval-seconds') || '60');
+    if (REFRESH_INTERVAL_OPTIONS.some((entry) => entry.value === storedRefreshInterval)) {
+      setRefreshIntervalSeconds(storedRefreshInterval);
+    }
+
+    const storedRefreshSession = localStorage.getItem('nifty-refresh-session');
+    if (MARKET_SESSION_OPTIONS.some((entry) => entry.value === storedRefreshSession)) {
+      setRefreshSession(storedRefreshSession);
+    }
+
+    const storedAutoRefresh = localStorage.getItem('nifty-auto-refresh-enabled');
+    if (storedAutoRefresh != null) {
+      setAutoRefreshEnabled(storedAutoRefresh !== 'false');
     }
   }, [router]);
 
@@ -1491,24 +1632,56 @@ export default function NiftyStrategiesPage() {
   }, [currentValuationSource]);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem('nifty-refresh-interval-seconds', String(refreshIntervalSeconds));
+  }, [refreshIntervalSeconds]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem('nifty-refresh-session', refreshSession);
+  }, [refreshSession]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem('nifty-auto-refresh-enabled', String(autoRefreshEnabled));
+  }, [autoRefreshEnabled]);
+
+  useEffect(() => {
     if (!user) return;
-    loadSavedStrategies();
-    const interval = setInterval(loadSavedStrategies, 30000);
-    return () => clearInterval(interval);
+    loadSavedStrategies({ showSpinner: true, includeWhatIf: true, refreshIndices: true });
   }, [user, loadSavedStrategies]);
 
   useEffect(() => {
-    const loadIndices = async () => {
-      try {
-        const res = await fetch('/api/market-indices');
-        const data = await res.json();
-        if (res.ok) setMarketIndices(data.indices || []);
-      } catch (_) {}
+    if (!user) return;
+    loadSavedStrategies({ showSpinner: false, includeWhatIf: true, refreshIndices: false });
+  }, [currentValuationSource, user, loadSavedStrategies]);
+
+  useEffect(() => {
+    if (!user || !autoRefreshEnabled || refreshIntervalSeconds <= 0) return undefined;
+
+    const tick = () => {
+      if (document.hidden) return;
+      if (!isWithinMarketSession(refreshSession)) return;
+      loadSavedStrategies({ showSpinner: false, includeWhatIf: false, refreshIndices: true });
     };
-    loadIndices();
-    const iv = setInterval(loadIndices, 30000);
-    return () => clearInterval(iv);
-  }, []);
+
+    const interval = setInterval(tick, refreshIntervalSeconds * 1000);
+    return () => clearInterval(interval);
+  }, [autoRefreshEnabled, refreshIntervalSeconds, refreshSession, user, loadSavedStrategies]);
+
+  const refreshPauseReason = useMemo(() => getRefreshPauseReason({
+    autoRefreshEnabled,
+    refreshIntervalSeconds,
+    refreshSession,
+    pageVisible,
+  }), [autoRefreshEnabled, refreshIntervalSeconds, refreshSession, pageVisible]);
+
+  const refreshStatusLabel = useMemo(() => {
+    if (refreshing) return 'Refreshing live data...';
+    if (refreshPauseReason) return refreshPauseReason;
+    const session = MARKET_SESSION_OPTIONS.find((entry) => entry.value === refreshSession);
+    return `Auto refresh every ${refreshIntervalSeconds}s during ${session?.label || 'selected market'} hours`;
+  }, [refreshIntervalSeconds, refreshPauseReason, refreshSession, refreshing]);
 
   const deleteSavedStrategy = async (id) => {
     if (!confirm('Delete this saved Nifty options strategy?')) return;
@@ -1948,7 +2121,7 @@ export default function NiftyStrategiesPage() {
           <p style={styles.subtitle}>Saved strategies with live P/L, analyzer, and transaction tracking.</p>
         </div>
         <div style={styles.headerActions} className="nifty-header-actions">
-          <button onClick={loadSavedStrategies} style={styles.secondaryButton}>Refresh</button>
+          <button onClick={() => loadSavedStrategies({ showSpinner: false, includeWhatIf: true, refreshIndices: true })} style={styles.secondaryButton}>{refreshing ? 'Refreshing...' : 'Refresh'}</button>
           <button
             type="button"
             onClick={() => {
@@ -1975,6 +2148,39 @@ export default function NiftyStrategiesPage() {
           boxShadow: `0 10px 22px ${theme.shadow}`,
         }}
       >
+        <div style={styles.refreshControlWrap}>
+          <div style={styles.valuationTitle}>Live refresh</div>
+          <div style={styles.refreshControlRow}>
+            <label style={styles.refreshToggleLabel}>
+              <input
+                type="checkbox"
+                checked={autoRefreshEnabled}
+                onChange={(e) => setAutoRefreshEnabled(e.target.checked)}
+              />
+              Auto refresh
+            </label>
+            <select
+              value={refreshIntervalSeconds}
+              onChange={(e) => setRefreshIntervalSeconds(Number(e.target.value) || 0)}
+              style={styles.valuationSelect}
+            >
+              {REFRESH_INTERVAL_OPTIONS.map((option) => (
+                <option key={`refresh-${option.value}`} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </div>
+          <select
+            value={refreshSession}
+            onChange={(e) => setRefreshSession(e.target.value)}
+            style={styles.valuationSelect}
+          >
+            {MARKET_SESSION_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+          <div style={styles.refreshStatusText}>{refreshStatusLabel}</div>
+          <div style={styles.refreshMetaText}>{lastRefreshAt ? `Last successful refresh: ${new Date(lastRefreshAt).toLocaleTimeString()}` : 'Waiting for first successful refresh'}</div>
+        </div>
         <div style={styles.valuationControlWrap}>
           <label htmlFor="current-valuation-source" style={{ ...styles.valuationLabel, color: theme.textHeading }}>MTM valuation method</label>
           <select
@@ -2168,18 +2374,38 @@ export default function NiftyStrategiesPage() {
                     <div style={styles.strategyMeta}>
                       {strategy.expiryLabel || 'No expiry'} · {(strategy.legs || []).length} open legs{(strategy.closedLegs || []).length > 0 ? ` · ${strategy.closedLegs.length} closed` : ''} · built with {getPricingSourceLabel(strategy.strategyPricingSource || strategy.pricingSource || 'blend')}
                     </div>
-                    <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '4px' }}>
-                      Current valuation: {getPricingSourceLabel(strategy.currentValuationSource || currentValuationSource)} · {strategy.liveSource || 'saved'}
-                    </div>
+                    {!isClosed && (
+                      <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '4px' }}>
+                        Current valuation: {getPricingSourceLabel(strategy.currentValuationSource || currentValuationSource)} · {strategy.liveSource || 'saved'}
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div style={styles.summaryBadges}>
-                  <span className="nifty-badge" style={{ ...styles.badge, color: metrics.markToMarket >= 0 ? theme.green : theme.red, borderColor: metrics.markToMarket >= 0 ? theme.greenDim : theme.redDim }}>
-                    MTM {formatCurrency(metrics.markToMarket)}
-                  </span>
-                  <span className="nifty-badge" style={{ ...styles.badge, color: spotMove >= 0 ? theme.green : theme.red, borderColor: theme.cardBorderHover }}>
-                    {spotMove >= 0 ? '▲' : '▼'} {formatCurrency(Math.abs(spotMove))}
-                  </span>
+                  {isClosed ? (() => {
+                    const closedSummary = summarizeClosedStrategy(strategy);
+                    return (
+                      <>
+                        <span className="nifty-badge" style={{ ...styles.badge, color: closedSummary.realizedPL >= 0 ? theme.green : theme.red, borderColor: closedSummary.realizedPL >= 0 ? theme.greenDim : theme.redDim }}>
+                          Net P/L {formatCurrency(closedSummary.realizedPL)}
+                        </span>
+                        {closedSummary.transactionCost > 0 && (
+                          <span className="nifty-badge" style={{ ...styles.badge, color: theme.textMuted, borderColor: theme.cardBorder }}>
+                            Costs -{formatCurrency(closedSummary.transactionCost)}
+                          </span>
+                        )}
+                      </>
+                    );
+                  })() : (
+                    <>
+                      <span className="nifty-badge" style={{ ...styles.badge, color: metrics.markToMarket >= 0 ? theme.green : theme.red, borderColor: metrics.markToMarket >= 0 ? theme.greenDim : theme.redDim }}>
+                        MTM {formatCurrency(metrics.markToMarket)}
+                      </span>
+                      <span className="nifty-badge" style={{ ...styles.badge, color: spotMove >= 0 ? theme.green : theme.red, borderColor: theme.cardBorderHover }}>
+                        {spotMove >= 0 ? '▲' : '▼'} {formatCurrency(Math.abs(spotMove))}
+                      </span>
+                    </>
+                  )}
                 </div>
               </summary>
 
@@ -2694,6 +2920,38 @@ const darkStyles = {
     gap: '8px',
     minWidth: '260px',
     maxWidth: '360px',
+  },
+  refreshControlWrap: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px',
+    minWidth: '300px',
+    maxWidth: '420px',
+    flex: '1 1 320px',
+  },
+  refreshControlRow: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) minmax(140px, 180px)',
+    gap: '10px',
+    alignItems: 'center',
+  },
+  refreshToggleLabel: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '10px',
+    minHeight: '44px',
+    color: '#e2e8f0',
+    fontSize: '13px',
+    fontWeight: '600',
+  },
+  refreshStatusText: {
+    fontSize: '12px',
+    color: '#cbd5e1',
+    lineHeight: '1.5',
+  },
+  refreshMetaText: {
+    fontSize: '11px',
+    color: '#94a3b8',
   },
   valuationLabel: {
     fontSize: '12px',

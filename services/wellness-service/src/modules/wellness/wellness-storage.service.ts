@@ -59,6 +59,23 @@ type WellnessPlanTransaction = {
   sortOrder: number;
 };
 
+type WellnessActivityEntryRow = {
+  planId: string | null;
+  date: string;
+  activityKey: string;
+  activityLabel: string;
+  unit: string;
+  value: number;
+  source: 'entry' | 'default';
+  physicalContribution: number;
+  mentalContribution: number;
+  totalContribution: number;
+};
+
+type WellnessTablesReadyResult = {
+  dailyScoresReady: boolean;
+};
+
 type WellnessDerivedCache = {
   computedOnDate: string;
   planId: string | null;
@@ -117,6 +134,16 @@ function safeJsonHash(input: unknown) {
   }
 }
 
+function safeNumber(value: unknown, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function computeRuleContribution(value: number, multiplier: number, divisor: number) {
+  if (!multiplier || !Number.isFinite(value)) return 0;
+  return (value / Math.max(1, divisor)) * multiplier;
+}
+
 @Injectable()
 export class WellnessStorageService {
   private pool: any = null;
@@ -144,22 +171,295 @@ export class WellnessStorageService {
     if (!this.hasDatabase()) return null;
     if (!this.schemaPromise) {
       const pool = this.getPool();
-      this.schemaPromise = pool?.query(`
-        CREATE TABLE IF NOT EXISTS wellness_user_state (
-          user_id TEXT PRIMARY KEY,
-          payload JSONB NOT NULL,
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
+      this.schemaPromise = (async () => {
+        await pool?.query(`
+          CREATE TABLE IF NOT EXISTS wellness_settings (
+            setting_key TEXT PRIMARY KEY,
+            payload JSONB NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
 
-        CREATE TABLE IF NOT EXISTS wellness_settings (
-          setting_key TEXT PRIMARY KEY,
-          payload JSONB NOT NULL,
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-      `);
+          CREATE TABLE IF NOT EXISTS wellness_user_plans (
+            plan_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            start_date DATE NOT NULL,
+            started_at TIMESTAMPTZ NOT NULL,
+            updated_at TIMESTAMPTZ,
+            ended_at TIMESTAMPTZ,
+            status TEXT NOT NULL,
+            final_totals JSONB,
+            payload JSONB NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_wellness_user_plans_user_start
+            ON wellness_user_plans(user_id, start_date DESC);
+
+          CREATE TABLE IF NOT EXISTS wellness_user_activity_transactions (
+            transaction_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            plan_id TEXT,
+            entry_date DATE NOT NULL,
+            status TEXT NOT NULL,
+            payload JSONB NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_wellness_user_activity_transactions_user_date
+            ON wellness_user_activity_transactions(user_id, entry_date DESC);
+
+          CREATE TABLE IF NOT EXISTS wellness_plan_transactions (
+            transaction_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            plan_id TEXT,
+            entry_date DATE NOT NULL,
+            activity_name TEXT NOT NULL,
+            source TEXT NOT NULL,
+            detail TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            payload JSONB NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_wellness_plan_transactions_user_date
+            ON wellness_plan_transactions(user_id, entry_date DESC);
+
+          CREATE TABLE IF NOT EXISTS wellness_daily_scores (
+            score_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            plan_id TEXT,
+            score_date DATE NOT NULL,
+            source TEXT NOT NULL,
+            physical_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+            mental_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+            total_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+            cumulative_physical_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+            cumulative_mental_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+            cumulative_total_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+            workout_minutes DOUBLE PRECISION NOT NULL DEFAULT 0,
+            payload JSONB NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_wellness_daily_scores_user_date
+            ON wellness_daily_scores(user_id, score_date DESC);
+
+          CREATE INDEX IF NOT EXISTS idx_wellness_daily_scores_user_plan
+            ON wellness_daily_scores(user_id, plan_id);
+
+          CREATE UNIQUE INDEX IF NOT EXISTS uq_wellness_daily_scores_user_plan_date
+            ON wellness_daily_scores(user_id, COALESCE(plan_id, ''), score_date);
+
+          CREATE INDEX IF NOT EXISTS idx_wellness_daily_scores_user_total_desc
+            ON wellness_daily_scores(user_id, total_score DESC, score_date DESC);
+        `);
+      })();
     }
     await this.schemaPromise;
     return this.getPool();
+  }
+
+  private parseIsoDateTime(value: unknown, fallback: string) {
+    if (!value) return fallback;
+    const parsed = new Date(String(value));
+    if (Number.isNaN(parsed.getTime())) return fallback;
+    return parsed.toISOString();
+  }
+
+  private buildDeterministicId(parts: Array<string | number | null | undefined>) {
+    return parts
+      .map((part) => String(part ?? ''))
+      .join(':')
+      .replace(/[^a-zA-Z0-9_.:@\-]/g, '_')
+      .slice(0, 250);
+  }
+
+  private async syncNormalizedTablesForUser(
+    pool: any,
+    userId: string,
+    normalizedStore: WellnessStoredState,
+    scoringRules: WellnessScoringRules,
+  ) {
+    const preparedStore = this.normalizeStore(normalizedStore);
+    const now = this.nowIso();
+
+    const planDerivations = preparedStore.plans.map((plan) => {
+      const planEntries = this.sortEntries(preparedStore.entries.filter((entry) => entry.planId === plan.id));
+      const endDate = plan.status === 'inactive' && plan.endedAt
+        ? this.normalizeDate(plan.endedAt)
+        : this.normalizeDate();
+      const dailyScores = this.buildDailyScoresForRange(planEntries, plan.startDate, endDate, scoringRules);
+      const planTransactions = this.buildPlanTransactions(planEntries, plan, scoringRules, dailyScores, endDate);
+      return {
+        plan,
+        entries: planEntries,
+        endDate,
+        dailyScores,
+        planTransactions,
+      };
+    });
+
+    await pool.query('DELETE FROM wellness_user_plans WHERE user_id = $1', [userId]);
+    await pool.query('DELETE FROM wellness_user_activity_transactions WHERE user_id = $1', [userId]);
+    await pool.query('DELETE FROM wellness_plan_transactions WHERE user_id = $1', [userId]);
+    await pool.query('DELETE FROM wellness_daily_scores WHERE user_id = $1', [userId]);
+
+    for (const plan of preparedStore.plans) {
+      await pool.query(
+        `INSERT INTO wellness_user_plans (
+           plan_id, user_id, name, start_date, started_at, updated_at, ended_at, status, final_totals, payload, created_at
+         )
+         VALUES ($1, $2, $3, $4::date, $5::timestamptz, $6::timestamptz, $7::timestamptz, $8, $9::jsonb, $10::jsonb, NOW())
+         ON CONFLICT (plan_id) DO UPDATE
+         SET user_id = EXCLUDED.user_id,
+             name = EXCLUDED.name,
+             start_date = EXCLUDED.start_date,
+             started_at = EXCLUDED.started_at,
+             updated_at = EXCLUDED.updated_at,
+             ended_at = EXCLUDED.ended_at,
+             status = EXCLUDED.status,
+             final_totals = EXCLUDED.final_totals,
+             payload = EXCLUDED.payload`,
+        [
+          plan.id,
+          userId,
+          plan.name,
+          this.normalizeDate(plan.startDate),
+          this.parseIsoDateTime(plan.startedAt, now),
+          this.parseIsoDateTime(plan.updatedAt || plan.startedAt, now),
+          plan.endedAt ? this.parseIsoDateTime(plan.endedAt, now) : null,
+          plan.status,
+          JSON.stringify(plan.finalTotals || null),
+          JSON.stringify(plan),
+        ],
+      );
+    }
+
+    for (const entry of preparedStore.entries) {
+      const transactionId = this.buildDeterministicId([
+        userId,
+        entry.planId || 'no-plan',
+        this.normalizeDate(entry.date),
+        entry.status || 'active',
+      ]);
+      await pool.query(
+        `INSERT INTO wellness_user_activity_transactions (
+           transaction_id, user_id, plan_id, entry_date, status, payload, created_at, updated_at
+         )
+         VALUES ($1, $2, $3, $4::date, $5, $6::jsonb, NOW(), NOW())
+         ON CONFLICT (transaction_id) DO UPDATE
+         SET user_id = EXCLUDED.user_id,
+             plan_id = EXCLUDED.plan_id,
+             entry_date = EXCLUDED.entry_date,
+             status = EXCLUDED.status,
+             payload = EXCLUDED.payload,
+             updated_at = NOW()`,
+        [
+          transactionId,
+          userId,
+          entry.planId || null,
+          this.normalizeDate(entry.date),
+          entry.status || 'active',
+          JSON.stringify(entry),
+        ],
+      );
+    }
+
+    for (const planData of planDerivations) {
+      for (const transaction of planData.planTransactions) {
+        const transactionId = this.buildDeterministicId([
+          userId,
+          planData.plan.id,
+          this.normalizeDate(transaction.date),
+          transaction.source,
+          transaction.sortOrder,
+          transaction.activityName,
+        ]);
+        await pool.query(
+          `INSERT INTO wellness_plan_transactions (
+             transaction_id, user_id, plan_id, entry_date, activity_name, source, detail, sort_order, payload, created_at, updated_at
+           )
+           VALUES ($1, $2, $3, $4::date, $5, $6, $7, $8, $9::jsonb, NOW(), NOW())
+           ON CONFLICT (transaction_id) DO UPDATE
+           SET user_id = EXCLUDED.user_id,
+               plan_id = EXCLUDED.plan_id,
+               entry_date = EXCLUDED.entry_date,
+               activity_name = EXCLUDED.activity_name,
+               source = EXCLUDED.source,
+               detail = EXCLUDED.detail,
+               sort_order = EXCLUDED.sort_order,
+               payload = EXCLUDED.payload,
+               updated_at = NOW()`,
+          [
+            transactionId,
+            userId,
+            planData.plan.id,
+            this.normalizeDate(transaction.date),
+            transaction.activityName,
+            transaction.source,
+            transaction.detail,
+            transaction.sortOrder,
+            JSON.stringify(transaction),
+          ],
+        );
+      }
+
+      for (const score of planData.dailyScores) {
+        const scoreId = this.buildDeterministicId([
+          userId,
+          planData.plan.id,
+          this.normalizeDate(score.date),
+        ]);
+        await pool.query(
+          `INSERT INTO wellness_daily_scores (
+             score_id, user_id, plan_id, score_date, source,
+             physical_score, mental_score, total_score,
+             cumulative_physical_score, cumulative_mental_score, cumulative_total_score,
+             workout_minutes, payload, created_at, updated_at
+           )
+           VALUES (
+             $1, $2, $3, $4::date, $5,
+             $6, $7, $8,
+             $9, $10, $11,
+             $12, $13::jsonb, NOW(), NOW()
+           )
+           ON CONFLICT (score_id) DO UPDATE
+           SET user_id = EXCLUDED.user_id,
+               plan_id = EXCLUDED.plan_id,
+               score_date = EXCLUDED.score_date,
+               source = EXCLUDED.source,
+               physical_score = EXCLUDED.physical_score,
+               mental_score = EXCLUDED.mental_score,
+               total_score = EXCLUDED.total_score,
+               cumulative_physical_score = EXCLUDED.cumulative_physical_score,
+               cumulative_mental_score = EXCLUDED.cumulative_mental_score,
+               cumulative_total_score = EXCLUDED.cumulative_total_score,
+               workout_minutes = EXCLUDED.workout_minutes,
+               payload = EXCLUDED.payload,
+               updated_at = NOW()`,
+          [
+            scoreId,
+            userId,
+            planData.plan.id,
+            this.normalizeDate(score.date),
+            score.source,
+            score.physicalScore,
+            score.mentalScore,
+            score.totalScore,
+            score.cumulativePhysicalScore,
+            score.cumulativeMentalScore,
+            score.cumulativeTotalScore,
+            score.workoutMinutes,
+            JSON.stringify(score),
+          ],
+        );
+
+      }
+    }
   }
 
   private filePath(userId: string): string {
@@ -188,8 +488,7 @@ export class WellnessStorageService {
   private sortEntries(entries: WellnessEntry[]) {
     return [...entries]
       .filter((entry) => entry && entry.date)
-      .sort((left, right) => right.date.localeCompare(left.date))
-      .slice(0, 365);
+      .sort((left, right) => right.date.localeCompare(left.date));
   }
 
   private sortPlans(plans: WellnessPlanRecord[]) {
@@ -340,11 +639,18 @@ export class WellnessStorageService {
     if (this.hasDatabase()) {
       const pool = await this.ensureSchema();
       if (!pool) return;
-      const result = await pool.query('SELECT user_id, payload FROM wellness_user_state');
+      const result = await pool.query(`
+        SELECT DISTINCT user_id
+        FROM (
+          SELECT user_id FROM wellness_user_activity_transactions
+          UNION
+          SELECT user_id FROM wellness_user_plans
+        ) AS users
+      `);
       for (const row of result.rows || []) {
-        const normalizedStore = this.normalizeStore(row.payload);
+        const normalizedStore = await this.loadStoreFromDatabase(String(row.user_id));
         const derived = this.deriveScoresWithCache({ ...normalizedStore, derived: null }, scoringRules);
-        await this.persistStoreToDatabase(row.user_id, derived.store);
+        await this.persistStoreToDatabase(String(row.user_id), derived.store);
       }
       return;
     }
@@ -393,10 +699,19 @@ export class WellnessStorageService {
 
   private buildDailyScores(entries: WellnessEntry[], plan: WellnessPlan, scoringRules: WellnessScoringRules) {
     if (!plan?.startDate) return [] as WellnessDailyScore[];
-    const today = this.normalizeDate();
-    const start = new Date(`${plan.startDate}T00:00:00Z`);
-    const end = new Date(`${today}T00:00:00Z`);
-    if (Number.isNaN(start.getTime()) || start > end) return [];
+    const endDate = this.resolvePlanEndDate(plan);
+    return this.buildDailyScoresForRange(entries, plan.startDate, endDate, scoringRules);
+  }
+
+  private buildDailyScoresForRange(
+    entries: WellnessEntry[],
+    startDate: string,
+    endDate: string,
+    scoringRules: WellnessScoringRules,
+  ) {
+    const start = new Date(`${this.normalizeDate(startDate)}T00:00:00Z`);
+    const end = new Date(`${this.normalizeDate(endDate)}T00:00:00Z`);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return [] as WellnessDailyScore[];
 
     const entryMap = new Map(entries.map((entry) => [this.normalizeDate(entry.date), entry]));
     const ascending: WellnessDailyScore[] = [];
@@ -425,6 +740,71 @@ export class WellnessStorageService {
     }
 
     return ascending.sort((left, right) => right.date.localeCompare(left.date));
+  }
+
+  private resolvePlanEndDate(plan: WellnessPlan) {
+    if (!plan?.startDate) return this.normalizeDate();
+    if (plan.status === 'inactive' && plan.endedAt) {
+      const endedAtDate = this.normalizeDate(plan.endedAt);
+      if (endedAtDate >= this.normalizeDate(plan.startDate)) return endedAtDate;
+    }
+    return this.normalizeDate();
+  }
+
+  private buildActivityEntryRows(entries: WellnessEntry[], scoringRules: WellnessScoringRules): WellnessActivityEntryRow[] {
+    const rows: WellnessActivityEntryRow[] = [];
+    const rules = normalizeScoringRules(scoringRules);
+
+    for (const entry of entries) {
+      const entryDate = this.normalizeDate(entry.date);
+
+      for (const rule of rules.activities) {
+        const value = safeNumber(entry[rule.key]);
+        if (value === 0) continue;
+
+        const physicalContribution = roundScore(computeRuleContribution(value, rule.physicalMultiplier, rule.physicalDivisor));
+        const mentalContribution = roundScore(computeRuleContribution(value, rule.mentalMultiplier, rule.mentalDivisor));
+
+        rows.push({
+          planId: entry.planId || null,
+          date: entryDate,
+          activityKey: rule.key,
+          activityLabel: rule.label,
+          unit: rule.unit,
+          value: roundScore(value),
+          source: 'entry',
+          physicalContribution,
+          mentalContribution,
+          totalContribution: roundScore(physicalContribution + mentalContribution),
+        });
+      }
+
+      const explicitSleepHours = safeNumber(entry.sleepHours);
+      if (explicitSleepHours > 0) {
+        const sleepDelta = (explicitSleepHours - rules.sleep.baselineHours)
+          / Math.max(0.1, rules.sleep.stepHours)
+          * rules.sleep.scorePerStep;
+        const sleepContribution = roundScore(sleepDelta);
+        rows.push({
+          planId: entry.planId || null,
+          date: entryDate,
+          activityKey: 'sleepHours',
+          activityLabel: 'Sleep',
+          unit: 'hrs',
+          value: roundScore(explicitSleepHours),
+          source: 'entry',
+          physicalContribution: sleepContribution,
+          mentalContribution: sleepContribution,
+          totalContribution: roundScore(sleepContribution * 2),
+        });
+      }
+    }
+
+    return rows.sort((left, right) => {
+      const dateCompare = right.date.localeCompare(left.date);
+      if (dateCompare !== 0) return dateCompare;
+      return left.activityKey.localeCompare(right.activityKey);
+    });
   }
 
   private buildActivityTransactions(entry: WellnessEntry): WellnessPlanTransaction[] {
@@ -481,11 +861,17 @@ export class WellnessStorageService {
     return transactions;
   }
 
-  private buildPlanTransactions(entries: WellnessEntry[], plan: WellnessPlan, scoringRules: WellnessScoringRules, dailyScores: WellnessDailyScore[]) {
+  private buildPlanTransactions(
+    entries: WellnessEntry[],
+    plan: WellnessPlan,
+    scoringRules: WellnessScoringRules,
+    dailyScores: WellnessDailyScore[],
+    endDateOverride?: string,
+  ) {
     if (!plan?.startDate) return [] as WellnessPlanTransaction[];
-    const today = this.normalizeDate();
+    const effectiveEndDate = this.normalizeDate(endDateOverride || this.resolvePlanEndDate(plan));
     const start = new Date(`${plan.startDate}T00:00:00Z`);
-    const end = new Date(`${today}T00:00:00Z`);
+    const end = new Date(`${effectiveEndDate}T00:00:00Z`);
     if (Number.isNaN(start.getTime()) || start > end) return [];
 
     const entryMap = new Map(entries.map((entry) => [this.normalizeDate(entry.date), entry]));
@@ -602,9 +988,37 @@ export class WellnessStorageService {
     const pool = await this.ensureSchema();
     if (!pool) return this.defaultStore();
 
-    const result = await pool.query('SELECT payload FROM wellness_user_state WHERE user_id = $1', [userId]);
-    if (result.rows[0]?.payload) {
-      return this.normalizeStore(result.rows[0].payload);
+    const [planResult, entryResult] = await Promise.all([
+      pool.query(
+        `SELECT payload
+         FROM wellness_user_plans
+         WHERE user_id = $1
+         ORDER BY start_date DESC`,
+        [userId],
+      ),
+      pool.query(
+        `SELECT payload
+         FROM wellness_user_activity_transactions
+         WHERE user_id = $1
+         ORDER BY entry_date DESC, updated_at DESC`,
+        [userId],
+      ),
+    ]);
+
+    const plans = (planResult.rows || [])
+      .map((row: { payload: Partial<WellnessPlanRecord> }) => this.normalizePlanRecord(row.payload))
+      .filter(Boolean) as WellnessPlanRecord[];
+    const entries = this.sortEntries((entryResult.rows || [])
+      .map((row: { payload: WellnessEntry }) => this.normalizeEntryRecord(row.payload)));
+
+    if (plans.length || entries.length) {
+      return this.normalizeStore({
+        entries,
+        form: entries[0] || null,
+        plans,
+        derived: null,
+        updatedAt: this.nowIso(),
+      });
     }
 
     const legacyStore = await this.loadLegacyDatabaseStore(userId);
@@ -644,14 +1058,8 @@ export class WellnessStorageService {
     const pool = await this.ensureSchema();
     if (!pool) return;
     const normalizedStore = this.normalizeStore({ ...store, updatedAt: this.nowIso() });
-    await pool.query(
-      `INSERT INTO wellness_user_state (user_id, payload, updated_at)
-       VALUES ($1, $2::jsonb, NOW())
-       ON CONFLICT (user_id) DO UPDATE
-       SET payload = EXCLUDED.payload,
-           updated_at = NOW()`,
-      [userId, JSON.stringify(normalizedStore)],
-    );
+    const scoringRules = await this.loadScoringRules();
+    await this.syncNormalizedTablesForUser(pool, userId, normalizedStore, scoringRules);
   }
 
   private persistStoreToFile(userId: string, store: WellnessStoredState) {
@@ -701,7 +1109,6 @@ export class WellnessStorageService {
     const [store, scoringRules] = await Promise.all([this.loadStore(userId), this.loadScoringRules()]);
     const normalizedStore = this.normalizeStore(store);
     const derived = this.deriveScoresWithCache(normalizedStore, scoringRules);
-    await this.persistStore(userId, derived.store);
     return this.buildPublicState(derived.store, scoringRules);
   }
 
@@ -870,42 +1277,66 @@ export class WellnessStorageService {
     if (!plan) return null;
 
     const planEntries = this.sortEntries(normalizedStore.entries.filter((e) => e.planId === planId));
-    const endDate = plan.endedAt ? this.normalizeDate(plan.endedAt) : this.normalizeDate();
-    const start = new Date(`${plan.startDate}T00:00:00Z`);
-    const end = new Date(`${endDate}T00:00:00Z`);
-
-    if (Number.isNaN(start.getTime()) || start > end) {
-      return { plan, dailyScores: [], planTransactions: [] };
-    }
-
-    const entryMap = new Map(planEntries.map((entry) => [this.normalizeDate(entry.date), entry]));
-    const ascending: WellnessDailyScore[] = [];
-    let cumPhysical = 0;
-    let cumMental = 0;
-    let cumTotal = 0;
-
-    for (const cursor = new Date(start); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
-      const date = cursor.toISOString().slice(0, 10);
-      const entry = entryMap.get(date) || { date };
-      const result = computeEntryScores(entry, scoringRules);
-      cumPhysical = Number((cumPhysical + result.physicalScore).toFixed(2));
-      cumMental = Number((cumMental + result.mentalScore).toFixed(2));
-      cumTotal = Number((cumTotal + result.totalScore).toFixed(2));
-      ascending.push({
-        date,
-        source: entryMap.has(date) ? 'entry' : 'auto',
-        physicalScore: result.physicalScore,
-        mentalScore: result.mentalScore,
-        totalScore: result.totalScore,
-        cumulativePhysicalScore: cumPhysical,
-        cumulativeMentalScore: cumMental,
-        cumulativeTotalScore: cumTotal,
-        workoutMinutes: result.workoutMinutes,
-      });
-    }
-
-    const descending = ascending.slice().sort((a, b) => b.date.localeCompare(a.date));
-    const planTransactions = this.buildPlanTransactions(planEntries, plan, scoringRules, descending);
+    const endDate = this.resolvePlanEndDate(plan);
+    const descending = this.buildDailyScoresForRange(planEntries, plan.startDate, endDate, scoringRules);
+    const ascending = [...descending].sort((a, b) => a.date.localeCompare(b.date));
+    const planTransactions = this.buildPlanTransactions(planEntries, plan, scoringRules, descending, endDate);
     return { plan, dailyScores: ascending, planTransactions };
+  }
+
+  async loadAnalytics(userId: string, days = 90) {
+    const [store, scoringRules] = await Promise.all([this.loadStore(userId), this.loadScoringRules()]);
+    const normalizedStore = this.normalizeStore(store);
+    const lookbackDays = Math.max(1, Math.min(3650, Number(days) || 90));
+
+    const perPlan = normalizedStore.plans.map((plan) => {
+      const entries = this.sortEntries(normalizedStore.entries.filter((entry) => entry.planId === plan.id));
+      const endDate = this.resolvePlanEndDate(plan);
+      const descending = this.buildDailyScoresForRange(entries, plan.startDate, endDate, scoringRules);
+      const ascending = [...descending].sort((left, right) => left.date.localeCompare(right.date));
+      return {
+        plan,
+        dailyScoresAsc: ascending,
+      };
+    });
+
+    const selectedPlan = perPlan.find((item) => item.plan.status === 'active') || perPlan[0] || null;
+    const selectedTrendRows = (selectedPlan?.dailyScoresAsc || []).slice(-lookbackDays);
+
+    const allDailyScores = perPlan.flatMap((item) => item.dailyScoresAsc.map((score) => ({
+      planId: item.plan.id,
+      planName: item.plan.name,
+      ...score,
+    })));
+
+    const highest = allDailyScores.reduce<typeof allDailyScores[number] | null>((best, current) => {
+      if (!best) return current;
+      if (current.totalScore > best.totalScore) return current;
+      if (current.totalScore === best.totalScore && current.date > best.date) return current;
+      return best;
+    }, null);
+
+    return {
+      userId,
+      totalDays: allDailyScores.length,
+      totalPlans: normalizedStore.plans.length,
+      selectedPlanId: selectedPlan?.plan.id || null,
+      selectedPlanName: selectedPlan?.plan.name || null,
+      highestWellnessScore: highest
+        ? {
+            planId: highest.planId,
+            planName: highest.planName,
+            date: highest.date,
+            totalScore: highest.totalScore,
+            physicalScore: highest.physicalScore,
+            mentalScore: highest.mentalScore,
+          }
+        : null,
+      scoreTrend: selectedTrendRows.map((row) => ({
+        date: row.date,
+        dailyTotalScore: row.totalScore,
+        cumulativeTotalScore: row.cumulativeTotalScore,
+      })),
+    };
   }
 }

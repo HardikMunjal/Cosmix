@@ -207,11 +207,12 @@ export default function WellnessPage() {
 
   const showMicSecurityWarning = typeof window !== 'undefined' && !window.isSecureContext && window.location.hostname !== 'localhost';
 
-  const API_BASE = typeof window !== 'undefined'
+  const configuredWellnessApiBase = process.env.NEXT_PUBLIC_WELLNESS_API_BASE || '';
+  const API_BASE = configuredWellnessApiBase || (typeof window !== 'undefined'
     ? ((window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
       ? `${window.location.protocol}//${window.location.hostname}:3004`
       : '')
-    : '';
+    : '');
   const saveTimerRef = useRef(null);
   const suppressSyncCountRef = useRef(0);
 
@@ -420,17 +421,23 @@ export default function WellnessPage() {
     if (!uid) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
+      const formEntry = { ...newForm, date: String(newForm?.date || selectedDate || todayDate()).slice(0, 10) };
+      const payloadEntries = hasScorableData(formEntry)
+        ? [formEntry, ...newEntries.filter((entry) => entry.date !== formEntry.date)]
+        : newEntries;
       fetch(`${API_BASE}/wellness/data/${encodeURIComponent(uid)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entries: newEntries, form: newForm }),
+        body: JSON.stringify({ entries: payloadEntries, form: newForm }),
       })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((serverData) => {
-          if (!serverData) return;
-          applyServerState(serverData, { syncLocal: true });
+        .then((r) => {
+          if (!r.ok) throw new Error(`Sync failed with status ${r.status}`);
+          return r.json();
         })
-        .catch(() => { /* server offline, silent fail */ });
+        .catch((error) => {
+          // Keep optimistic local state when server sync fails.
+          console.warn('Wellness sync failed:', error);
+        });
     }, 1500);
   }
 
@@ -650,7 +657,7 @@ export default function WellnessPage() {
   /* ---- save ---- */
   function saveEntry(nextForm) {
     const entry = { ...nextForm, date: nextForm.date || selectedDate };
-    setEntries((cur) => [entry, ...cur.filter((e) => e.date !== entry.date)].slice(0, 60));
+    setEntries((cur) => [entry, ...cur.filter((e) => e.date !== entry.date)]);
     setForm(entry);
     return entry;
   }

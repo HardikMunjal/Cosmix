@@ -41,6 +41,33 @@ const PRICING_SOURCE_OPTIONS = [
   { value: 'intrinsic', label: 'Intrinsic only' },
   { value: 'live', label: 'Live / option chain' },
 ];
+const SAVE_TARGET_OPTIONS = [
+  { value: 'watching', label: 'Wishlist' },
+  { value: 'active', label: 'Bought' },
+];
+
+async function parseApiJsonResponse(response, fallbackErrorMessage) {
+  const rawText = await response.text();
+  let data = null;
+  try {
+    data = rawText ? JSON.parse(rawText) : {};
+  } catch (_) {
+    data = null;
+  }
+
+  if (!response.ok) {
+    const htmlResponse = typeof rawText === 'string' && rawText.trim().startsWith('<');
+    const detailed = data?.error
+      || (htmlResponse ? `Server returned HTML (${response.status} ${response.statusText}). Check /api/options-best-strategies route.` : '');
+    throw new Error(detailed || fallbackErrorMessage || `Request failed (${response.status})`);
+  }
+
+  if (!data) {
+    throw new Error('Server returned invalid JSON response. Please retry.');
+  }
+
+  return data;
+}
 
 function normalizePremium(value) {
   return Number((Number(value) || 0).toFixed(2));
@@ -531,6 +558,7 @@ export default function OptionsStrategy() {
   const [pricingSource, setPricingSource] = useState('blend');
   const [strategyName, setStrategyName] = useState('My Saved Strategy');
   const [entryDateTime, setEntryDateTime] = useState(() => toLocalDateTimeInputValue(new Date().toISOString()));
+  const [saveTarget, setSaveTarget] = useState('watching');
   const [savedStrategies, setSavedStrategies] = useState([]);
   const [saveLoading, setSaveLoading] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
@@ -542,10 +570,10 @@ export default function OptionsStrategy() {
     try {
       sessionStorage.setItem('nifty-strategy-legs', JSON.stringify(legs));
       sessionStorage.setItem('nifty-strategy-meta', JSON.stringify({
-        spotPrice, lotSize, pricingSource, ivInput, rateInput, selectedExpiry, strategyName, entryDateTime, editingStrategyId,
+        spotPrice, lotSize, pricingSource, ivInput, rateInput, selectedExpiry, strategyName, entryDateTime, editingStrategyId, saveTarget,
       }));
     } catch (_) { /* ignore */ }
-  }, [legs, spotPrice, lotSize, pricingSource, ivInput, rateInput, selectedExpiry, strategyName, entryDateTime, editingStrategyId]);
+  }, [legs, spotPrice, lotSize, pricingSource, ivInput, rateInput, selectedExpiry, strategyName, entryDateTime, editingStrategyId, saveTarget]);
 
   // Restore legs from sessionStorage on mount (before first market data fetch)
   useEffect(() => {
@@ -568,6 +596,7 @@ export default function OptionsStrategy() {
         if (meta.rateInput) setRateInput(meta.rateInput);
         if (meta.strategyName) setStrategyName(meta.strategyName);
         if (meta.entryDateTime) setEntryDateTime(meta.entryDateTime);
+        if (SAVE_TARGET_OPTIONS.some((option) => option.value === meta.saveTarget)) setSaveTarget(meta.saveTarget);
         // Only restore editingStrategyId when a strategyId param is present in the URL
         // (i.e. editing an existing strategy). For fresh creates we skip this.
         if (meta.editingStrategyId && typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('strategyId')) {
@@ -610,8 +639,7 @@ export default function OptionsStrategy() {
           strikeRange: 2000,
         }),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Optimizer failed');
+      const data = await parseApiJsonResponse(response, 'Optimizer failed');
       setOptimizerResult(data);
     } catch (err) {
       setOptimizerError(err.message);
@@ -660,8 +688,7 @@ export default function OptionsStrategy() {
           buyExpiry: Number(calBuyExpiry),
         }),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Calendar optimizer failed');
+      const data = await parseApiJsonResponse(response, 'Calendar optimizer failed');
       setCalendarResult(data);
     } catch (err) {
       setCalendarError(err.message);
@@ -799,6 +826,7 @@ export default function OptionsStrategy() {
         if (strategy.rateInput != null) setRateInput(String(strategy.rateInput));
         if (strategy.savedAtSpot) setSpotPrice(Number(strategy.savedAtSpot));
         if (strategy.selectedExpiry) setSelectedExpiry(Number(strategy.selectedExpiry));
+        setSaveTarget(strategy.status === 'active' ? 'active' : 'watching');
 
         const hydratedLegs = (strategy.legs || []).map((leg) => ({
           ...leg,
@@ -881,12 +909,9 @@ export default function OptionsStrategy() {
     loadNifty();
   }, []);
 
-  const applyMarketData = (nextChainMap, nextSpotPrice = spotPrice, nextStrikesList = strikesList) => {
+  const applyMarketData = (nextChainMap) => {
     setLegs((current) => {
-      if (!current.length && !initializedDefaultsRef.current) {
-        initializedDefaultsRef.current = true;
-        return buildDefaultLegs(nextSpotPrice, nextStrikesList, nextChainMap, getNextLegId);
-      }
+      if (!current.length) return current;
       return syncLegsWithMarket(current, nextChainMap);
     });
   };
@@ -975,6 +1000,18 @@ export default function OptionsStrategy() {
     setLegs((current) => (current.length > 1 ? current.filter((leg) => leg.id !== id) : current));
   };
 
+  const resetStrategyDraft = () => {
+    setLegs([]);
+    setEditingStrategyId(null);
+    setSaveTarget('watching');
+    initializedDefaultsRef.current = true;
+    try {
+      sessionStorage.removeItem('nifty-strategy-legs');
+      sessionStorage.removeItem('nifty-strategy-meta');
+    } catch (_) { /* ignore */ }
+    setSaveMessage('Draft reset. Add legs to build a new strategy.');
+  };
+
   // when expiry changes, refresh strikes + premiums for all legs from API
   useEffect(() => {
     if (!selectedExpiry) return;
@@ -1047,6 +1084,7 @@ export default function OptionsStrategy() {
       const payload = {
         id: editingStrategyId || `opt-${Date.now()}`,
         name: cleanName,
+        status: saveTarget,
         entryAt: selectedEntryAt,
         createdAt: existingStrategy?.createdAt || selectedEntryAt || nowIso,
         updatedAt: nowIso,
@@ -1099,7 +1137,7 @@ export default function OptionsStrategy() {
       const savedId = data.strategy?.id || payload.id;
       setEditingStrategyId(savedId);
       setSavedStrategies(data.strategies || []);
-      setSaveMessage(`${existingStrategy ? 'Updated' : 'Saved'} "${cleanName}" with fixed entry prices and ${getPricingSourceLabel(pricingSource)} pricing.`);
+      setSaveMessage(`${existingStrategy ? 'Updated' : 'Saved'} "${cleanName}" as ${saveTarget === 'active' ? 'Bought' : 'Wishlist'} with fixed entry prices and ${getPricingSourceLabel(pricingSource)} pricing.`);
       router.push(`/nifty-strategies?saved=${encodeURIComponent(String(savedId))}`);
     } catch (error) {
       setSaveMessage(error.message || 'Unable to save strategy right now.');
@@ -1477,7 +1515,7 @@ export default function OptionsStrategy() {
           </div>
         </div>
 
-        <div style={styles.metricsGrid}>
+        {legs.length > 0 && <div style={styles.metricsGrid}>
           <div style={styles.metricCard}>
             <div style={styles.metricLabel}>Entry Net Credit / Debit</div>
             <div style={styles.metricValue}>Rs. {metrics.entryNetPremium.toFixed(2)}</div>
@@ -1514,7 +1552,7 @@ export default function OptionsStrategy() {
             <div style={styles.metricLabel}>Payoff At Current Spot</div>
             <div style={{ ...styles.metricValue, color: metrics.currentPayoff >= 0 ? theme.green : theme.red }}>Rs. {metrics.currentPayoff.toFixed(2)}</div>
           </div>
-        </div>
+        </div>}
 
         <div style={styles.card}>
           <h2 style={styles.sectionTitle}>{editingStrategyId ? 'Update Saved Strategy' : 'Save Locked Strategy'}</h2>
@@ -1531,6 +1569,16 @@ export default function OptionsStrategy() {
               placeholder="Example: Weekly iron condor #1"
               style={styles.input}
             />
+            <select
+              value={saveTarget}
+              onChange={(e) => setSaveTarget(e.target.value)}
+              style={styles.input}
+              title="Save destination"
+            >
+              {SAVE_TARGET_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{`Save as ${option.label}`}</option>
+              ))}
+            </select>
             <input
               type="datetime-local"
               value={entryDateTime}
@@ -1541,6 +1589,7 @@ export default function OptionsStrategy() {
             <button onClick={saveCurrentStrategy} style={styles.saveButton}>
               {saveLoading ? 'Saving…' : editingStrategyId ? 'Update Strategy' : 'Save to Nifty Tracker'}
             </button>
+            <button onClick={resetStrategyDraft} style={styles.secondaryButton}>Reset Legs</button>
             <button onClick={() => router.push('/nifty-strategies')} style={styles.secondaryButton}>Open Nifty Tracker</button>
           </div>
           <p style={styles.explanation}>
@@ -1774,6 +1823,8 @@ export default function OptionsStrategy() {
           ) : null}
         </div>
 
+        {legs.length > 0 && (
+        <>
         <div style={styles.card}>
           <h2 style={styles.sectionTitle}>Strategy Dashboard</h2>
           <div style={styles.dashboardGrid}>
@@ -1927,6 +1978,8 @@ export default function OptionsStrategy() {
             <li>Saved snapshots keep the entry prices fixed, so dashboard MTM stays comparable even when the market moves.</li>
           </ul>
         </div>
+        </>
+        )}
       </div>
     </>
   );

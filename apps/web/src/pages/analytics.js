@@ -295,7 +295,13 @@ export default function Analytics() {
             <div style={s.chartCard} className="analytics-card">
               <div style={s.chartTitle}>Closed Strategy Net P/L</div>
               {strategyPLBars.length > 0
-                ? <BarChart items={strategyPLBars} theme={theme} />
+                ? (
+                  <div style={s.chartScrollX}>
+                    <div style={{ minWidth: `${Math.max(420, strategyPLBars.length * 88)}px` }}>
+                      <BarChart items={strategyPLBars} theme={theme} />
+                    </div>
+                  </div>
+                )
                 : <div style={s.emptyChart}>No closed strategies yet</div>
               }
             </div>
@@ -441,6 +447,12 @@ const darkS = {
     fontSize: '11px',
     color: '#f59e0b',
     marginBottom: '10px',
+  },
+  chartScrollX: {
+    overflowX: 'auto',
+    overflowY: 'hidden',
+    WebkitOverflowScrolling: 'touch',
+    paddingBottom: '4px',
   },
   emptyChart: {
     color: '#64748b',

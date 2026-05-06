@@ -1,0 +1,10 @@
+import pg from 'pg';
+const { Pool } = pg;
+const pool = new Pool({ connectionString: 'postgres://cosmix:s6Q3TnZOp7%2BtL9vtijqce8O60J%234EPUR@44.204.214.30:5432/cosmix' });
+const users = await pool.query('SELECT id, username, username_key FROM app_users');
+console.log('USERS:', JSON.stringify(users.rows, null, 2));
+const headers = await pool.query('SELECT DISTINCT owner_id, COUNT(*)::int as count FROM option_strategy_headers GROUP BY owner_id');
+console.log('HEADER owner_ids:', JSON.stringify(headers.rows, null, 2));
+const legacy = await pool.query('SELECT DISTINCT owner_id, COUNT(*)::int as count FROM option_strategies GROUP BY owner_id');
+console.log('LEGACY owner_ids:', JSON.stringify(legacy.rows, null, 2));
+await pool.end();
