@@ -32,6 +32,15 @@ function summarizeAddedActivities(selectedDate, activityNames, updates) {
   return `Added on ${formatDisplayDate(selectedDate)}: ${activityLabel} - ${formatUpdateList(updates)}`;
 }
 
+function buildActivityFieldValues(activityId, entry = {}) {
+  const actCfg = ACTIVITY_OPTIONS.find((activity) => activity.id === activityId);
+  if (!actCfg) return {};
+  return actCfg.fields.reduce((values, field) => {
+    values[field.key] = entry?.[field.key] != null && entry?.[field.key] !== 0 ? String(entry[field.key]) : '';
+    return values;
+  }, {});
+}
+
 function inferActivityNamesFromUpdates(updates) {
   return Array.from(new Set(updates.map((update) => {
     if (update.key.startsWith('running')) return 'Running';
@@ -375,17 +384,28 @@ export default function WellnessPage() {
           try {
             const response = await fetch(`${API_BASE}/wellness/data/${encodeURIComponent(participant.userId)}`);
             const data = await response.json();
-            if (!response.ok || !data?.plan || data.plan.status !== 'active') return null;
-            const sortedScores = sortDailyScoresByDate(data.dailyScores || []);
-            const latestScore = sortedScores[sortedScores.length - 1] || null;
+            // Always return a row, even if no plan or scores
+            let sortedScores = [];
+            let planName = 'No active plan';
+            let planStartDate = '';
+            if (response.ok && data?.plan && data.plan.status === 'active') {
+              sortedScores = sortDailyScoresByDate(data.dailyScores || []);
+              planName = String(data.plan.name || 'Active plan');
+              planStartDate = data.plan.startDate;
+            }
+            // If no scores, add a single zero point for sparkline
+            if (sortedScores.length === 0) {
+              sortedScores = [{ date: todayDate(), cumulativeTotalScore: 0, totalScore: 0 }];
+            }
+            const latestScore = sortedScores[sortedScores.length - 1] || { totalScore: 0 };
             const cumulativeTotal = computeLatestCumulativeScore(sortedScores);
             return {
               id: participant.userId,
               name: participant.displayName,
               username: participant.username,
               isSelf: participant.isSelf,
-              planName: String(data.plan.name || 'Active plan'),
-              planStartDate: data.plan.startDate,
+              planName,
+              planStartDate,
               cumulativeTotal,
               lastDayScore: Number(latestScore?.totalScore || 0),
               days: sortedScores.length,
@@ -395,7 +415,19 @@ export default function WellnessPage() {
               })),
             };
           } catch (_) {
-            return null;
+            // Still return a row with zero data
+            return {
+              id: participant.userId,
+              name: participant.displayName,
+              username: participant.username,
+              isSelf: participant.isSelf,
+              planName: 'No active plan',
+              planStartDate: '',
+              cumulativeTotal: 0,
+              lastDayScore: 0,
+              days: 1,
+              series: [{ date: todayDate(), cumulative: 0 }],
+            };
           }
         }));
 
@@ -662,6 +694,14 @@ export default function WellnessPage() {
     return entry;
   }
 
+  function openActivityEditor(activityId) {
+    const actCfg = activityOptions.find((activity) => activity.id === activityId);
+    if (!actCfg) return;
+    setInputMode('dropdown');
+    setSelectedActivity(activityId);
+    setFieldValues(buildActivityFieldValues(activityId, form));
+  }
+
   /* ---- dropdown save ---- */
   function handleDropdownSave() {
     const actCfg = activityOptions.find((a) => a.id === selectedActivity);
@@ -671,13 +711,13 @@ export default function WellnessPage() {
     actCfg.fields.forEach((f) => {
       const val = Number(fieldValues[f.key] || 0);
       if (val > 0) {
-        next[f.key] = (Number(next[f.key] || 0)) + val;
+        next[f.key] = val;
         updates.push({ key: f.key, label: f.label, unit: f.unit, value: next[f.key] });
       }
     });
     if (!updates.length) { setAssistantReply('Enter at least one value.'); return; }
     saveEntry(next);
-    setAssistantReply(`Added: ${formatUpdateList(updates)}`);
+    setAssistantReply(`${selectedDateEntry ? 'Updated' : 'Added'}: ${formatUpdateList(updates)}`);
     setFieldValues({});
   }
 
@@ -761,6 +801,7 @@ export default function WellnessPage() {
   }, [scoringRules]);
 
   const selectedActivityConfig = activityOptions.find((a) => a.id === selectedActivity);
+  const selectedDateEntry = entries.find((entry) => entry.date === selectedDate) || null;
   const autoScoredDays = dailyScores.filter((score) => score.source === 'auto').length;
   const loggedPlanDays = dailyScores.filter((score) => score.source === 'entry').length;
   const latestPlanScore = dailyScores[0] || null;
@@ -836,27 +877,27 @@ export default function WellnessPage() {
       { label: 'Cricket', icon: '🏏', mins: week.reduce((s, e) => s + Number(e.cricketMinutes || 0), 0), color: '#8b5cf6' },
       { label: 'Swimming', icon: '🏊', mins: week.reduce((s, e) => s + Number(e.swimmingMinutes || 0), 0), color: '#0ea5e9' },
       { label: 'Meditation', icon: '🧘', mins: week.reduce((s, e) => s + Number(e.meditationMinutes || 0), 0), color: '#38bdf8' },
-    ].filter((a) => a.mins > 0);
+    ].filter((a) => Number(a.mins) > 0);
     const totalMins = totals.reduce((s, a) => s + a.mins, 0);
     return { activities: totals, totalMins };
   }, [entries, form]);
 
   const todayActivities = useMemo(() => {
     const list = [];
-    if (Number(form.runningDistanceKm || 0) > 0 || Number(form.runningMinutes || 0) > 0) list.push({ icon: '🏃', label: 'Running', detail: `${formatMetric(form.runningDistanceKm)} km · ${formatMetric(form.runningMinutes)} mins` });
-    if (Number(form.cyclingDistanceKm || 0) > 0 || Number(form.cyclingMinutes || 0) > 0) list.push({ icon: '🚴', label: 'Cycling', detail: `${formatMetric(form.cyclingDistanceKm)} km · ${formatMetric(form.cyclingMinutes)} mins` });
-    if (Number(form.walkingDistanceKm || 0) > 0 || Number(form.walkingMinutes || 0) > 0) list.push({ icon: '🚶', label: 'Walking', detail: `${formatMetric(form.walkingDistanceKm)} km · ${formatMetric(form.walkingMinutes)} mins` });
-    if (Number(form.exerciseMinutes || 0) > 0) list.push({ icon: '💪', label: 'Workout', detail: `${formatMetric(form.exerciseMinutes)} mins` });
-      if (Number(form.yogaMinutes || 0) > 0) list.push({ icon: '🧘', label: 'Yoga', detail: `${formatMetric(form.yogaMinutes)} mins` });
-    if (Number(form.badmintonMinutes || 0) > 0) list.push({ icon: '🏸', label: 'Badminton', detail: `${formatMetric(form.badmintonMinutes)} mins` });
-    if (Number(form.footballMinutes || 0) > 0) list.push({ icon: '⚽', label: 'Football', detail: `${formatMetric(form.footballMinutes)} mins` });
-    if (Number(form.cricketMinutes || 0) > 0) list.push({ icon: '🏏', label: 'Cricket', detail: `${formatMetric(form.cricketMinutes)} mins` });
-    if (Number(form.swimmingMinutes || 0) > 0) list.push({ icon: '🏊', label: 'Swimming', detail: `${formatMetric(form.swimmingMinutes)} mins` });
-    if (Number(form.meditationMinutes || 0) > 0) list.push({ icon: '🧘', label: 'Meditation', detail: `${formatMetric(form.meditationMinutes)} mins` });
-    if (Number(form.whiskyPegs || 0) > 0) list.push({ icon: '🥃', label: 'Whisky', detail: `${formatMetric(form.whiskyPegs)} pegs` });
-    if (Number(form.fastFoodServings || 0) > 0) list.push({ icon: '🍔', label: 'Fast food', detail: `${formatMetric(form.fastFoodServings)} count` });
-    if (Number(form.sugarServings || 0) > 0) list.push({ icon: '🍬', label: 'Sugar', detail: `${formatMetric(form.sugarServings)} count` });
-    if (Number(form.sleepHours || 0) > 0) list.push({ icon: '😴', label: 'Sleep', detail: `${formatMetric(form.sleepHours)} hrs` });
+    if (Number(form.runningDistanceKm || 0) > 0 || Number(form.runningMinutes || 0) > 0) list.push({ id: 'running', icon: '🏃', label: 'Running', detail: `${formatMetric(form.runningDistanceKm)} km · ${formatMetric(form.runningMinutes)} mins` });
+    if (Number(form.cyclingDistanceKm || 0) > 0 || Number(form.cyclingMinutes || 0) > 0) list.push({ id: 'cycling', icon: '🚴', label: 'Cycling', detail: `${formatMetric(form.cyclingDistanceKm)} km · ${formatMetric(form.cyclingMinutes)} mins` });
+    if (Number(form.walkingDistanceKm || 0) > 0 || Number(form.walkingMinutes || 0) > 0) list.push({ id: 'walking', icon: '🚶', label: 'Walking', detail: `${formatMetric(form.walkingDistanceKm)} km · ${formatMetric(form.walkingMinutes)} mins` });
+    if (Number(form.exerciseMinutes || 0) > 0) list.push({ id: 'exercise', icon: '💪', label: 'Workout', detail: `${formatMetric(form.exerciseMinutes)} mins` });
+      if (Number(form.yogaMinutes || 0) > 0) list.push({ id: 'yoga', icon: '🧘', label: 'Yoga', detail: `${formatMetric(form.yogaMinutes)} mins` });
+    if (Number(form.badmintonMinutes || 0) > 0) list.push({ id: 'badminton', icon: '🏸', label: 'Badminton', detail: `${formatMetric(form.badmintonMinutes)} mins` });
+    if (Number(form.footballMinutes || 0) > 0) list.push({ id: 'football', icon: '⚽', label: 'Football', detail: `${formatMetric(form.footballMinutes)} mins` });
+    if (Number(form.cricketMinutes || 0) > 0) list.push({ id: 'cricket', icon: '🏏', label: 'Cricket', detail: `${formatMetric(form.cricketMinutes)} mins` });
+    if (Number(form.swimmingMinutes || 0) > 0) list.push({ id: 'swimming', icon: '🏊', label: 'Swimming', detail: `${formatMetric(form.swimmingMinutes)} mins` });
+    if (Number(form.meditationMinutes || 0) > 0) list.push({ id: 'meditation', icon: '🧘', label: 'Meditation', detail: `${formatMetric(form.meditationMinutes)} mins` });
+    if (Number(form.whiskyPegs || 0) > 0) list.push({ id: 'whisky', icon: '🥃', label: 'Whisky', detail: `${formatMetric(form.whiskyPegs)} pegs` });
+    if (Number(form.fastFoodServings || 0) > 0) list.push({ id: 'fastfood', icon: '🍔', label: 'Fast food', detail: `${formatMetric(form.fastFoodServings)} count` });
+    if (Number(form.sugarServings || 0) > 0) list.push({ id: 'sugar', icon: '🍬', label: 'Sugar', detail: `${formatMetric(form.sugarServings)} count` });
+    if (Number(form.sleepHours || 0) > 0) list.push({ id: 'sleep', icon: '😴', label: 'Sleep', detail: `${formatMetric(form.sleepHours)} hrs` });
     return list;
   }, [form]);
 
@@ -1127,9 +1168,13 @@ export default function WellnessPage() {
                       <span>{a.icon}</span>
                       <span style={{ fontWeight: 700 }}>{a.label}</span>
                       <span style={{ opacity: 0.8, fontSize: 13 }}>{a.detail}</span>
+                          <button type="button" onClick={() => openActivityEditor(a.id)} style={s.smallChipBtn}>Edit</button>
                     </div>
                   ))}
                 </div>
+                    {selectedDateEntry && (
+                      <div style={s.metaText}>Editing {formatDisplayDate(selectedDate)}. Save again to update this day instead of adding a new one.</div>
+                    )}
               </div>
             )}
             </>) : (
@@ -1774,6 +1819,7 @@ const s = {
   loggedTitle: { fontSize: 13, fontWeight: 700, marginBottom: 8, opacity: 0.8, textTransform: 'uppercase', letterSpacing: '0.04em' },
   loggedList: { display: 'flex', flexWrap: 'wrap', gap: 8 },
   loggedItem: { display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 12, background: 'rgba(255,255,255,0.08)', fontSize: 13, border: '1px solid rgba(255,255,255,0.06)' },
+  smallChipBtn: { border: '1px solid rgba(255,255,255,0.16)', borderRadius: 999, padding: '4px 10px', background: 'rgba(255,255,255,0.10)', color: '#fff', fontSize: 11, fontWeight: 700, cursor: 'pointer' },
   targetCard: { padding: '14px 16px', borderRadius: 14, background: 'rgba(255,255,255,0.06)', marginTop: 10, border: '1px solid rgba(255,255,255,0.06)', transition: 'background .15s' },
   progressTrack: { height: 7, borderRadius: 4, background: 'rgba(255,255,255,0.12)', marginTop: 8, marginBottom: 6, overflow: 'hidden' },
   progressBar: { height: '100%', borderRadius: 4, transition: 'width .4s ease-out' },

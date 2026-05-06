@@ -5,7 +5,7 @@ import { restoreUserSession } from '../lib/auth-client';
 const DEFAULT_STRIKES = '';
 const DEFAULT_STRIKE_GAP = '100';
 const DEFAULT_STRIKE_LEVELS = '3';
-const DEFAULT_EXPIRY_COUNT = '1';
+const DEFAULT_EXPIRY_COUNT = '3';
 const FORMULA_DETAILS = {
   intrinsic: 'Intrinsic Value: max(S - K, 0) for CE, max(K - S, 0) for PE',
   blackScholes: 'Black-Scholes: C = S*N(d1) - K*e^(-rT)*N(d2), P = K*e^(-rT)*N(-d2) - S*N(-d1)',
@@ -425,7 +425,7 @@ export default function ExpectedOptionPrices() {
                 <div style={styles.settingBlock}>
                   <div style={styles.settingLabel}>Expiry count</div>
                   <div style={styles.toggleRow}>
-                    {['1', '2', '3', '4'].map((countOption) => (
+                    {['1', '2', '3', '4', '5', '6'].map((countOption) => (
                       <button
                         key={countOption}
                         type="button"

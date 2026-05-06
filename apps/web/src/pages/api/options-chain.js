@@ -246,7 +246,7 @@ function buildSyntheticStrikes(spot, expiryUnix, config) {
 // NSE Nifty weekly expiry is Tuesday — do NOT include today blindly;
 // NSE API itself returns the correct dates (including holiday-moved dates).
 // This fallback is only used when NSE is unreachable.
-function nextExpiryDates(n = 4) {
+function nextExpiryDates(n = 12) {
   const moNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const fmt = (d) => `${String(d.getDate()).padStart(2, '0')}-${moNames[d.getMonth()]}-${d.getFullYear()}`;
   const result = [];
@@ -418,7 +418,7 @@ export default async function handler(req, res) {
       indiaVix = null;
     }
 
-    const expiries = nextExpiryDates(4);
+    const expiries = nextExpiryDates(12);
     const expirations = expiries.map((t) => t.unix);
     const expiryDates = expiries.map((t) => t.label);
     let targetExpiryUnix = expirations[0];

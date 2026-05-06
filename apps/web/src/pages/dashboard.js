@@ -16,7 +16,7 @@ const workspaceModules = [
   { icon: '📊', title: 'Strategy Analytics', desc: 'Comprehensive day-wise and strategy-wise P/L dashboard.', path: '/analytics-enhanced', accent: '#06b6d4' },
   { icon: '🏃', title: 'Running Dashboard', desc: 'Keep running and wellness analytics separate from strategy tracking.', path: '/running-analytics', accent: '#10b981' },
   { icon: '🏆', title: 'Leaderboard', desc: 'Compete with friends on running distance, speed, and fitness achievements.', path: '/leaderboard', accent: '#f59e0b' },
-  { icon: 'WL', title: 'Wellness', desc: 'Track recovery, fitness score, and routine consistency.', path: '/wellness', accent: '#10b981' },
+  { icon: 'WL', title: 'Wellness Dashboard', desc: 'Track recovery, fitness score, and routine consistency.', path: '/wellness', accent: '#10b981' },
   { icon: 'CH', title: 'Chat', desc: 'Message live users directly and keep the conversation flow simple.', path: '/chat', accent: '#8b5cf6' },
   { icon: 'MD', title: 'Media', desc: 'Manage your saved screenshots, images, and visual references.', path: '/media', accent: '#fb923c' },
 ];

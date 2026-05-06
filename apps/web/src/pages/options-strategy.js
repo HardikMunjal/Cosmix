@@ -1,3 +1,14 @@
+// Helper: Calculate risk-free rate based on expiry (simple linear interpolation between 6% for 1Y, 5.5% for 6M, 5% for 3M, 4.5% for 1M, fallback 6%)
+function calculateRateForExpiry(expiryUnix) {
+  if (!expiryUnix) return 6;
+  const now = Math.floor(Date.now() / 1000);
+  const days = Math.max((expiryUnix - now) / 86400, 0);
+  if (days >= 365) return 6;
+  if (days >= 180) return 5.5;
+  if (days >= 90) return 5;
+  if (days >= 30) return 4.5;
+  return 4;
+}
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import dynamic from 'next/dynamic';
@@ -555,6 +566,7 @@ export default function OptionsStrategy() {
   const [sourceWarning, setSourceWarning] = useState('');
   const [ivInput, setIvInput] = useState('');
   const [rateInput, setRateInput] = useState('');
+  const [rateUserOverride, setRateUserOverride] = useState(false);
   const [pricingSource, setPricingSource] = useState('blend');
   const [strategyName, setStrategyName] = useState('My Saved Strategy');
   const [entryDateTime, setEntryDateTime] = useState(() => toLocalDateTimeInputValue(new Date().toISOString()));
@@ -609,6 +621,9 @@ export default function OptionsStrategy() {
   const loadedStrategyRef = useRef(null);
   const selectedExpiryRef = useRef(selectedExpiry);
   useEffect(() => { selectedExpiryRef.current = selectedExpiry; }, [selectedExpiry]);
+
+  // Use the numeric value for calculations (strip 'auto-')
+  const effectiveRate = Number((rateInput || '').replace(/^auto-/, '')) || 6;
   const pricingInputsRef = useRef({ ivInput: '', rateInput: '' });
   useEffect(() => { pricingInputsRef.current = { ivInput, rateInput }; }, [ivInput, rateInput]);
   const pricingHydratedRef = useRef(false);
@@ -633,7 +648,7 @@ export default function OptionsStrategy() {
           spot: spotPrice,
           lotSize,
           pricingSource,
-          rate: Number(rateInput) || 6,
+          rate: effectiveRate,
           iv: Number(ivInput) || 14,
           expiry: selectedExpiry || 0,
           strikeRange: 2000,
@@ -705,14 +720,16 @@ export default function OptionsStrategy() {
     return `/api/options-chain?${params.toString()}`;
   };
 
-  const buildExpectedPricingUrl = (expiryValue, spotOverride = spotPrice) => {
-    const legExpiries = Array.from(new Set((legsRef.current || [])
-      .map((leg) => Number(leg.expiry))
-      .filter((expiry) => Number.isFinite(expiry) && expiry > 0)));
-    const requestedExpiries = Array.from(new Set([
-      ...legExpiries,
+  const buildExpectedPricingUrl = (expiryValue, spotOverride = spotPrice, requestedExpiriesOverride = null) => {
+    const requestedExpiriesSource = requestedExpiriesOverride || [
       Number(expiryValue) || 0,
-    ].filter((expiry) => Number.isFinite(expiry) && expiry > 0)));
+      ...((legsRef.current || [])
+        .map((leg) => Number(leg.expiry))
+        .filter((expiry) => Number.isFinite(expiry) && expiry > 0)),
+    ];
+    const requestedExpiries = Array.from(new Set(
+      requestedExpiriesSource.filter((expiry) => Number.isFinite(expiry) && expiry > 0),
+    ));
     const params = new URLSearchParams({
       symbol: 'NIFTY',
       strikeGap: String(STRIKE_STEP),
@@ -734,7 +751,7 @@ export default function OptionsStrategy() {
 
     if (expiryValue) {
       try {
-        const formulaResponse = await fetch(buildExpectedPricingUrl(expiryValue, nextSpot));
+        const formulaResponse = await fetch(buildExpectedPricingUrl(expiryValue, nextSpot, [expiryValue]));
         const formulaData = await formulaResponse.json();
         if (formulaResponse.ok) {
           const formulaMaps = buildQuoteMapsFromRows(
@@ -761,10 +778,13 @@ export default function OptionsStrategy() {
     if (Number.isFinite(nextSpot) && nextSpot > 0) {
       setSpotPrice(nextSpot);
     }
-    setChainMap(nextMap);
-    setIvMap(nextIvMap);
+    const mergedChainMap = mergeQuoteMaps(chainMapRef.current, nextMap);
+    const mergedIvMap = mergeQuoteMaps(ivMapRef.current, nextIvMap);
+
+    setChainMap(mergedChainMap);
+    setIvMap(mergedIvMap);
     if (unique.length) {
-      applyMarketData(nextMap, nextSpot, unique);
+      applyMarketData(mergedChainMap, nextSpot, unique);
     }
     if (quotePayload?.source) setLiveSource(quotePayload.source);
     setPricingModel(quotePayload?.pricingModel || null);
@@ -774,6 +794,38 @@ export default function OptionsStrategy() {
     setSourceWarning([quotePayload?.warning, priceModeText].filter(Boolean).join(' '));
     setLastUpdated(new Date());
     setSecsAgo(0);
+  };
+
+  const refreshExpiryQuotes = async (expiryValue) => {
+    const nextExpiry = Number(expiryValue) || null;
+    if (!nextExpiry) return;
+
+    setLiveLoading(true);
+    try {
+      const res = await fetch(buildChainUrl(nextExpiry));
+      const data = await res.json();
+      if (data.strikes && data.strikes.length) {
+        await syncQuoteState(data, nextExpiry, data.spot ? Number(data.spot.toFixed(2)) : spotPriceRef.current);
+      } else {
+        setStrikesList([]);
+      }
+    } catch (_) { /* ignore */ } finally {
+      setLiveLoading(false);
+    }
+  };
+
+  const handleDefaultExpirySelection = async (nextExpiryRaw) => {
+    const nextExpiry = Number(nextExpiryRaw) || null;
+    setSelectedExpiry(nextExpiry);
+    selectedExpiryRef.current = nextExpiry;
+
+    if (!nextExpiry) return;
+
+    if (!rateUserOverride) {
+      const rate = calculateRateForExpiry(nextExpiry);
+      setRateInput(`auto-${rate}`);
+    }
+    await refreshExpiryQuotes(nextExpiry);
   };
 
   // Tick seconds-ago counter every second
@@ -825,9 +877,7 @@ export default function OptionsStrategy() {
         if (strategy.ivInput != null) setIvInput(String(strategy.ivInput));
         if (strategy.rateInput != null) setRateInput(String(strategy.rateInput));
         if (strategy.savedAtSpot) setSpotPrice(Number(strategy.savedAtSpot));
-        if (strategy.selectedExpiry) setSelectedExpiry(Number(strategy.selectedExpiry));
         setSaveTarget(strategy.status === 'active' ? 'active' : 'watching');
-
         const hydratedLegs = (strategy.legs || []).map((leg) => ({
           ...leg,
           strike: Number(leg.strike),
@@ -838,6 +888,9 @@ export default function OptionsStrategy() {
         }));
         nextLegIdRef.current = Math.max(1, ...hydratedLegs.map((leg) => Number(leg.id) || 0)) + 1;
         setLegs(hydratedLegs);
+        if (strategy.selectedExpiry) {
+          await handleDefaultExpirySelection(Number(strategy.selectedExpiry));
+        }
         setSaveMessage(`Editing "${strategy.name}". Update the legs and save to overwrite it on the dashboard.`);
       } catch (error) {
         setSaveMessage(error.message || 'Unable to load saved strategy.');
@@ -865,7 +918,7 @@ export default function OptionsStrategy() {
           if (chainData.expirations && chainData.expirations.length) {
             setExpiryOptions(chainData.expirations);
             firstExpiry = chainData.expirations[0];
-            setSelectedExpiry(firstExpiry);
+            await handleDefaultExpirySelection(firstExpiry);
           } else {
             // fallback: next 4 Tuesdays from tomorrow (never add today — NSE handles holiday-moved dates)
             const nextTuesdays = [];
@@ -877,7 +930,7 @@ export default function OptionsStrategy() {
             }
             setExpiryOptions(nextTuesdays);
             firstExpiry = nextTuesdays[0];
-            setSelectedExpiry(firstExpiry);
+            await handleDefaultExpirySelection(firstExpiry);
           }
           // Step 2: fetch strikes specifically for the first expiry date
           const er = await fetch(buildChainUrl(firstExpiry));
@@ -909,8 +962,12 @@ export default function OptionsStrategy() {
     loadNifty();
   }, []);
 
-  const applyMarketData = (nextChainMap) => {
+  const applyMarketData = (nextChainMap, nextSpotPrice = spotPrice, nextStrikesList = strikesList) => {
     setLegs((current) => {
+      if (!current.length && !initializedDefaultsRef.current) {
+        initializedDefaultsRef.current = true;
+        return buildDefaultLegs(nextSpotPrice, nextStrikesList, nextChainMap, getNextLegId, selectedExpiryRef.current);
+      }
       if (!current.length) return current;
       return syncLegsWithMarket(current, nextChainMap);
     });
@@ -1011,22 +1068,6 @@ export default function OptionsStrategy() {
     } catch (_) { /* ignore */ }
     setSaveMessage('Draft reset. Add legs to build a new strategy.');
   };
-
-  // when expiry changes, refresh strikes + premiums for all legs from API
-  useEffect(() => {
-    if (!selectedExpiry) return;
-    (async () => {
-      try {
-        const res = await fetch(buildChainUrl(selectedExpiry));
-        const data = await res.json();
-        if (data.strikes && data.strikes.length) {
-          await syncQuoteState(data, selectedExpiry, data.spot ? Number(data.spot.toFixed(2)) : spotPriceRef.current);
-        } else {
-          setStrikesList([]);
-        }
-      } catch (e) { /* ignore */ }
-    })();
-  }, [selectedExpiry]);
 
   // Live refresh every 15 seconds — only during market hours (9 AM–3:30 PM IST, Mon–Fri)
   useEffect(() => {
@@ -1402,7 +1443,27 @@ export default function OptionsStrategy() {
             </div>
             <div style={styles.controlsRow} className="strategy-controls-row">
               <label style={styles.label}>Rate %</label>
-              <input type="number" value={rateInput} onChange={(e) => setRateInput(e.target.value)} style={styles.input} />
+              <input
+                type="number"
+                value={rateInput.replace(/^auto-/, '')}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setRateInput(val === '' ? '' : val);
+                  setRateUserOverride(val !== '');
+                }}
+                placeholder={rateInput.startsWith('auto-') ? rateInput.replace('auto-', '') : ''}
+                style={styles.input}
+              />
+              {rateUserOverride && (
+                <button
+                  type="button"
+                  style={{ marginLeft: 6, fontSize: 11, padding: '2px 6px', borderRadius: 4, border: '1px solid #ccc', background: '#f1f5f9', cursor: 'pointer' }}
+                  onClick={() => { setRateUserOverride(false); const rate = calculateRateForExpiry(selectedExpiry); setRateInput(`auto-${rate}`); }}
+                  title="Revert to auto rate for expiry"
+                >
+                  Auto
+                </button>
+              )}
             </div>
             <div style={styles.controlsRow} className="strategy-controls-row">
               <label style={styles.label}>Premium Source</label>
@@ -1433,7 +1494,7 @@ export default function OptionsStrategy() {
           </div>
           <div style={{ marginTop: 8, marginBottom: 12 }}>
             <label style={{ marginRight: 8, color: theme.textSecondary, fontSize: 12 }}>Expiry</label>
-            <select value={selectedExpiry || ''} onChange={(e) => setSelectedExpiry(Number(e.target.value) || null)} style={{ padding: '6px 8px', borderRadius: 6, background: theme.inputBg, color: theme.textPrimary, border: `1px solid ${theme.inputBorder}` }}>
+            <select value={selectedExpiry || ''} onChange={(e) => handleDefaultExpirySelection(e.target.value)} style={{ padding: '6px 8px', borderRadius: 6, background: theme.inputBg, color: theme.textPrimary, border: `1px solid ${theme.inputBorder}` }}>
               <option value="">Select expiry</option>
               {expiryOptions.map((d) => (
                 <option key={d} value={d}>{formatExpiryDisplay(d)}</option>
@@ -1458,7 +1519,11 @@ export default function OptionsStrategy() {
                 </select>
                 <select
                   value={leg.expiry || selectedExpiry || ''}
-                  onChange={(e) => updateLeg(leg.id, 'expiry', Number(e.target.value) || null)}
+                  onChange={async (e) => {
+                    const nextExpiry = Number(e.target.value) || null;
+                    updateLeg(leg.id, 'expiry', nextExpiry);
+                    await refreshExpiryQuotes(nextExpiry);
+                  }}
                   style={{ ...styles.input, minWidth: 110 }}
                 >
                   <option value="">Select</option>

@@ -22,6 +22,22 @@ function formatMetric(value) {
   return Number(numeric.toFixed(1)).toLocaleString('en-IN');
 }
 
+function buildRunEntry(entry, participant) {
+  const distance = Number(entry?.runningDistanceKm || 0);
+  const minutes = Number(entry?.runningMinutes || 0);
+  if (!Number.isFinite(distance) || !Number.isFinite(minutes) || distance <= 0 || minutes <= 0) return null;
+  const speed = (distance / minutes) * 60;
+  return {
+    id: `${participant.userId}-${entry.date || Math.random().toString(36).slice(2, 8)}`,
+    date: entry.date,
+    name: participant.displayName,
+    isSelf: participant.isSelf,
+    distance,
+    minutes,
+    speed,
+  };
+}
+
 export default function Leaderboard() {
   const router = useRouter();
   const { theme } = useTheme();
@@ -94,6 +110,9 @@ export default function Leaderboard() {
             if (!response.ok || !data?.plan || data.plan.status !== 'active') return null;
             const sortedScores = sortDailyScoresByDate(data.dailyScores || []);
             const latestScore = sortedScores[sortedScores.length - 1] || null;
+            const runEntries = (Array.isArray(data.entries) ? data.entries : [])
+              .map((entry) => buildRunEntry(entry, participant))
+              .filter(Boolean);
             return {
               id: participant.userId,
               name: participant.displayName,
@@ -104,6 +123,7 @@ export default function Leaderboard() {
               cumulativeTotal: computeLatestCumulativeScore(sortedScores),
               lastDayScore: Number(latestScore?.totalScore || 0),
               series: sortedScores.map((score) => ({ date: score.date, cumulative: Number(score.cumulativeTotalScore || 0) })),
+              runEntries,
             };
           } catch (_) {
             return null;
@@ -134,6 +154,13 @@ export default function Leaderboard() {
     return Math.max(1, max);
   }, [rows]);
 
+  const runBoardRows = useMemo(() => rows.flatMap((row) => (row.runEntries || []).map((entry) => ({ ...entry, ownerName: row.name }))), [rows]);
+  const topLongestRuns = useMemo(() => [...runBoardRows].sort((left, right) => right.distance - left.distance || right.speed - left.speed).slice(0, 10), [runBoardRows]);
+  const topFastestRuns = useMemo(
+    () => runBoardRows.filter((entry) => entry.distance > 2).sort((left, right) => right.speed - left.speed || right.distance - left.distance).slice(0, 10),
+    [runBoardRows],
+  );
+
   if (!user) {
     return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: theme.pageBgSolid, color: theme.textPrimary, fontFamily: theme.font }}>Loading...</div>;
   }
@@ -154,6 +181,37 @@ export default function Leaderboard() {
           <p style={{ margin: '5px 0 0 0', color: theme.textSecondary, fontSize: 13 }}>Current active plan ranking by cumulative score (self + buddies)</p>
         </div>
         <button onClick={() => router.push('/dashboard')} style={{ background: theme.buttonSecondaryBg || theme.cardBgAlt, color: theme.buttonSecondaryText || theme.textPrimary, border: `1px solid ${theme.buttonSecondaryBorder || theme.cardBorder}`, borderRadius: 10, padding: '9px 14px', cursor: 'pointer' }}>Dashboard</button>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 16 }}>
+        <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 12, padding: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 10, color: theme.textHeading }}>Top 10 Longest Runs</div>
+          {topLongestRuns.length === 0 ? (
+            <div style={{ color: theme.textSecondary, fontSize: 13 }}>No runs logged yet.</div>
+          ) : topLongestRuns.map((entry, index) => (
+            <div key={entry.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '8px 0', borderTop: index === 0 ? 'none' : `1px solid ${theme.cardBorder}` }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700, color: theme.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{index + 1}. {entry.name}</div>
+                <div style={{ fontSize: 11, color: theme.textSecondary }}>{entry.date}</div>
+              </div>
+              <div style={{ textAlign: 'right', fontWeight: 800, color: theme.blue || '#3b82f6' }}>{formatMetric(entry.distance)} km</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 12, padding: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 10, color: theme.textHeading }}>Top 10 Fastest Runs &gt; 2 km</div>
+          {topFastestRuns.length === 0 ? (
+            <div style={{ color: theme.textSecondary, fontSize: 13 }}>No qualifying runs yet.</div>
+          ) : topFastestRuns.map((entry, index) => (
+            <div key={entry.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '8px 0', borderTop: index === 0 ? 'none' : `1px solid ${theme.cardBorder}` }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700, color: theme.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{index + 1}. {entry.name}</div>
+                <div style={{ fontSize: 11, color: theme.textSecondary }}>{entry.date} · {formatMetric(entry.distance)} km</div>
+              </div>
+              <div style={{ textAlign: 'right', fontWeight: 800, color: theme.green }}>{formatMetric(entry.speed)} km/h</div>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 12, overflow: 'hidden' }}>

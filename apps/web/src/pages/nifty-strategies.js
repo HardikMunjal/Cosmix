@@ -156,14 +156,14 @@ function resolveChainPremium(chainMap = { CE: {}, PE: {} }, leg = {}) {
   const optionType = leg.optionType;
   const strike = Number(leg.strike);
   const expiry = Number(leg.expiry);
-  if (!optionType || !Number.isFinite(strike)) return null;
-  if (Number.isFinite(expiry) && expiry > 0) {
-    const byExpiry = chainMap?.byExpiry || {};
-    const direct = byExpiry?.[expiry]?.[optionType]?.[strike];
-    if (direct != null) return direct;
+  if (!optionType || !Number.isFinite(strike) || !Number.isFinite(expiry) || expiry <= 0) return null;
+  // Only use the exact expiry, never fallback
+  const byExpiry = chainMap?.byExpiry || {};
+  if (byExpiry[expiry] && byExpiry[expiry][optionType] && byExpiry[expiry][optionType][strike] != null) {
+    return byExpiry[expiry][optionType][strike];
   }
-  const fallback = chainMap?.[optionType]?.[strike];
-  return fallback == null ? null : fallback;
+  // If not found, do NOT fallback to any other expiry
+  return null;
 }
 
 function getPricingSourceLabel(value = 'blend') {
@@ -203,8 +203,8 @@ function resolveExpectedOptionPrice(contract, pricingSource = 'blend') {
   return normalizePremium(contract?.livePremium ?? formulaMap.blackScholes ?? formulaMap.intrinsic ?? 0);
 }
 
-function buildExpectedPricingUrl(strategy) {
-  const expiries = getStrategyExpiries(strategy);
+function buildExpectedPricingUrl(strategy, expiriesOverride = null) {
+  const expiries = Array.from(new Set((expiriesOverride || getStrategyExpiries(strategy) || []).map((expiry) => Number(expiry)).filter((expiry) => Number.isFinite(expiry) && expiry > 0))).sort((left, right) => left - right);
   const params = new URLSearchParams({
     symbol: 'NIFTY',
     strikeGap: '50',
@@ -215,6 +215,11 @@ function buildExpectedPricingUrl(strategy) {
   if (strategy?.rateInput) params.set('rate', String(strategy.rateInput));
   if (strategy?.ivInput) params.set('iv', String(strategy.ivInput));
   return `/api/options-expected-price?${params.toString()}`;
+}
+
+function buildExpiryUniverseUrl(strategy = null) {
+  const params = new URLSearchParams({ symbol: 'NIFTY' });
+  return `/api/options-chain?${params.toString()}`;
 }
 
 function buildWhatIfBaseSpot(spot) {
@@ -257,29 +262,32 @@ function buildWhatIfPricingUrl(strategy, referenceSpot) {
 }
 
 function buildLegCatalog(chainMap = { CE: {}, PE: {} }, currentSpot = 0, legs = []) {
-  const referenceSpot = buildWhatIfAxisSpot(currentSpot || 0);
-  const fallbackStrikes = buildWhatIfSpots(referenceSpot);
-  const legStrikes = new Set((legs || []).map((leg) => Number(leg.strike)).filter((strike) => Number.isFinite(strike) && strike > 0));
-
+  const spot = buildWhatIfBaseSpot(currentSpot || 0);
+  const strikeFloor = Math.max(0, Math.floor((spot - 1500) / 50) * 50);
+  const strikeCeil = Math.max(0, Math.ceil((spot + 1500) / 50) * 50);
+  const windowStrikes = [];
+  for (let strike = strikeFloor; strike <= strikeCeil; strike += 50) {
+    windowStrikes.push(strike);
+  }
   return ['CE', 'PE'].reduce((catalog, optionType) => {
-    const sourceEntries = Object.entries(chainMap?.[optionType] || {})
-      .map(([strike, premium]) => ({ strike: Number(strike), premium: Number(premium) }))
-      .filter((entry) => Number.isFinite(entry.strike) && entry.strike > 0 && Number.isFinite(entry.premium));
-
-    const nearbyEntries = sourceEntries.filter((entry) => Math.abs(entry.strike - referenceSpot) <= 600 || legStrikes.has(entry.strike));
-    const merged = new Map();
-
-    [...(nearbyEntries.length >= 8 ? nearbyEntries : sourceEntries), ...fallbackStrikes.map((strike) => ({ strike, premium: null })), ...Array.from(legStrikes).map((strike) => ({ strike, premium: chainMap?.[optionType]?.[strike] ?? null }))]
-      .forEach((entry) => {
-        if (!Number.isFinite(entry.strike) || entry.strike <= 0) return;
-        const previous = merged.get(entry.strike);
-        merged.set(entry.strike, {
-          strike: entry.strike,
-          premium: entry.premium == null ? previous?.premium ?? null : normalizePremium(entry.premium),
-        });
+    const byExpiry = chainMap?.byExpiry || {};
+    let entries = [];
+    Object.keys(byExpiry).forEach((expiryKey) => {
+      const expiry = Number(expiryKey);
+      if (!Number.isFinite(expiry) || expiry <= 0) return;
+      const expiryEntries = Object.entries(byExpiry?.[expiry]?.[optionType] || {})
+        .map(([strike, premium]) => ({ strike: Number(strike), premium: Number(premium), expiry }));
+      entries = entries.concat(expiryEntries);
+    });
+    const expirySet = new Set(entries.map((entry) => entry.expiry));
+    expirySet.forEach((expiry) => {
+      windowStrikes.forEach((strike) => {
+        if (entries.some((entry) => entry.expiry === expiry && entry.strike === strike)) return;
+        const premium = byExpiry?.[expiry]?.[optionType]?.[strike] ?? null;
+        entries.push({ strike, premium: premium != null ? Number(premium) : null, expiry });
       });
-
-    catalog[optionType] = Array.from(merged.values()).sort((left, right) => left.strike - right.strike);
+    });
+    catalog[optionType] = entries.sort((left, right) => left.strike - right.strike);
     return catalog;
   }, { CE: [], PE: [] });
 }
@@ -288,8 +296,8 @@ function getLegCatalogOptions(strategy, optionType = 'CE') {
   return strategy?.legCatalog?.[optionType] || [];
 }
 
-function getLegCatalogOption(strategy, optionType = 'CE', strike) {
-  return getLegCatalogOptions(strategy, optionType).find((entry) => String(entry.strike) === String(strike)) || null;
+function getLegCatalogOption(strategy, optionType = 'CE', strike, expiry) {
+  return getLegCatalogOptions(strategy, optionType).find((entry) => String(entry.strike) === String(strike) && (expiry == null || String(entry.expiry) === String(expiry))) || null;
 }
 
 function buildLegEditorDraft(strategy, leg = null) {
@@ -299,13 +307,14 @@ function buildLegEditorDraft(strategy, leg = null) {
   const expiryOptions = getLegEditorExpiryOptions(strategy);
   const fallbackExpiry = Number(leg?.expiry) || Number(strategy?.selectedExpiry) || expiryOptions[0] || '';
   const strike = leg?.strike ?? fallbackOption?.strike ?? '';
-  const selectedOption = getLegCatalogOption(strategy, optionType, strike) || fallbackOption;
+  const selectedOption = getLegCatalogOption(strategy, optionType, strike, fallbackExpiry) || null;
   const directPremium = resolveChainPremium(strategy?.liveChainMap || { CE: {}, PE: {}, byExpiry: {} }, {
     optionType,
     strike,
     expiry: fallbackExpiry,
   });
-  const marketPremium = directPremium ?? selectedOption?.premium ?? Number(leg?.marketPremium ?? leg?.premium ?? 0);
+  // Only use directPremium if expiry matches, else do not fallback to any other premium
+  const marketPremium = directPremium != null ? directPremium : (selectedOption?.premium ?? '');
   const entryPremium = Number(leg?.premium ?? marketPremium ?? 0);
 
   return {
@@ -345,7 +354,8 @@ function syncLegsWithChain(legs = [], chainMap = { CE: {}, PE: {} }) {
     return {
       ...leg,
       quantity: Math.max(1, parseInt(leg.quantity || 1, 10) || 1),
-      marketPremium: latest == null ? normalizePremium(leg.marketPremium ?? leg.premium) : normalizePremium(latest),
+      // Only use marketPremium if exact expiry match, else leave blank
+      marketPremium: latest == null ? '' : normalizePremium(latest),
     };
   });
 }
@@ -905,7 +915,7 @@ function WhatIfScenarioGrid({ scenarios = [], styles, theme: t }) {
 
 function LegEditor({ draft, strategy, styles, theme: t, title, onFieldChange, onSave, onCancel }) {
   const strikeOptions = getLegCatalogOptions(strategy, draft.optionType);
-  const selectedOption = getLegCatalogOption(strategy, draft.optionType, draft.strike);
+  const selectedOption = getLegCatalogOption(strategy, draft.optionType, draft.strike, draft.expiry);
   const expiryOptions = getLegEditorExpiryOptions(strategy);
 
   return (
@@ -953,8 +963,8 @@ function LegEditor({ draft, strategy, styles, theme: t, title, onFieldChange, on
         />
       </div>
       <div style={styles.legEditorMeta}>
-        <span>Live premium: <strong>{selectedOption?.premium != null ? selectedOption.premium.toFixed(2) : '—'}</strong></span>
-        <span>Current value: <strong>{draft.marketPremium || draft.premium || '—'}</strong></span>
+        <span>Live premium: <strong>{selectedOption?.premium != null ? Number(selectedOption.premium).toFixed(2) : '—'}</strong></span>
+        <span>Current value: <strong>{draft.marketPremium !== undefined && draft.marketPremium !== '' ? Number(draft.marketPremium).toFixed(2) : (draft.premium !== undefined && draft.premium !== '' ? Number(draft.premium).toFixed(2) : '—')}</strong></span>
       </div>
       <div style={styles.addLegActions}>
         <button onClick={onSave} style={styles.closeLegConfirm}>{draft.legId != null ? 'Save Leg' : 'Add Leg'}</button>
@@ -1485,9 +1495,24 @@ export default function NiftyStrategiesPage() {
       let chainMap = { CE: {}, PE: {}, byExpiry: {} };
       let whatIfScenarios = Array.isArray(strategy.whatIfScenarios) ? strategy.whatIfScenarios : [];
       let whatIfBaseSpot = buildWhatIfBaseSpot(currentSpot);
+      let availableExpiries = [...new Set((strategy.availableExpiries || []).map((expiry) => Number(expiry)).filter((expiry) => Number.isFinite(expiry) && expiry > 0))].sort((left, right) => left - right);
 
       try {
-        const formulaData = await fetchJson(buildExpectedPricingUrl(strategy));
+        if (!availableExpiries.length) {
+          try {
+            const expiryUniverseResponse = await fetch(buildExpiryUniverseUrl(strategy));
+            const expiryUniverseData = await expiryUniverseResponse.json();
+            if (expiryUniverseResponse.ok && Array.isArray(expiryUniverseData.expirations)) {
+              availableExpiries = [...new Set(expiryUniverseData.expirations.map((expiry) => Number(expiry)).filter((expiry) => Number.isFinite(expiry) && expiry > 0))].sort((left, right) => left - right);
+            }
+          } catch (_) { /* ignore */ }
+        }
+
+        const formulaResponse = await fetch(buildExpectedPricingUrl(strategy, availableExpiries));
+        const formulaData = await formulaResponse.json();
+        if (!formulaResponse.ok) {
+          throw new Error(formulaData.error || 'Unable to load formula prices.');
+        }
 
         currentSpot = Number(formulaData.referenceSpot || formulaData.liveSpot || fallbackNiftySpot || currentSpot || 0);
         liveSource = `${getPricingSourceLabel(valuationSource)} / current valuation`;
@@ -1555,7 +1580,10 @@ export default function NiftyStrategiesPage() {
         liveSource,
         currentValuationSource: valuationSource,
         strategyPricingSource,
-        availableExpiries: Object.keys(chainMap.byExpiry).map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0).sort((left, right) => left - right),
+        availableExpiries: Array.from(new Set([
+          ...availableExpiries,
+          ...Object.keys(chainMap.byExpiry).map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0),
+        ])).sort((left, right) => left - right),
         liveChainMap: chainMap,
         legCatalog: buildLegCatalog(chainMap, currentSpot, strategy.legs || []),
         whatIfBaseSpot,
@@ -1823,8 +1851,8 @@ export default function NiftyStrategiesPage() {
           strike: Number(next.strike),
           expiry: Number(next.expiry),
         });
-        const selectedOption = getLegCatalogOption(strategy, next.optionType, next.strike);
-        const selectedPremium = directPremium ?? selectedOption?.premium;
+        const selectedOption = getLegCatalogOption(strategy, next.optionType, next.strike, next.expiry);
+        const selectedPremium = directPremium != null ? directPremium : (selectedOption?.premium ?? null);
         next.marketPremium = selectedPremium != null ? String(selectedPremium.toFixed(2)) : '';
         next.premium = selectedPremium != null ? String(selectedPremium.toFixed(2)) : next.premium;
       }
@@ -1843,7 +1871,7 @@ export default function NiftyStrategiesPage() {
     const quantity = Math.max(1, parseInt(legEditor.quantity || 1, 10) || 1);
     if (!strike || !premium) { alert('Pick a strike and valid premium'); return; }
 
-    const selectedOption = getLegCatalogOption(strategy, legEditor.optionType, strike);
+    const selectedOption = getLegCatalogOption(strategy, legEditor.optionType, strike, expiry);
     const marketPremium = selectedOption?.premium != null ? selectedOption.premium : premium;
     const existingLeg = legEditor.legId != null ? (strategy.legs || []).find((leg) => Number(leg.id) === Number(legEditor.legId)) : null;
     const maxId = Math.max(0, ...(strategy.legs || []).map((leg) => Number(leg.id) || 0));
