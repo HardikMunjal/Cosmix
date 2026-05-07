@@ -55,9 +55,10 @@ function Avatar({ user, size, theme, square = false }) {
   );
 }
 
-function displayStatNumber(value) {
+function displayStatNumber(value, { hideZero = true } = {}) {
   const numeric = Number(value);
-  if (!Number.isFinite(numeric) || numeric <= 0) return '--';
+  if (!Number.isFinite(numeric)) return '--';
+  if (hideZero && numeric === 0) return '--';
   return `${numeric}`;
 }
 
@@ -265,18 +266,25 @@ export default function Dashboard() {
   const wellnessSummary = useMemo(() => {
     const entries = Array.isArray(wellnessData.entries) ? wellnessData.entries : [];
     const dailyScoresAsc = [...(wellnessData.dailyScores || [])].sort((left, right) => String(left.date || '').localeCompare(String(right.date || '')));
-    const trendPoints = dailyScoresAsc.slice(-14).map((score) => ({
-      label: String(score.date || '').slice(5),
-      value: Number(score.totalScore || 0),
+    let runningCumulative = 0;
+    const cumulativeSeries = dailyScoresAsc.map((score) => {
+      const dayScore = Number(score.totalScore || 0);
+      runningCumulative += Number.isFinite(dayScore) ? dayScore : 0;
+      return {
+        date: String(score.date || ''),
+        cumulative: Number(runningCumulative.toFixed(2)),
+      };
+    });
+
+    const trendPoints = cumulativeSeries.slice(-14).map((point) => ({
+      label: point.date.slice(5),
+      value: point.cumulative,
     }));
 
-    const today = new Date().toISOString().slice(0, 10);
-    const latest = dailyScoresAsc[dailyScoresAsc.length - 1] || null;
-    const currentScoreFromDaily = latest ? Number(latest.cumulativeTotalScore ?? latest.totalScore ?? 0) : 0;
-    const maxScoreFromDaily = dailyScoresAsc.reduce((best, score) => {
-      const value = Number(score.cumulativeTotalScore ?? score.totalScore ?? 0);
-      return Number.isFinite(value) && value > best ? value : best;
-    }, currentScoreFromDaily);
+    const latestCumulative = cumulativeSeries[cumulativeSeries.length - 1]?.cumulative ?? 0;
+    const maxScoreFromDaily = cumulativeSeries.reduce((best, point) => (
+      point.cumulative > best ? point.cumulative : best
+    ), latestCumulative);
 
     const qualifyingRuns = entries
       .filter((entry) => Number(entry.runningDistanceKm || 0) >= 2 && Number(entry.runningMinutes || 0) > 0)
@@ -311,8 +319,7 @@ export default function Dashboard() {
     }
 
     const activePlan = wellnessData.plan || (wellnessData.plans || []).find((plan) => plan?.status === 'active') || null;
-    const latestForToday = dailyScoresAsc.find((score) => String(score.date || '') === today);
-    const currentWellnessScore = Number((latestForToday?.cumulativeTotalScore ?? currentScoreFromDaily ?? 0).toFixed(1));
+    const currentWellnessScore = Number(latestCumulative.toFixed(1));
 
     return {
       trendPoints,
@@ -337,14 +344,14 @@ export default function Dashboard() {
   }), [wellnessSummary]);
 
   const wellnessCards = useMemo(() => ([
-    { label: 'Wellness score', value: displayStatNumber(profileInsights.currentWellnessScore), accent: theme.blue },
-    { label: 'Max Wellness score', value: displayStatNumber(profileInsights.maxWellnessScore), accent: theme.cyan },
+    { label: 'Wellness score', value: displayStatNumber(profileInsights.currentWellnessScore, { hideZero: false }), accent: theme.blue },
+    { label: 'Max Wellness score', value: displayStatNumber(profileInsights.maxWellnessScore, { hideZero: false }), accent: theme.cyan },
     { label: 'Fastest pace', value: displayPace(profileInsights.fastestRunPace), accent: theme.emerald },
     { label: 'Longest running streak', value: `${displayStatNumber(profileInsights.longestRunningStreak)}${displayStatNumber(profileInsights.longestRunningStreak) === '--' ? '' : 'd'}`, accent: theme.orange },
   ]), [profileInsights, theme]);
   const primaryStats = useMemo(() => ([
-    { label: 'Wellness score', value: displayStatNumber(profileInsights.currentWellnessScore), accent: theme.blue },
-    { label: 'Max Wellness score', value: displayStatNumber(profileInsights.maxWellnessScore), accent: theme.cyan },
+    { label: 'Wellness score', value: displayStatNumber(profileInsights.currentWellnessScore, { hideZero: false }), accent: theme.blue },
+    { label: 'Max Wellness score', value: displayStatNumber(profileInsights.maxWellnessScore, { hideZero: false }), accent: theme.cyan },
     { label: 'Fastest pace', value: displayPace(profileInsights.fastestRunPace), accent: theme.emerald },
     { label: 'Longest run', value: displayDistance(profileInsights.longestRun?.distanceKm), accent: theme.textHeading, meta: displayLongestRunMeta(profileInsights.longestRun) },
     { label: 'Longest running streak', value: `${displayStatNumber(profileInsights.longestRunningStreak)}${displayStatNumber(profileInsights.longestRunningStreak) === '--' ? '' : 'd'}`, accent: theme.orange },

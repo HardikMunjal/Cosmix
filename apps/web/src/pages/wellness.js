@@ -85,6 +85,15 @@ function hasScorableData(entry) {
   return SCORE_FIELDS.some((field) => Number(entry[field] || 0) > 0);
 }
 
+function clearActivityFields(entry, activityConfig) {
+  if (!entry || !activityConfig) return entry;
+  const next = { ...entry };
+  (activityConfig.fields || []).forEach((field) => {
+    next[field.key] = 0;
+  });
+  return next;
+}
+
 const ZERO_SCORES = {
   physicalScore: 0,
   mentalScore: 0,
@@ -705,6 +714,37 @@ export default function WellnessPage() {
     setFieldValues(buildActivityFieldValues(activityId, form));
   }
 
+  function handleDeleteActivity(activityId) {
+    const actCfg = activityOptions.find((activity) => activity.id === activityId);
+    if (!actCfg) return;
+
+    if (typeof window !== 'undefined' && !window.confirm(`Delete ${actCfg.label} activity from ${formatDisplayDate(selectedDate)}?`)) {
+      return;
+    }
+
+    const targetDate = selectedDate;
+    setEntries((currentEntries) => {
+      const existingEntry = currentEntries.find((entry) => entry.date === targetDate);
+      if (!existingEntry) return currentEntries;
+      const trimmedEntry = clearActivityFields(existingEntry, actCfg);
+      if (!hasScorableData(trimmedEntry)) {
+        return currentEntries.filter((entry) => entry.date !== targetDate);
+      }
+      return [trimmedEntry, ...currentEntries.filter((entry) => entry.date !== targetDate)];
+    });
+
+    setForm((currentForm) => {
+      if (String(currentForm?.date || '') !== targetDate) return currentForm;
+      const trimmedForm = clearActivityFields(currentForm, actCfg);
+      if (!hasScorableData(trimmedForm)) {
+        return { ...DEFAULT_FORM, date: targetDate };
+      }
+      return trimmedForm;
+    });
+
+    setAssistantReply(`Removed ${actCfg.label} from ${formatDisplayDate(targetDate)}.`);
+  }
+
   /* ---- dropdown save ---- */
   function handleDropdownSave() {
     const actCfg = activityOptions.find((a) => a.id === selectedActivity);
@@ -1171,7 +1211,8 @@ export default function WellnessPage() {
                       <span>{a.icon}</span>
                       <span style={{ fontWeight: 700 }}>{a.label}</span>
                       <span style={{ opacity: 0.8, fontSize: 13 }}>{a.detail}</span>
-                          <button type="button" onClick={() => openActivityEditor(a.id)} style={s.smallChipBtn}>Edit</button>
+                      <button type="button" onClick={() => openActivityEditor(a.id)} style={s.smallChipBtn}>Edit</button>
+                      <button type="button" onClick={() => handleDeleteActivity(a.id)} style={{ ...s.smallChipBtn, borderColor: 'rgba(248,113,113,0.4)', color: '#fecaca', background: 'rgba(248,113,113,0.14)' }}>Delete</button>
                     </div>
                   ))}
                 </div>
