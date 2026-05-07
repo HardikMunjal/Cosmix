@@ -257,6 +257,46 @@ export class WellnessStorageService {
           CREATE INDEX IF NOT EXISTS idx_wellness_daily_scores_user_total_desc
             ON wellness_daily_scores(user_id, total_score DESC, score_date DESC);
         `);
+
+        // Backward-compatible migrations for existing databases created before
+        // newer wellness payload columns were introduced.
+        await pool?.query(`
+          ALTER TABLE wellness_settings
+            ADD COLUMN IF NOT EXISTS payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+            ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+          ALTER TABLE wellness_user_plans
+            ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ,
+            ADD COLUMN IF NOT EXISTS ended_at TIMESTAMPTZ,
+            ADD COLUMN IF NOT EXISTS final_totals JSONB,
+            ADD COLUMN IF NOT EXISTS payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+            ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+          ALTER TABLE wellness_user_activity_transactions
+            ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active',
+            ADD COLUMN IF NOT EXISTS payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+            ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+          ALTER TABLE wellness_plan_transactions
+            ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+            ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+          ALTER TABLE wellness_daily_scores
+            ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'entry',
+            ADD COLUMN IF NOT EXISTS physical_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS mental_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS total_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS cumulative_physical_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS cumulative_mental_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS cumulative_total_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS workout_minutes DOUBLE PRECISION NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+            ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+        `);
       })();
     }
     await this.schemaPromise;

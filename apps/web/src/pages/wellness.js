@@ -485,7 +485,12 @@ export default function WellnessPage() {
         name: planNameDraft,
       }),
     })
-      .then((r) => (r.ok ? r.json() : null))
+      .then(async (r) => {
+        if (r.ok) return r.json();
+        const body = await r.json().catch(() => null);
+        const message = body?.message || body?.error || `Could not start plan (status ${r.status}).`;
+        throw new Error(String(message));
+      })
       .then((serverData) => {
         if (!serverData) return;
         applyServerState(serverData, { syncLocal: true });
@@ -495,7 +500,7 @@ export default function WellnessPage() {
         setShowPlanMenu(false);
         setAssistantReply(`Plan ${serverData.plan?.name || ''} started from ${planStartDate}. Earlier active plan data is now inactive.`.trim());
       })
-      .catch(() => setAssistantReply('Could not start the plan right now.'));
+      .catch((error) => setAssistantReply(error?.message || 'Could not start the plan right now.'));
   }
 
   function handleRenamePlan() {
