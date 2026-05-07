@@ -453,10 +453,8 @@ export default function WellnessPage() {
     if (!uid) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      const formEntry = { ...newForm, date: String(newForm?.date || selectedDate || todayDate()).slice(0, 10) };
-      const payloadEntries = hasScorableData(formEntry)
-        ? [formEntry, ...newEntries.filter((entry) => entry.date !== formEntry.date)]
-        : newEntries;
+      // Only sync persisted entries to avoid accidental form draft duplication across dates.
+      const payloadEntries = Array.isArray(newEntries) ? newEntries : [];
       fetch(`${API_BASE}/wellness/data/${encodeURIComponent(uid)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },

@@ -2,7 +2,7 @@ import { useRouter } from 'next/router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { restoreUserSession } from '../lib/auth-client';
 import { useTheme } from '../lib/ThemePicker';
-import { buildProfileInsights, buildStrategySummary, buildWellnessSummary, formatCurrency } from '../lib/userInsights';
+import { buildStrategySummary, formatCurrency } from '../lib/userInsights';
 
 const tradingDeskModules = [
   { icon: 'NT', title: 'Nifty Tracker', desc: 'Track saved strategies, live payoff movement, and execution snapshots.', path: '/nifty-strategies', accent: '#22c55e' },
@@ -206,6 +206,14 @@ export default function Dashboard() {
   const { theme } = useTheme();
   const [user, setUser] = useState(null);
   const [strategies, setStrategies] = useState([]);
+  const [wellnessData, setWellnessData] = useState({ entries: [], dailyScores: [], plans: [], plan: null });
+
+  const configuredWellnessApiBase = process.env.NEXT_PUBLIC_WELLNESS_API_BASE || '';
+  const API_BASE = configuredWellnessApiBase || (typeof window !== 'undefined'
+    ? ((window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+      ? `${window.location.protocol}//${window.location.hostname}:3004`
+      : '')
+    : '');
 
   useEffect(() => {
     restoreUserSession(router, setUser);
@@ -225,16 +233,108 @@ export default function Dashboard() {
     }
   }, []);
 
+  const loadWellnessData = useCallback(async () => {
+    if (!user) return;
+    const uid = String(user.id || user.email || user.username || '').trim();
+    if (!uid) return;
+    try {
+      const response = await fetch(`${API_BASE}/wellness/data/${encodeURIComponent(uid)}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.message || 'Unable to load wellness data');
+      setWellnessData({
+        entries: Array.isArray(data.entries) ? data.entries : [],
+        dailyScores: Array.isArray(data.dailyScores) ? data.dailyScores : [],
+        plans: Array.isArray(data.plans) ? data.plans : [],
+        plan: data.plan || null,
+      });
+    } catch (_) {
+      setWellnessData({ entries: [], dailyScores: [], plans: [], plan: null });
+    }
+  }, [API_BASE, user]);
+
   useEffect(() => {
     if (!user) return undefined;
     loadStrategies();
+    loadWellnessData();
     const interval = setInterval(loadStrategies, 30000);
+    const wellnessInterval = setInterval(loadWellnessData, 30000);
     return () => clearInterval(interval);
-  }, [user, loadStrategies]);
+  }, [user, loadStrategies, loadWellnessData]);
 
   const strategySummary = useMemo(() => buildStrategySummary(strategies), [strategies]);
-  const wellnessSummary = useMemo(() => buildWellnessSummary(user?.id), [user?.id]);
-  const profileInsights = useMemo(() => buildProfileInsights({ strategies, userId: user?.id }), [strategies, user?.id]);
+  const wellnessSummary = useMemo(() => {
+    const entries = Array.isArray(wellnessData.entries) ? wellnessData.entries : [];
+    const dailyScoresAsc = [...(wellnessData.dailyScores || [])].sort((left, right) => String(left.date || '').localeCompare(String(right.date || '')));
+    const trendPoints = dailyScoresAsc.slice(-14).map((score) => ({
+      label: String(score.date || '').slice(5),
+      value: Number(score.totalScore || 0),
+    }));
+
+    const today = new Date().toISOString().slice(0, 10);
+    const latest = dailyScoresAsc[dailyScoresAsc.length - 1] || null;
+    const currentScoreFromDaily = latest ? Number(latest.cumulativeTotalScore ?? latest.totalScore ?? 0) : 0;
+    const maxScoreFromDaily = dailyScoresAsc.reduce((best, score) => {
+      const value = Number(score.cumulativeTotalScore ?? score.totalScore ?? 0);
+      return Number.isFinite(value) && value > best ? value : best;
+    }, currentScoreFromDaily);
+
+    const qualifyingRuns = entries
+      .filter((entry) => Number(entry.runningDistanceKm || 0) >= 2 && Number(entry.runningMinutes || 0) > 0)
+      .map((entry) => Number(entry.runningMinutes || 0) / Math.max(1, Number(entry.runningDistanceKm || 0)));
+    const fastestRunPace = qualifyingRuns.length ? Number(Math.min(...qualifyingRuns).toFixed(2)) : null;
+
+    const longestRun = entries
+      .map((entry) => ({
+        distanceKm: Number(entry.runningDistanceKm || 0),
+        runningMinutes: Number(entry.runningMinutes || 0),
+        date: entry.date || null,
+      }))
+      .filter((entry) => Number.isFinite(entry.distanceKm) && entry.distanceKm > 0)
+      .sort((left, right) => right.distanceKm - left.distanceKm)[0] || null;
+
+    const runDates = [...new Set(entries
+      .filter((entry) => Number(entry.runningDistanceKm || 0) > 0)
+      .map((entry) => String(entry.date || ''))
+      .filter(Boolean))].sort();
+    let longestRunningStreak = 0;
+    let streak = 0;
+    for (let index = 0; index < runDates.length; index += 1) {
+      if (index === 0) {
+        streak = 1;
+      } else {
+        const prev = new Date(runDates[index - 1]);
+        const curr = new Date(runDates[index]);
+        const diff = Math.round((curr.getTime() - prev.getTime()) / 86400000);
+        streak = diff === 1 ? streak + 1 : 1;
+      }
+      if (streak > longestRunningStreak) longestRunningStreak = streak;
+    }
+
+    const activePlan = wellnessData.plan || (wellnessData.plans || []).find((plan) => plan?.status === 'active') || null;
+    const latestForToday = dailyScoresAsc.find((score) => String(score.date || '') === today);
+    const currentWellnessScore = Number((latestForToday?.cumulativeTotalScore ?? currentScoreFromDaily ?? 0).toFixed(1));
+
+    return {
+      trendPoints,
+      currentWellnessScore,
+      maxWellnessScore: Number((maxScoreFromDaily || 0).toFixed(1)),
+      fastestRunPace,
+      longestRun,
+      longestRunningStreak,
+      plannedGoals: activePlan ? 1 : 0,
+      completedGoals: 0,
+    };
+  }, [wellnessData]);
+
+  const profileInsights = useMemo(() => ({
+    currentWellnessScore: wellnessSummary.currentWellnessScore,
+    maxWellnessScore: wellnessSummary.maxWellnessScore,
+    fastestRunPace: wellnessSummary.fastestRunPace,
+    longestRun: wellnessSummary.longestRun,
+    longestRunningStreak: wellnessSummary.longestRunningStreak,
+    plannedGoals: wellnessSummary.plannedGoals,
+    completedGoals: wellnessSummary.completedGoals,
+  }), [wellnessSummary]);
 
   const wellnessCards = useMemo(() => ([
     { label: 'Wellness score', value: displayStatNumber(profileInsights.currentWellnessScore), accent: theme.blue },
@@ -322,7 +422,18 @@ export default function Dashboard() {
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Wellness</div>
             </div>
 
-            <LineChart points={wellnessSummary.trendPoints} theme={theme} emptyLabel="Add wellness entries to see your trend" color={theme.blue} gradientId="wellness-line-fill" height={156} />
+            <LineChart
+              points={wellnessSummary.trendPoints}
+              theme={theme}
+              emptyLabel="Add wellness entries to see your trend"
+              color={theme.blue}
+              gradientId="wellness-line-fill"
+              vivid
+              height={156}
+              valueAccessor={(point) => Number(point.value || 0)}
+              labelAccessor={(point) => String(point.label || '')}
+              annotationFormatter={(value) => `${value >= 0 ? '+' : ''}${Number(value || 0).toFixed(1)}`}
+            />
 
             <MetricGrid items={wellnessCards} theme={theme} />
           </div>
