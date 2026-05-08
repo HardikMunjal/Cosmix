@@ -19,6 +19,7 @@ RUN npm install --omit=dev --legacy-peer-deps
 
 COPY --from=builder /usr/src/app/.next ./.next
 COPY --from=builder /usr/src/app/next.config.js ./next.config.js
+COPY --from=builder /usr/src/app/public ./public
 
 EXPOSE 3005
 
