@@ -74,7 +74,7 @@ function formatFormula(multiplier, divisor, unit) {
 }
 
 const SCORE_FIELDS = [
-  'runningMinutes', 'runningDistanceKm', 'cyclingMinutes', 'cyclingDistanceKm', 'walkingMinutes', 'walkingDistanceKm',
+  'runningMinutes', 'runningDistanceKm', 'cyclingMinutes', 'walkingMinutes', 'walkingDistanceKm',
   'exerciseMinutes', 'yogaMinutes', 'badmintonMinutes', 'footballMinutes',
   'cricketMinutes', 'swimmingMinutes', 'meditationMinutes', 'whiskyPegs',
   'fastFoodServings', 'sugarServings', 'headacheLevel', 'sleepHours',
@@ -108,7 +108,7 @@ const ZERO_SCORES = {
 /* ---------- activity dropdown config ---------- */
 const ACTIVITY_OPTIONS = [
   { id: 'running', label: 'Running', icon: '🏃', fields: [{ key: 'runningDistanceKm', label: 'Distance', unit: 'km', step: 0.1 }, { key: 'runningMinutes', label: 'Time', unit: 'mins', step: 1 }] },
-  { id: 'cycling', label: 'Cycling', icon: '🚴', fields: [{ key: 'cyclingDistanceKm', label: 'Distance', unit: 'km', step: 0.1 }, { key: 'cyclingMinutes', label: 'Time', unit: 'mins', step: 1 }] },
+  { id: 'cycling', label: 'Cycling', icon: '🚴', fields: [{ key: 'cyclingMinutes', label: 'Time', unit: 'mins', step: 1 }] },
   { id: 'walking', label: 'Walking', icon: '🚶', fields: [{ key: 'walkingDistanceKm', label: 'Distance', unit: 'km', step: 0.1 }, { key: 'walkingMinutes', label: 'Time', unit: 'mins', step: 1 }] },
   { id: 'exercise', label: 'Workout', icon: '💪', fields: [{ key: 'exerciseMinutes', label: 'Time', unit: 'mins', step: 1 }] },
   { id: 'yoga', label: 'Yoga', icon: '🧘', fields: [{ key: 'yogaMinutes', label: 'Time', unit: 'mins', step: 1 }] },
@@ -928,7 +928,7 @@ export default function WellnessPage() {
   const todayActivities = useMemo(() => {
     const list = [];
     if (Number(form.runningDistanceKm || 0) > 0 || Number(form.runningMinutes || 0) > 0) list.push({ id: 'running', icon: '🏃', label: 'Running', detail: `${formatMetric(form.runningDistanceKm)} km · ${formatMetric(form.runningMinutes)} mins` });
-    if (Number(form.cyclingDistanceKm || 0) > 0 || Number(form.cyclingMinutes || 0) > 0) list.push({ id: 'cycling', icon: '🚴', label: 'Cycling', detail: `${formatMetric(form.cyclingDistanceKm)} km · ${formatMetric(form.cyclingMinutes)} mins` });
+    if (Number(form.cyclingMinutes || 0) > 0) list.push({ id: 'cycling', icon: '🚴', label: 'Cycling', detail: `${formatMetric(form.cyclingMinutes)} mins` });
     if (Number(form.walkingDistanceKm || 0) > 0 || Number(form.walkingMinutes || 0) > 0) list.push({ id: 'walking', icon: '🚶', label: 'Walking', detail: `${formatMetric(form.walkingDistanceKm)} km · ${formatMetric(form.walkingMinutes)} mins` });
     if (Number(form.exerciseMinutes || 0) > 0) list.push({ id: 'exercise', icon: '💪', label: 'Workout', detail: `${formatMetric(form.exerciseMinutes)} mins` });
       if (Number(form.yogaMinutes || 0) > 0) list.push({ id: 'yoga', icon: '🧘', label: 'Yoga', detail: `${formatMetric(form.yogaMinutes)} mins` });
