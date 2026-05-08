@@ -12,6 +12,48 @@ type ChatKind = 'group' | 'dm';
 type FriendshipStatus = 'pending' | 'accepted';
 type GroupRole = 'owner' | 'admin' | 'member' | 'viewer';
 
+type GroupSettingsRecord = {
+    id: string;
+    groupId: string;
+    allowJoinByLink: boolean;
+    clearMessagesAfterHours: number | null;
+    onlyAdminsCreateFolders: boolean;
+    onlyAdminsBookmarkMessages: boolean;
+    updatedBy: string;
+    createdAt: string;
+    updatedAt: string;
+};
+
+type GroupFolderRecord = {
+    id: string;
+    groupId: string;
+    name: string;
+    description: string;
+    createdBy: string;
+    createdAt: string;
+    updatedAt: string;
+};
+
+type GroupFolderItemRecord = {
+    id: string;
+    groupId: string;
+    folderId: string;
+    messageId: string | null;
+    imageId: string | null;
+    note: string;
+    createdBy: string;
+    createdAt: string;
+};
+
+type GroupBookmarkRecord = {
+    id: string;
+    groupId: string;
+    messageId: string;
+    bookmarkedBy: string;
+    note: string;
+    createdAt: string;
+};
+
 type ChatActor = {
     username: string;
     userId?: string | null;
@@ -133,6 +175,34 @@ type GroupView = {
     createdAt: string;
     memberships: GroupMembershipView[];
     images: GroupImageView[];
+    settings: {
+        allowJoinByLink: boolean;
+        clearMessagesAfterHours: number | null;
+        onlyAdminsCreateFolders: boolean;
+        onlyAdminsBookmarkMessages: boolean;
+    };
+    folders: Array<{
+        id: string;
+        name: string;
+        description: string;
+        createdBy: string;
+        createdAt: string;
+        items: Array<{
+            id: string;
+            messageId: string | null;
+            imageId: string | null;
+            note: string;
+            createdBy: string;
+            createdAt: string;
+        }>;
+    }>;
+    bookmarks: Array<{
+        id: string;
+        messageId: string;
+        bookmarkedBy: string;
+        note: string;
+        createdAt: string;
+    }>;
 };
 
 type BootstrapPayload = {
@@ -196,6 +266,48 @@ type GroupImageCommentRow = {
     updated_at: Date;
 };
 
+type GroupSettingsRow = {
+    id: string;
+    group_id: string;
+    allow_join_by_link: boolean;
+    clear_messages_after_hours: number | null;
+    only_admins_create_folders: boolean;
+    only_admins_bookmark_messages: boolean;
+    updated_by: string;
+    created_at: Date;
+    updated_at: Date;
+};
+
+type GroupFolderRow = {
+    id: string;
+    group_id: string;
+    name: string;
+    description: string;
+    created_by: string;
+    created_at: Date;
+    updated_at: Date;
+};
+
+type GroupFolderItemRow = {
+    id: string;
+    group_id: string;
+    folder_id: string;
+    message_id: string | null;
+    image_id: string | null;
+    note: string;
+    created_by: string;
+    created_at: Date;
+};
+
+type GroupBookmarkRow = {
+    id: string;
+    group_id: string;
+    message_id: string;
+    bookmarked_by: string;
+    note: string;
+    created_at: Date;
+};
+
 type ChatMessageRow = {
     payload: any;
 };
@@ -213,6 +325,10 @@ export class ChatService {
     private memberships: GroupMembershipRecord[] = [];
     private images: GroupImageRecord[] = [];
     private comments: GroupImageCommentRecord[] = [];
+    private groupSettings: GroupSettingsRecord[] = [];
+    private folders: GroupFolderRecord[] = [];
+    private folderItems: GroupFolderItemRecord[] = [];
+    private bookmarks: GroupBookmarkRecord[] = [];
 
     private hasDatabase() {
         return Boolean(this.databaseUrl);
@@ -274,6 +390,137 @@ export class ChatService {
         }
     }
 
+    private defaultGroupSettings(groupId: string, actorUsername: string): GroupSettingsRecord {
+        const now = this.nowIso();
+        return {
+            id: this.buildId('group-settings'),
+            groupId,
+            allowJoinByLink: true,
+            clearMessagesAfterHours: null,
+            onlyAdminsCreateFolders: false,
+            onlyAdminsBookmarkMessages: false,
+            updatedBy: this.normalizeUsername(actorUsername),
+            createdAt: now,
+            updatedAt: now,
+        };
+    }
+
+    private memoryGroupSettings(groupId: string) {
+        return this.groupSettings.find((settings) => settings.groupId === groupId) || null;
+    }
+
+    private async getGroupSettings(groupId: string): Promise<GroupSettingsRecord | null> {
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            const result = await pool?.query('SELECT * FROM chat_group_settings WHERE group_id = $1 LIMIT 1', [groupId]);
+            const row = (result?.rows?.[0] || null) as GroupSettingsRow | null;
+            if (!row) return null;
+            return {
+                id: row.id,
+                groupId: row.group_id,
+                allowJoinByLink: row.allow_join_by_link,
+                clearMessagesAfterHours: row.clear_messages_after_hours,
+                onlyAdminsCreateFolders: row.only_admins_create_folders,
+                onlyAdminsBookmarkMessages: row.only_admins_bookmark_messages,
+                updatedBy: row.updated_by,
+                createdAt: row.created_at.toISOString(),
+                updatedAt: row.updated_at.toISOString(),
+            };
+        }
+        return this.memoryGroupSettings(groupId);
+    }
+
+    private async assertGroupOwner(username: string, groupId: string) {
+        const normalizedUsername = this.normalizeUsername(username);
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            const result = await pool?.query(
+                `SELECT role
+                 FROM chat_group_memberships
+                 WHERE group_id = $1 AND username = $2
+                 LIMIT 1`,
+                [groupId, normalizedUsername],
+            );
+            const role = result?.rows?.[0]?.role as GroupRole | undefined;
+            if (role !== 'owner') {
+                throw new ForbiddenException('Only group owner can manage group security settings.');
+            }
+            return;
+        }
+
+        const membership = this.memoryMembership(groupId, normalizedUsername);
+        if (!membership || membership.role !== 'owner') {
+            throw new ForbiddenException('Only group owner can manage group security settings.');
+        }
+    }
+
+    private async assertGroupManagementPermission(username: string, groupId: string, action: 'folder' | 'bookmark') {
+        const normalizedUsername = this.normalizeUsername(username);
+        const settings = await this.getGroupSettings(groupId);
+
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            const membershipResult = await pool?.query(
+                'SELECT role, can_view FROM chat_group_memberships WHERE group_id = $1 AND username = $2 LIMIT 1',
+                [groupId, normalizedUsername],
+            );
+            const membership = membershipResult?.rows?.[0];
+            if (!membership?.can_view) {
+                throw new ForbiddenException('You do not have access to this group.');
+            }
+            const role = membership.role as GroupRole;
+            const onlyAdmins = action === 'folder'
+                ? settings?.onlyAdminsCreateFolders
+                : settings?.onlyAdminsBookmarkMessages;
+            if (onlyAdmins && role !== 'owner' && role !== 'admin') {
+                throw new ForbiddenException('Only admins and owner can perform this action in this group.');
+            }
+            return;
+        }
+
+        const membership = this.memoryMembership(groupId, normalizedUsername);
+        if (!membership || !membership.canView) {
+            throw new ForbiddenException('You do not have access to this group.');
+        }
+        const onlyAdmins = action === 'folder'
+            ? settings?.onlyAdminsCreateFolders
+            : settings?.onlyAdminsBookmarkMessages;
+        if (onlyAdmins && membership.role !== 'owner' && membership.role !== 'admin') {
+            throw new ForbiddenException('Only admins and owner can perform this action in this group.');
+        }
+    }
+
+    private async applyRetentionPolicy(groupId: string) {
+        const settings = await this.getGroupSettings(groupId);
+        const hours = Number(settings?.clearMessagesAfterHours || 0);
+        if (!Number.isFinite(hours) || hours <= 0) return;
+        const cutoffIso = new Date(Date.now() - (hours * 60 * 60 * 1000)).toISOString();
+
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            const deletedResult = await pool?.query(
+                `DELETE FROM chat_messages
+                 WHERE chat_type = 'group' AND chat_id = $1 AND created_at < $2
+                 RETURNING id`,
+                [groupId, cutoffIso],
+            );
+            const deletedMessageIds = ((deletedResult?.rows || []) as Array<{ id: string }>).map((row) => row.id);
+            if (!deletedMessageIds.length) return;
+            await pool?.query('DELETE FROM chat_message_bookmarks WHERE group_id = $1 AND message_id = ANY($2::text[])', [groupId, deletedMessageIds]);
+            await pool?.query('DELETE FROM chat_group_folder_items WHERE group_id = $1 AND message_id = ANY($2::text[])', [groupId, deletedMessageIds]);
+            return;
+        }
+
+        const deletedIds = new Set(
+            this.messages
+                .filter((message) => message.chat?.type === 'group' && message.chat?.id === groupId && String(message.timestamp || '') < cutoffIso)
+                .map((message) => String(message.id || '')),
+        );
+        this.messages = this.messages.filter((message) => !(message.chat?.type === 'group' && message.chat?.id === groupId && String(message.timestamp || '') < cutoffIso));
+        this.bookmarks = this.bookmarks.filter((bookmark) => !(bookmark.groupId === groupId && deletedIds.has(bookmark.messageId)));
+        this.folderItems = this.folderItems.filter((item) => !(item.groupId === groupId && item.messageId && deletedIds.has(item.messageId)));
+    }
+
     private buildMembershipRecord(groupId: string, username: string, role: GroupRole): GroupMembershipRecord {
         const permissions = this.rolePermissions(role);
         const now = this.nowIso();
@@ -296,6 +543,10 @@ export class ChatService {
         memberships: GroupMembershipRecord[],
         images: GroupImageRecord[],
         comments: GroupImageCommentRecord[],
+        settings: GroupSettingsRecord | null,
+        folders: GroupFolderRecord[],
+        folderItems: GroupFolderItemRecord[],
+        bookmarks: GroupBookmarkRecord[],
     ): GroupView {
         const commentsByImageId = new Map<string, GroupImageCommentView[]>();
         comments.forEach((comment) => {
@@ -344,6 +595,43 @@ export class ChatService {
                     uploadedBy: image.uploadedBy,
                     createdAt: image.createdAt,
                     comments: commentsByImageId.get(image.id) || [],
+                })),
+            settings: {
+                allowJoinByLink: settings?.allowJoinByLink ?? true,
+                clearMessagesAfterHours: settings?.clearMessagesAfterHours ?? null,
+                onlyAdminsCreateFolders: settings?.onlyAdminsCreateFolders ?? false,
+                onlyAdminsBookmarkMessages: settings?.onlyAdminsBookmarkMessages ?? false,
+            },
+            folders: folders
+                .slice()
+                .sort((left, right) => left.name.localeCompare(right.name))
+                .map((folder) => ({
+                    id: folder.id,
+                    name: folder.name,
+                    description: folder.description,
+                    createdBy: folder.createdBy,
+                    createdAt: folder.createdAt,
+                    items: folderItems
+                        .filter((item) => item.folderId === folder.id)
+                        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+                        .map((item) => ({
+                            id: item.id,
+                            messageId: item.messageId,
+                            imageId: item.imageId,
+                            note: item.note,
+                            createdBy: item.createdBy,
+                            createdAt: item.createdAt,
+                        })),
+                })),
+            bookmarks: bookmarks
+                .slice()
+                .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+                .map((bookmark) => ({
+                    id: bookmark.id,
+                    messageId: bookmark.messageId,
+                    bookmarkedBy: bookmark.bookmarkedBy,
+                    note: bookmark.note,
+                    createdAt: bookmark.createdAt,
                 })),
         };
     }
@@ -446,6 +734,59 @@ export class ChatService {
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_chat_group_image_comments_image ON chat_group_image_comments(image_id, created_at ASC);
+
+                CREATE TABLE IF NOT EXISTS chat_group_settings (
+                    id TEXT PRIMARY KEY,
+                    group_id TEXT NOT NULL UNIQUE,
+                    allow_join_by_link BOOLEAN NOT NULL DEFAULT TRUE,
+                    clear_messages_after_hours INTEGER,
+                    only_admins_create_folders BOOLEAN NOT NULL DEFAULT FALSE,
+                    only_admins_bookmark_messages BOOLEAN NOT NULL DEFAULT FALSE,
+                    updated_by TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_chat_group_settings_group ON chat_group_settings(group_id);
+
+                CREATE TABLE IF NOT EXISTS chat_group_folders (
+                    id TEXT PRIMARY KEY,
+                    group_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    created_by TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE(group_id, name)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_chat_group_folders_group ON chat_group_folders(group_id, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS chat_group_folder_items (
+                    id TEXT PRIMARY KEY,
+                    group_id TEXT NOT NULL,
+                    folder_id TEXT NOT NULL,
+                    message_id TEXT,
+                    image_id TEXT,
+                    note TEXT NOT NULL DEFAULT '',
+                    created_by TEXT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_chat_group_folder_items_folder ON chat_group_folder_items(folder_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_chat_group_folder_items_message ON chat_group_folder_items(group_id, message_id);
+
+                CREATE TABLE IF NOT EXISTS chat_message_bookmarks (
+                    id TEXT PRIMARY KEY,
+                    group_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                    bookmarked_by TEXT NOT NULL,
+                    note TEXT NOT NULL DEFAULT '',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE(group_id, message_id, bookmarked_by)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_chat_message_bookmarks_group ON chat_message_bookmarks(group_id, created_at DESC);
             `);
         }
         await this.schemaPromise;
@@ -548,10 +889,20 @@ export class ChatService {
                 const membershipRows = (membershipsResult?.rows || []) as GroupMembershipRow[];
                 const imageRows = (imagesResult?.rows || []) as GroupImageRow[];
                 const imageIds = imageRows.map((row) => row.id);
-                const commentsResult = imageIds.length
-                    ? await pool?.query('SELECT * FROM chat_group_image_comments WHERE image_id = ANY($1::text[]) ORDER BY created_at ASC', [imageIds])
-                    : { rows: [] };
+                const [commentsResult, settingsResult, foldersResult, folderItemsResult, bookmarksResult] = await Promise.all([
+                    imageIds.length
+                        ? pool?.query('SELECT * FROM chat_group_image_comments WHERE image_id = ANY($1::text[]) ORDER BY created_at ASC', [imageIds])
+                        : Promise.resolve({ rows: [] }),
+                    pool?.query('SELECT * FROM chat_group_settings WHERE group_id = ANY($1::text[])', [groupIds]),
+                    pool?.query('SELECT * FROM chat_group_folders WHERE group_id = ANY($1::text[]) ORDER BY created_at DESC', [groupIds]),
+                    pool?.query('SELECT * FROM chat_group_folder_items WHERE group_id = ANY($1::text[]) ORDER BY created_at DESC', [groupIds]),
+                    pool?.query('SELECT * FROM chat_message_bookmarks WHERE group_id = ANY($1::text[]) ORDER BY created_at DESC', [groupIds]),
+                ]);
                 const commentRows = (commentsResult?.rows || []) as GroupImageCommentRow[];
+                const settingsRows = (settingsResult?.rows || []) as GroupSettingsRow[];
+                const folderRows = (foldersResult?.rows || []) as GroupFolderRow[];
+                const folderItemRows = (folderItemsResult?.rows || []) as GroupFolderItemRow[];
+                const bookmarkRows = (bookmarksResult?.rows || []) as GroupBookmarkRow[];
                 groups = groupRows.map((groupRow) => this.buildGroupView(
                     {
                         id: groupRow.id,
@@ -596,6 +947,48 @@ export class ChatService {
                         createdAt: commentRow.created_at.toISOString(),
                         updatedAt: commentRow.updated_at.toISOString(),
                     })),
+                    (() => {
+                        const settingsRow = settingsRows.find((row) => row.group_id === groupRow.id);
+                        if (!settingsRow) return null;
+                        return {
+                            id: settingsRow.id,
+                            groupId: settingsRow.group_id,
+                            allowJoinByLink: settingsRow.allow_join_by_link,
+                            clearMessagesAfterHours: settingsRow.clear_messages_after_hours,
+                            onlyAdminsCreateFolders: settingsRow.only_admins_create_folders,
+                            onlyAdminsBookmarkMessages: settingsRow.only_admins_bookmark_messages,
+                            updatedBy: settingsRow.updated_by,
+                            createdAt: settingsRow.created_at.toISOString(),
+                            updatedAt: settingsRow.updated_at.toISOString(),
+                        };
+                    })(),
+                    folderRows.filter((folderRow) => folderRow.group_id === groupRow.id).map((folderRow) => ({
+                        id: folderRow.id,
+                        groupId: folderRow.group_id,
+                        name: folderRow.name,
+                        description: folderRow.description,
+                        createdBy: folderRow.created_by,
+                        createdAt: folderRow.created_at.toISOString(),
+                        updatedAt: folderRow.updated_at.toISOString(),
+                    })),
+                    folderItemRows.filter((folderItemRow) => folderItemRow.group_id === groupRow.id).map((folderItemRow) => ({
+                        id: folderItemRow.id,
+                        groupId: folderItemRow.group_id,
+                        folderId: folderItemRow.folder_id,
+                        messageId: folderItemRow.message_id,
+                        imageId: folderItemRow.image_id,
+                        note: folderItemRow.note,
+                        createdBy: folderItemRow.created_by,
+                        createdAt: folderItemRow.created_at.toISOString(),
+                    })),
+                    bookmarkRows.filter((bookmarkRow) => bookmarkRow.group_id === groupRow.id).map((bookmarkRow) => ({
+                        id: bookmarkRow.id,
+                        groupId: bookmarkRow.group_id,
+                        messageId: bookmarkRow.message_id,
+                        bookmarkedBy: bookmarkRow.bookmarked_by,
+                        note: bookmarkRow.note,
+                        createdAt: bookmarkRow.created_at.toISOString(),
+                    })),
                 ));
             }
 
@@ -621,6 +1014,10 @@ export class ChatService {
                 this.memberships.filter((membership) => membership.groupId === group.id),
                 this.images.filter((image) => image.groupId === group.id),
                 this.comments.filter((comment) => comment.groupId === group.id),
+                this.memoryGroupSettings(group.id),
+                this.folders.filter((folder) => folder.groupId === group.id),
+                this.folderItems.filter((item) => item.groupId === group.id),
+                this.bookmarks.filter((bookmark) => bookmark.groupId === group.id),
             ));
 
         return {
@@ -748,6 +1145,7 @@ export class ChatService {
             ...memberUsernames.map((username) => this.buildMembershipRecord(groupId, username, 'member')),
             ...viewerUsernames.map((username) => this.buildMembershipRecord(groupId, username, 'viewer')),
         ];
+        const defaultSettings = this.defaultGroupSettings(groupId, actor);
 
         if (this.hasDatabase()) {
             const pool = await this.ensureSchema();
@@ -770,11 +1168,30 @@ export class ChatService {
                     [membership.id, membership.groupId, membership.username, membership.role, membership.canView, membership.canPost, membership.canComment, membership.canInvite, membership.createdAt],
                 );
             }
+            await pool?.query(
+                `INSERT INTO chat_group_settings (
+                    id, group_id, allow_join_by_link, clear_messages_after_hours,
+                    only_admins_create_folders, only_admins_bookmark_messages,
+                    updated_by, created_at, updated_at
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+                 ON CONFLICT (group_id) DO NOTHING`,
+                [
+                    defaultSettings.id,
+                    defaultSettings.groupId,
+                    defaultSettings.allowJoinByLink,
+                    defaultSettings.clearMessagesAfterHours,
+                    defaultSettings.onlyAdminsCreateFolders,
+                    defaultSettings.onlyAdminsBookmarkMessages,
+                    defaultSettings.updatedBy,
+                    defaultSettings.createdAt,
+                ],
+            );
             return this.getBootstrap(actor);
         }
 
         this.groups.push(groupRecord);
         this.memberships.push(...membershipRecords);
+        this.groupSettings.push(defaultSettings);
         return this.getBootstrap(actor);
     }
 
@@ -829,6 +1246,11 @@ export class ChatService {
             if (!group) {
                 throw new NotFoundException('Group link is not valid.');
             }
+            const settingsResult = await pool?.query('SELECT allow_join_by_link FROM chat_group_settings WHERE group_id = $1 LIMIT 1', [group.id]);
+            const allowJoinByLink = settingsResult?.rows?.[0]?.allow_join_by_link;
+            if (allowJoinByLink === false) {
+                throw new ForbiddenException('Joining by link is disabled by group owner.');
+            }
             const membership = this.buildMembershipRecord(group.id, actor, 'viewer');
             await pool?.query(
                 `INSERT INTO chat_group_memberships (id, group_id, username, role, can_view, can_post, can_comment, can_invite, created_at, updated_at)
@@ -843,8 +1265,334 @@ export class ChatService {
         if (!group) {
             throw new NotFoundException('Group link is not valid.');
         }
+        const settings = this.memoryGroupSettings(group.id);
+        if (settings && settings.allowJoinByLink === false) {
+            throw new ForbiddenException('Joining by link is disabled by group owner.');
+        }
         if (!this.memoryMembership(group.id, actor)) {
             this.memberships.push(this.buildMembershipRecord(group.id, actor, 'viewer'));
+        }
+        return this.getBootstrap(actor);
+    }
+
+    async getGroupPublicByShareToken(shareToken: string) {
+        const token = String(shareToken || '').trim();
+        if (!token) {
+            throw new BadRequestException('Group token is required.');
+        }
+
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            const result = await pool?.query(
+                `SELECT g.id, g.name, g.description, g.share_token,
+                        COALESCE(s.allow_join_by_link, TRUE) AS allow_join_by_link
+                 FROM chat_groups g
+                 LEFT JOIN chat_group_settings s ON s.group_id = g.id
+                 WHERE g.share_token = $1
+                 LIMIT 1`,
+                [token],
+            );
+            const row = result?.rows?.[0];
+            if (!row) {
+                throw new NotFoundException('Group link is not valid.');
+            }
+            return {
+                id: row.id,
+                name: row.name,
+                description: row.description || '',
+                shareToken: row.share_token,
+                allowJoinByLink: row.allow_join_by_link !== false,
+            };
+        }
+
+        const group = this.groups.find((entry) => entry.shareToken === token);
+        if (!group) {
+            throw new NotFoundException('Group link is not valid.');
+        }
+        const settings = this.memoryGroupSettings(group.id);
+        return {
+            id: group.id,
+            name: group.name,
+            description: group.description,
+            shareToken: group.shareToken,
+            allowJoinByLink: settings?.allowJoinByLink !== false,
+        };
+    }
+
+    async updateGroupSettings(
+        actorUsername: string,
+        groupId: string,
+        payload: {
+            allowJoinByLink?: boolean;
+            clearMessagesAfterHours?: number | null;
+            onlyAdminsCreateFolders?: boolean;
+            onlyAdminsBookmarkMessages?: boolean;
+        },
+    ) {
+        const actor = this.normalizeUsername(actorUsername);
+        await this.assertGroupOwner(actor, groupId);
+
+        const clearMessagesAfterHours = payload.clearMessagesAfterHours == null || payload.clearMessagesAfterHours === ''
+            ? null
+            : Number(payload.clearMessagesAfterHours);
+        if (clearMessagesAfterHours != null && (!Number.isFinite(clearMessagesAfterHours) || clearMessagesAfterHours < 1)) {
+            throw new BadRequestException('Message retention hours must be at least 1, or empty to keep forever.');
+        }
+
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            const now = this.nowIso();
+            await pool?.query(
+                `INSERT INTO chat_group_settings (
+                    id, group_id, allow_join_by_link, clear_messages_after_hours,
+                    only_admins_create_folders, only_admins_bookmark_messages,
+                    updated_by, created_at, updated_at
+                 ) VALUES ($1, $2, COALESCE($3, TRUE), $4, COALESCE($5, FALSE), COALESCE($6, FALSE), $7, $8, $8)
+                 ON CONFLICT (group_id) DO UPDATE
+                 SET allow_join_by_link = COALESCE($3, chat_group_settings.allow_join_by_link),
+                     clear_messages_after_hours = $4,
+                     only_admins_create_folders = COALESCE($5, chat_group_settings.only_admins_create_folders),
+                     only_admins_bookmark_messages = COALESCE($6, chat_group_settings.only_admins_bookmark_messages),
+                     updated_by = $7,
+                     updated_at = $8`,
+                [
+                    this.buildId('group-settings'),
+                    groupId,
+                    payload.allowJoinByLink,
+                    clearMessagesAfterHours,
+                    payload.onlyAdminsCreateFolders,
+                    payload.onlyAdminsBookmarkMessages,
+                    actor,
+                    now,
+                ],
+            );
+            await this.applyRetentionPolicy(groupId);
+            return this.getBootstrap(actor);
+        }
+
+        const existing = this.memoryGroupSettings(groupId);
+        if (!existing) {
+            this.groupSettings.push({
+                ...this.defaultGroupSettings(groupId, actor),
+                allowJoinByLink: payload.allowJoinByLink ?? true,
+                clearMessagesAfterHours,
+                onlyAdminsCreateFolders: payload.onlyAdminsCreateFolders ?? false,
+                onlyAdminsBookmarkMessages: payload.onlyAdminsBookmarkMessages ?? false,
+            });
+        } else {
+            existing.allowJoinByLink = payload.allowJoinByLink ?? existing.allowJoinByLink;
+            existing.clearMessagesAfterHours = clearMessagesAfterHours;
+            existing.onlyAdminsCreateFolders = payload.onlyAdminsCreateFolders ?? existing.onlyAdminsCreateFolders;
+            existing.onlyAdminsBookmarkMessages = payload.onlyAdminsBookmarkMessages ?? existing.onlyAdminsBookmarkMessages;
+            existing.updatedBy = actor;
+            existing.updatedAt = this.nowIso();
+        }
+        await this.applyRetentionPolicy(groupId);
+        return this.getBootstrap(actor);
+    }
+
+    async updateGroupMemberSecurity(
+        actorUsername: string,
+        groupId: string,
+        targetUsername: string,
+        payload: {
+            role?: GroupRole;
+            canView?: boolean;
+            canPost?: boolean;
+            canComment?: boolean;
+            canInvite?: boolean;
+        },
+    ) {
+        const actor = this.normalizeUsername(actorUsername);
+        const target = this.normalizeUsername(targetUsername);
+        await this.assertGroupOwner(actor, groupId);
+
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            const membershipResult = await pool?.query(
+                'SELECT * FROM chat_group_memberships WHERE group_id = $1 AND username = $2 LIMIT 1',
+                [groupId, target],
+            );
+            const membership = membershipResult?.rows?.[0];
+            if (!membership) {
+                throw new NotFoundException('Group member not found.');
+            }
+            if (membership.role === 'owner') {
+                throw new ForbiddenException('Owner role cannot be modified.');
+            }
+            await pool?.query(
+                `UPDATE chat_group_memberships
+                 SET role = COALESCE($3, role),
+                     can_view = COALESCE($4, can_view),
+                     can_post = COALESCE($5, can_post),
+                     can_comment = COALESCE($6, can_comment),
+                     can_invite = COALESCE($7, can_invite),
+                     updated_at = $8
+                 WHERE group_id = $1 AND username = $2`,
+                [
+                    groupId,
+                    target,
+                    payload.role,
+                    payload.canView,
+                    payload.canPost,
+                    payload.canComment,
+                    payload.canInvite,
+                    this.nowIso(),
+                ],
+            );
+            return this.getBootstrap(actor);
+        }
+
+        const membership = this.memoryMembership(groupId, target);
+        if (!membership) {
+            throw new NotFoundException('Group member not found.');
+        }
+        if (membership.role === 'owner') {
+            throw new ForbiddenException('Owner role cannot be modified.');
+        }
+        membership.role = payload.role ?? membership.role;
+        membership.canView = payload.canView ?? membership.canView;
+        membership.canPost = payload.canPost ?? membership.canPost;
+        membership.canComment = payload.canComment ?? membership.canComment;
+        membership.canInvite = payload.canInvite ?? membership.canInvite;
+        membership.updatedAt = this.nowIso();
+        return this.getBootstrap(actor);
+    }
+
+    async createGroupFolder(actorUsername: string, groupId: string, payload: { name: string; description?: string }) {
+        const actor = this.normalizeUsername(actorUsername);
+        await this.assertGroupManagementPermission(actor, groupId, 'folder');
+        const name = String(payload.name || '').trim();
+        if (!name) {
+            throw new BadRequestException('Folder name is required.');
+        }
+        const now = this.nowIso();
+        const folder: GroupFolderRecord = {
+            id: this.buildId('folder'),
+            groupId,
+            name,
+            description: String(payload.description || '').trim(),
+            createdBy: actor,
+            createdAt: now,
+            updatedAt: now,
+        };
+
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            await pool?.query(
+                `INSERT INTO chat_group_folders (id, group_id, name, description, created_by, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $6)`,
+                [folder.id, folder.groupId, folder.name, folder.description, folder.createdBy, folder.createdAt],
+            );
+            return this.getBootstrap(actor);
+        }
+
+        this.folders.push(folder);
+        return this.getBootstrap(actor);
+    }
+
+    async addFolderItem(
+        actorUsername: string,
+        groupId: string,
+        folderId: string,
+        payload: { messageId?: string | null; imageId?: string | null; note?: string },
+    ) {
+        const actor = this.normalizeUsername(actorUsername);
+        await this.assertGroupManagementPermission(actor, groupId, 'folder');
+        const messageId = payload.messageId ? String(payload.messageId) : null;
+        const imageId = payload.imageId ? String(payload.imageId) : null;
+        if (!messageId && !imageId) {
+            throw new BadRequestException('Provide either a messageId or imageId to save inside folder.');
+        }
+
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            const folderResult = await pool?.query(
+                'SELECT id FROM chat_group_folders WHERE id = $1 AND group_id = $2 LIMIT 1',
+                [folderId, groupId],
+            );
+            if (!folderResult?.rows?.[0]) {
+                throw new NotFoundException('Folder not found.');
+            }
+            if (messageId) {
+                const messageResult = await pool?.query('SELECT id FROM chat_messages WHERE id = $1 AND chat_type = $2 AND chat_id = $3 LIMIT 1', [messageId, 'group', groupId]);
+                if (!messageResult?.rows?.[0]) {
+                    throw new NotFoundException('Message not found in this group.');
+                }
+            }
+            if (imageId) {
+                const imageResult = await pool?.query('SELECT id FROM chat_group_images WHERE id = $1 AND group_id = $2 LIMIT 1', [imageId, groupId]);
+                if (!imageResult?.rows?.[0]) {
+                    throw new NotFoundException('Image not found in this group.');
+                }
+            }
+            await pool?.query(
+                `INSERT INTO chat_group_folder_items (id, group_id, folder_id, message_id, image_id, note, created_by, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+                [this.buildId('folder-item'), groupId, folderId, messageId, imageId, String(payload.note || '').trim(), actor, this.nowIso()],
+            );
+            return this.getBootstrap(actor);
+        }
+
+        const folder = this.folders.find((entry) => entry.id === folderId && entry.groupId === groupId);
+        if (!folder) {
+            throw new NotFoundException('Folder not found.');
+        }
+        this.folderItems.push({
+            id: this.buildId('folder-item'),
+            groupId,
+            folderId,
+            messageId,
+            imageId,
+            note: String(payload.note || '').trim(),
+            createdBy: actor,
+            createdAt: this.nowIso(),
+        });
+        return this.getBootstrap(actor);
+    }
+
+    async addMessageBookmark(actorUsername: string, groupId: string, payload: { messageId: string; note?: string }) {
+        const actor = this.normalizeUsername(actorUsername);
+        await this.assertGroupManagementPermission(actor, groupId, 'bookmark');
+        const messageId = String(payload.messageId || '').trim();
+        if (!messageId) {
+            throw new BadRequestException('Message id is required.');
+        }
+
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            const messageResult = await pool?.query('SELECT id FROM chat_messages WHERE id = $1 AND chat_type = $2 AND chat_id = $3 LIMIT 1', [messageId, 'group', groupId]);
+            if (!messageResult?.rows?.[0]) {
+                throw new NotFoundException('Message not found in this group.');
+            }
+            await pool?.query(
+                `INSERT INTO chat_message_bookmarks (id, group_id, message_id, bookmarked_by, note, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6)
+                 ON CONFLICT (group_id, message_id, bookmarked_by) DO UPDATE
+                 SET note = EXCLUDED.note,
+                     created_at = EXCLUDED.created_at`,
+                [this.buildId('bookmark'), groupId, messageId, actor, String(payload.note || '').trim(), this.nowIso()],
+            );
+            return this.getBootstrap(actor);
+        }
+
+        const message = this.messages.find((entry) => entry.id === messageId && entry.chat?.type === 'group' && entry.chat?.id === groupId);
+        if (!message) {
+            throw new NotFoundException('Message not found in this group.');
+        }
+        const existing = this.bookmarks.find((bookmark) => bookmark.groupId === groupId && bookmark.messageId === messageId && bookmark.bookmarkedBy === actor);
+        if (existing) {
+            existing.note = String(payload.note || '').trim();
+            existing.createdAt = this.nowIso();
+        } else {
+            this.bookmarks.push({
+                id: this.buildId('bookmark'),
+                groupId,
+                messageId,
+                bookmarkedBy: actor,
+                note: String(payload.note || '').trim(),
+                createdAt: this.nowIso(),
+            });
         }
         return this.getBootstrap(actor);
     }
@@ -942,6 +1690,7 @@ export class ChatService {
 
         if (chat.type === 'group' && chatId !== GENERAL_GROUP_ID) {
             await this.assertGroupPermission(normalizedUsername, chatId, 'view');
+            await this.applyRetentionPolicy(chatId);
         }
         if (chat.type === 'dm') {
             await this.assertFriendship(normalizedUsername, chat.name);
@@ -972,6 +1721,7 @@ export class ChatService {
 
         if (payload.chat.type === 'group' && chatId !== GENERAL_GROUP_ID) {
             await this.assertGroupPermission(senderUsername, chatId, 'post');
+            await this.applyRetentionPolicy(chatId);
         }
         if (payload.chat.type === 'dm') {
             await this.assertFriendship(senderUsername, payload.chat.name);

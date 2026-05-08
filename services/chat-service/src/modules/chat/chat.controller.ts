@@ -48,6 +48,68 @@ export class ChatController {
     return this.chatService.joinGroupByShareToken(body.actorUsername, body.shareToken);
   }
 
+  @Get('groups/public/:shareToken')
+  getPublicGroupInfo(@Param('shareToken') shareToken: string) {
+    return this.chatService.getGroupPublicByShareToken(shareToken);
+  }
+
+  @Put('groups/:groupId/settings')
+  updateGroupSettings(
+    @Param('groupId') groupId: string,
+    @Body()
+    body: {
+      actorUsername: string;
+      allowJoinByLink?: boolean;
+      clearMessagesAfterHours?: number | null;
+      onlyAdminsCreateFolders?: boolean;
+      onlyAdminsBookmarkMessages?: boolean;
+    },
+  ) {
+    return this.chatService.updateGroupSettings(body.actorUsername, groupId, body);
+  }
+
+  @Put('groups/:groupId/members/:targetUsername/security')
+  updateGroupMemberSecurity(
+    @Param('groupId') groupId: string,
+    @Param('targetUsername') targetUsername: string,
+    @Body()
+    body: {
+      actorUsername: string;
+      role?: 'owner' | 'admin' | 'member' | 'viewer';
+      canView?: boolean;
+      canPost?: boolean;
+      canComment?: boolean;
+      canInvite?: boolean;
+    },
+  ) {
+    return this.chatService.updateGroupMemberSecurity(body.actorUsername, groupId, targetUsername, body);
+  }
+
+  @Post('groups/:groupId/folders')
+  createGroupFolder(
+    @Param('groupId') groupId: string,
+    @Body() body: { actorUsername: string; name: string; description?: string },
+  ) {
+    return this.chatService.createGroupFolder(body.actorUsername, groupId, body);
+  }
+
+  @Post('groups/:groupId/folders/:folderId/items')
+  addFolderItem(
+    @Param('groupId') groupId: string,
+    @Param('folderId') folderId: string,
+    @Body() body: { actorUsername: string; messageId?: string | null; imageId?: string | null; note?: string },
+  ) {
+    return this.chatService.addFolderItem(body.actorUsername, groupId, folderId, body);
+  }
+
+  @Post('groups/:groupId/bookmarks')
+  addMessageBookmark(
+    @Param('groupId') groupId: string,
+    @Body() body: { actorUsername: string; messageId: string; note?: string },
+  ) {
+    return this.chatService.addMessageBookmark(body.actorUsername, groupId, body);
+  }
+
   @Post('groups/:groupId/images')
   addGroupImage(
     @Param('groupId') groupId: string,

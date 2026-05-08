@@ -1,7 +1,6 @@
 import { useRouter } from 'next/router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import io from 'socket.io-client';
-import { restoreUserSession } from '../lib/auth-client';
 import { useTheme } from '../lib/ThemePicker';
 
 let socket = null;
@@ -493,6 +492,17 @@ export default function ChatPage() {
   const [commentDrafts, setCommentDrafts] = useState({});
   const [unreadCounts, setUnreadCounts] = useState({});
   const [toasts, setToasts] = useState([]);
+  const [groupSettingsForm, setGroupSettingsForm] = useState({
+    allowJoinByLink: true,
+    clearMessagesAfterHours: '',
+    onlyAdminsCreateFolders: false,
+    onlyAdminsBookmarkMessages: false,
+  });
+  const [folderForm, setFolderForm] = useState({ name: '', description: '' });
+  const [folderSelections, setFolderSelections] = useState({});
+  const [bookmarkNotes, setBookmarkNotes] = useState({});
+  const [showBookmarkedOnly, setShowBookmarkedOnly] = useState(false);
+  const [memberSecurityForm, setMemberSecurityForm] = useState({ username: '', role: 'member', canView: true, canPost: true, canComment: true, canInvite: false });
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -514,12 +524,18 @@ export default function ChatPage() {
     () => selectedGroup?.memberships.find((membership) => membership.username === user?.username) || null,
     [selectedGroup, user?.username],
   );
+  const bookmarkedMessageIds = useMemo(
+    () => new Set((selectedGroup?.bookmarks || []).map((bookmark) => bookmark.messageId)),
+    [selectedGroup?.bookmarks],
+  );
   const visibleMessages = useMemo(
     () => {
       if (!activeChat) return [];
-      return messages.filter((message) => message.chat?.type === activeChat.type && (message.chat?.id || message.chat?.name) === activeChat.id);
+      const scoped = messages.filter((message) => message.chat?.type === activeChat.type && (message.chat?.id || message.chat?.name) === activeChat.id);
+      if (!showBookmarkedOnly || activeChat.type !== 'group') return scoped;
+      return scoped.filter((message) => bookmarkedMessageIds.has(message.id));
     },
-    [messages, activeChat],
+    [messages, activeChat, showBookmarkedOnly, bookmarkedMessageIds],
   );
   const childGroups = useMemo(
     () => bootstrap.groups.filter((group) => group.parentGroupId === selectedGroup?.id),
@@ -685,11 +701,26 @@ export default function ChatPage() {
 
   useEffect(() => {
     let active = true;
-
-    restoreUserSession(router, setUser).then((sessionUser) => {
-      if (!active || !sessionUser) return;
-      setStatusMessage('Loading groups, friendships, and media...');
-    });
+    fetch('/api/auth/session')
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({}));
+        if (!active) return;
+        if (response.ok && payload.user) {
+          setUser(payload.user);
+          setStatusMessage('Loading groups, friendships, and media...');
+          return;
+        }
+        const token = typeof router.query.groupInvite === 'string' ? router.query.groupInvite : '';
+        if (token) {
+          router.replace(`/join-group/${encodeURIComponent(token)}`);
+          return;
+        }
+        router.push('/');
+      })
+      .catch(() => {
+        if (!active) return;
+        router.push('/');
+      });
 
     return () => {
       active = false;
@@ -791,6 +822,13 @@ export default function ChatPage() {
     const members = selectedGroup.memberships.filter((membership) => membership.role === 'member').map((membership) => membership.username).join(', ');
     const viewers = selectedGroup.memberships.filter((membership) => membership.role === 'viewer').map((membership) => membership.username).join(', ');
     setVisibilityForm({ members, viewers });
+    setGroupSettingsForm({
+      allowJoinByLink: selectedGroup.settings?.allowJoinByLink !== false,
+      clearMessagesAfterHours: selectedGroup.settings?.clearMessagesAfterHours == null ? '' : String(selectedGroup.settings.clearMessagesAfterHours),
+      onlyAdminsCreateFolders: selectedGroup.settings?.onlyAdminsCreateFolders === true,
+      onlyAdminsBookmarkMessages: selectedGroup.settings?.onlyAdminsBookmarkMessages === true,
+    });
+    setShowBookmarkedOnly(false);
   }, [selectedGroup]);
 
   useEffect(() => {
@@ -1012,6 +1050,109 @@ export default function ChatPage() {
     }
   }
 
+  async function handleSaveGroupSettings(event) {
+    event.preventDefault();
+    if (!selectedGroup || !user?.username) return;
+
+    try {
+      await submitJson(`/groups/${selectedGroup.id}/settings`, 'PUT', {
+        actorUsername: user.username,
+        allowJoinByLink: groupSettingsForm.allowJoinByLink,
+        clearMessagesAfterHours: groupSettingsForm.clearMessagesAfterHours === '' ? null : Number(groupSettingsForm.clearMessagesAfterHours),
+        onlyAdminsCreateFolders: groupSettingsForm.onlyAdminsCreateFolders,
+        onlyAdminsBookmarkMessages: groupSettingsForm.onlyAdminsBookmarkMessages,
+      }, (payload) => {
+        const refreshed = payload.groups.find((group) => group.id === selectedGroup.id);
+        return refreshed ? { type: 'group', id: refreshed.id, name: refreshed.name, label: refreshed.name } : getDefaultChat(payload, user?.username);
+      });
+      reportStatus('Group security settings saved.');
+    } catch (error) {
+      reportError(error.message);
+    }
+  }
+
+  async function handleUpdateMemberSecurity(event) {
+    event.preventDefault();
+    if (!selectedGroup || !user?.username || !memberSecurityForm.username.trim()) return;
+
+    try {
+      await submitJson(`/groups/${selectedGroup.id}/members/${encodeURIComponent(memberSecurityForm.username.trim())}/security`, 'PUT', {
+        actorUsername: user.username,
+        role: memberSecurityForm.role,
+        canView: Boolean(memberSecurityForm.canView),
+        canPost: Boolean(memberSecurityForm.canPost),
+        canComment: Boolean(memberSecurityForm.canComment),
+        canInvite: Boolean(memberSecurityForm.canInvite),
+      }, (payload) => {
+        const refreshed = payload.groups.find((group) => group.id === selectedGroup.id);
+        return refreshed ? { type: 'group', id: refreshed.id, name: refreshed.name, label: refreshed.name } : getDefaultChat(payload, user?.username);
+      });
+      reportStatus('Member security updated.');
+    } catch (error) {
+      reportError(error.message);
+    }
+  }
+
+  async function handleCreateFolder(event) {
+    event.preventDefault();
+    if (!selectedGroup || !user?.username || !folderForm.name.trim()) return;
+
+    try {
+      await submitJson(`/groups/${selectedGroup.id}/folders`, 'POST', {
+        actorUsername: user.username,
+        name: folderForm.name.trim(),
+        description: folderForm.description.trim(),
+      }, (payload) => {
+        const refreshed = payload.groups.find((group) => group.id === selectedGroup.id);
+        return refreshed ? { type: 'group', id: refreshed.id, name: refreshed.name, label: refreshed.name } : getDefaultChat(payload, user?.username);
+      });
+      setFolderForm({ name: '', description: '' });
+      reportStatus('Folder created.');
+    } catch (error) {
+      reportError(error.message);
+    }
+  }
+
+  async function handleSaveMessageToFolder(messageId) {
+    if (!selectedGroup || !user?.username || !messageId) return;
+    const folderId = folderSelections[messageId] || selectedGroup.folders?.[0]?.id;
+    if (!folderId) {
+      reportError('Create a folder first.');
+      return;
+    }
+
+    try {
+      await submitJson(`/groups/${selectedGroup.id}/folders/${folderId}/items`, 'POST', {
+        actorUsername: user.username,
+        messageId,
+      }, (payload) => {
+        const refreshed = payload.groups.find((group) => group.id === selectedGroup.id);
+        return refreshed ? { type: 'group', id: refreshed.id, name: refreshed.name, label: refreshed.name } : getDefaultChat(payload, user?.username);
+      });
+      reportStatus('Message saved to folder.');
+    } catch (error) {
+      reportError(error.message);
+    }
+  }
+
+  async function handleBookmarkMessage(messageId) {
+    if (!selectedGroup || !user?.username || !messageId) return;
+
+    try {
+      await submitJson(`/groups/${selectedGroup.id}/bookmarks`, 'POST', {
+        actorUsername: user.username,
+        messageId,
+        note: String(bookmarkNotes[messageId] || '').trim(),
+      }, (payload) => {
+        const refreshed = payload.groups.find((group) => group.id === selectedGroup.id);
+        return refreshed ? { type: 'group', id: refreshed.id, name: refreshed.name, label: refreshed.name } : getDefaultChat(payload, user?.username);
+      });
+      reportStatus('Message bookmarked.');
+    } catch (error) {
+      reportError(error.message);
+    }
+  }
+
   function selectFriend(friendName) {
     selectChat({
       type: 'dm',
@@ -1049,7 +1190,7 @@ export default function ChatPage() {
 
   function openWhatsAppShare() {
     if (!selectedGroup || typeof window === 'undefined') return;
-    const inviteUrl = `${window.location.origin}/chat?groupInvite=${encodeURIComponent(selectedGroup.shareToken)}`;
+    const inviteUrl = `${window.location.origin}/join-group/${encodeURIComponent(selectedGroup.shareToken)}`;
     const message = `Join ${selectedGroup.name} on Cosmix: ${inviteUrl}`;
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer');
   }
@@ -1057,6 +1198,9 @@ export default function ChatPage() {
   const canPostToGroup = selectedMembership?.canPost;
   const canInviteToGroup = selectedMembership?.canInvite;
   const canCommentInGroup = selectedMembership?.canComment;
+  const isGroupOwner = selectedMembership?.role === 'owner';
+  const canManageFolders = selectedMembership?.role === 'owner' || selectedMembership?.role === 'admin' || !selectedGroup?.settings?.onlyAdminsCreateFolders;
+  const canBookmarkMessages = selectedMembership?.role === 'owner' || selectedMembership?.role === 'admin' || !selectedGroup?.settings?.onlyAdminsBookmarkMessages;
 
   return (
     <div className="chat-page" style={styles.page}>
@@ -1231,7 +1375,7 @@ export default function ChatPage() {
                 {selectedGroup ? (
                 <div style={styles.actionsRow}>
                   <button type="button" style={styles.secondaryButton} onClick={openWhatsAppShare}>Share To WhatsApp</button>
-                  <button type="button" style={styles.secondaryButton} onClick={() => navigator.clipboard?.writeText(selectedGroup.shareToken)}>Copy Token</button>
+                  <button type="button" style={styles.secondaryButton} onClick={() => navigator.clipboard?.writeText(`${window.location.origin}/join-group/${encodeURIComponent(selectedGroup.shareToken)}`)}>Copy Invite Link</button>
                 </div>
                 ) : null}
               </div>
@@ -1265,6 +1409,120 @@ export default function ChatPage() {
                       <button type="submit" style={styles.primaryButton}>Save Visibility</button>
                     </form>
                   ) : <p style={styles.helperText}>Only users with invite permission can change visibility.</p>}
+                </section>
+
+                <section style={styles.insightCard}>
+                  <p style={styles.sectionTitle}>Group Security And Retention</p>
+                  {isGroupOwner ? (
+                    <form style={{ display: 'grid', gap: '10px' }} onSubmit={handleSaveGroupSettings}>
+                      <label style={styles.helperText}>
+                        <input
+                          type="checkbox"
+                          checked={groupSettingsForm.allowJoinByLink}
+                          onChange={(event) => setGroupSettingsForm((previous) => ({ ...previous, allowJoinByLink: event.target.checked }))}
+                        />
+                        {' '}Allow users to join through shared link
+                      </label>
+                      <input
+                        style={styles.textInput}
+                        value={groupSettingsForm.clearMessagesAfterHours}
+                        onChange={(event) => setGroupSettingsForm((previous) => ({ ...previous, clearMessagesAfterHours: event.target.value }))}
+                        placeholder="Clear group messages after hours (leave empty to keep forever)"
+                      />
+                      <label style={styles.helperText}>
+                        <input
+                          type="checkbox"
+                          checked={groupSettingsForm.onlyAdminsCreateFolders}
+                          onChange={(event) => setGroupSettingsForm((previous) => ({ ...previous, onlyAdminsCreateFolders: event.target.checked }))}
+                        />
+                        {' '}Only admins/owner can create folders
+                      </label>
+                      <label style={styles.helperText}>
+                        <input
+                          type="checkbox"
+                          checked={groupSettingsForm.onlyAdminsBookmarkMessages}
+                          onChange={(event) => setGroupSettingsForm((previous) => ({ ...previous, onlyAdminsBookmarkMessages: event.target.checked }))}
+                        />
+                        {' '}Only admins/owner can bookmark messages
+                      </label>
+                      <button type="submit" style={styles.primaryButton}>Save Group Security</button>
+                    </form>
+                  ) : <p style={styles.helperText}>Only group owner can manage security and auto-clear settings.</p>}
+
+                  {isGroupOwner ? (
+                    <form style={{ display: 'grid', gap: '10px' }} onSubmit={handleUpdateMemberSecurity}>
+                      <input
+                        style={styles.textInput}
+                        value={memberSecurityForm.username}
+                        onChange={(event) => setMemberSecurityForm((previous) => ({ ...previous, username: event.target.value }))}
+                        placeholder="Member username to update"
+                      />
+                      <select
+                        style={styles.select}
+                        value={memberSecurityForm.role}
+                        onChange={(event) => setMemberSecurityForm((previous) => ({ ...previous, role: event.target.value }))}
+                      >
+                        <option value="admin">Admin</option>
+                        <option value="member">Member</option>
+                        <option value="viewer">Viewer</option>
+                      </select>
+                      <div style={styles.badgeRow}>
+                        <label style={styles.helperText}><input type="checkbox" checked={memberSecurityForm.canView} onChange={(event) => setMemberSecurityForm((previous) => ({ ...previous, canView: event.target.checked }))} /> View</label>
+                        <label style={styles.helperText}><input type="checkbox" checked={memberSecurityForm.canPost} onChange={(event) => setMemberSecurityForm((previous) => ({ ...previous, canPost: event.target.checked }))} /> Post</label>
+                        <label style={styles.helperText}><input type="checkbox" checked={memberSecurityForm.canComment} onChange={(event) => setMemberSecurityForm((previous) => ({ ...previous, canComment: event.target.checked }))} /> Comment</label>
+                        <label style={styles.helperText}><input type="checkbox" checked={memberSecurityForm.canInvite} onChange={(event) => setMemberSecurityForm((previous) => ({ ...previous, canInvite: event.target.checked }))} /> Invite</label>
+                      </div>
+                      <button type="submit" style={styles.secondaryButton}>Update Member Security</button>
+                    </form>
+                  ) : null}
+                </section>
+
+                <section style={styles.insightCard}>
+                  <p style={styles.sectionTitle}>Folders For Important Items</p>
+                  {canManageFolders ? (
+                    <form style={{ display: 'grid', gap: '10px' }} onSubmit={handleCreateFolder}>
+                      <input
+                        style={styles.textInput}
+                        value={folderForm.name}
+                        onChange={(event) => setFolderForm((previous) => ({ ...previous, name: event.target.value }))}
+                        placeholder="Folder name"
+                      />
+                      <input
+                        style={styles.textInput}
+                        value={folderForm.description}
+                        onChange={(event) => setFolderForm((previous) => ({ ...previous, description: event.target.value }))}
+                        placeholder="Folder description"
+                      />
+                      <button type="submit" style={styles.primaryButton}>Create Folder</button>
+                    </form>
+                  ) : <p style={styles.helperText}>Only admins/owner can create folders in this group.</p>}
+                  {(selectedGroup.folders || []).length ? (
+                    <div style={{ display: 'grid', gap: '8px' }}>
+                      {selectedGroup.folders.map((folder) => (
+                        <div key={folder.id} style={{ ...styles.block, padding: '10px' }}>
+                          <div style={styles.listTitle}>{folder.name}</div>
+                          <div style={styles.listMeta}>{folder.description || 'No description'} · {folder.items.length} saved items</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : <p style={styles.helperText}>No folders yet.</p>}
+                </section>
+
+                <section style={styles.insightCard}>
+                  <p style={styles.sectionTitle}>Bookmarks</p>
+                  <button type="button" style={styles.secondaryButton} onClick={() => setShowBookmarkedOnly((value) => !value)}>
+                    {showBookmarkedOnly ? 'Show All Messages' : 'Show Only Bookmarked Messages'}
+                  </button>
+                  {(selectedGroup.bookmarks || []).length ? (
+                    <div style={{ display: 'grid', gap: '8px', maxHeight: 220, overflowY: 'auto' }}>
+                      {selectedGroup.bookmarks.map((bookmark) => (
+                        <div key={bookmark.id} style={{ ...styles.block, padding: '10px' }}>
+                          <div style={styles.listMeta}>{bookmark.bookmarkedBy} bookmarked message {bookmark.messageId}</div>
+                          <div style={styles.helperText}>{bookmark.note || 'No note'}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : <p style={styles.helperText}>No bookmarks in this group yet.</p>}
                 </section>
 
                 <section style={styles.insightCard}>
@@ -1318,6 +1576,24 @@ export default function ChatPage() {
                               <div style={styles.listTitle}>{image.caption || 'Untitled image'}</div>
                               <div style={styles.listMeta}>Uploaded by {image.uploadedBy}</div>
                             </div>
+                            {(selectedGroup.folders || []).length && canManageFolders ? (
+                              <button
+                                type="button"
+                                style={styles.secondaryButton}
+                                onClick={() => {
+                                  const folderId = selectedGroup.folders[0].id;
+                                  submitJson(`/groups/${selectedGroup.id}/folders/${folderId}/items`, 'POST', {
+                                    actorUsername: user.username,
+                                    imageId: image.id,
+                                  }, (payload) => {
+                                    const refreshed = payload.groups.find((group) => group.id === selectedGroup.id);
+                                    return refreshed ? { type: 'group', id: refreshed.id, name: refreshed.name, label: refreshed.name } : getDefaultChat(payload, user?.username);
+                                  }).then(() => reportStatus('Image saved to folder.')).catch((error) => reportError(error.message));
+                                }}
+                              >
+                                Save Image To Folder
+                              </button>
+                            ) : null}
                             <div style={{ display: 'grid', gap: '8px' }}>
                               {image.comments.map((comment) => (
                                 <div key={comment.id} style={{ ...styles.block, padding: '10px' }}>
@@ -1359,6 +1635,40 @@ export default function ChatPage() {
                       <span>{message.chat?.type === 'dm' ? 'Direct' : 'Group'}</span>
                     </div>
                     <div style={styles.messageText}>{message.text || message.gif || ''}</div>
+                    {selectedGroup && message.chat?.type === 'group' ? (
+                      <div style={styles.actionsRow}>
+                        {canBookmarkMessages ? (
+                          <>
+                            <input
+                              style={{ ...styles.textInput, maxWidth: 220, padding: '8px 10px' }}
+                              value={bookmarkNotes[message.id] || ''}
+                              onChange={(event) => setBookmarkNotes((previous) => ({ ...previous, [message.id]: event.target.value }))}
+                              placeholder="Bookmark note"
+                            />
+                            <button type="button" style={styles.secondaryButton} onClick={() => handleBookmarkMessage(message.id)}>
+                              {bookmarkedMessageIds.has(message.id) ? 'Update Bookmark' : 'Bookmark'}
+                            </button>
+                          </>
+                        ) : null}
+
+                        {(selectedGroup.folders || []).length ? (
+                          <>
+                            <select
+                              style={{ ...styles.select, maxWidth: 220, padding: '8px 10px' }}
+                              value={folderSelections[message.id] || selectedGroup.folders[0].id}
+                              onChange={(event) => setFolderSelections((previous) => ({ ...previous, [message.id]: event.target.value }))}
+                            >
+                              {selectedGroup.folders.map((folder) => (
+                                <option key={folder.id} value={folder.id}>{folder.name}</option>
+                              ))}
+                            </select>
+                            <button type="button" style={styles.secondaryButton} onClick={() => handleSaveMessageToFolder(message.id)}>
+                              Save To Folder
+                            </button>
+                          </>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               )) : (

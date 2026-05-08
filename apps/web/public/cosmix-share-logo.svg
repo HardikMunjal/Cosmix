@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="Cosmix group invite">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1d4ed8"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#f97316"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <circle cx="880" cy="220" r="180" fill="none" stroke="url(#ring)" stroke-width="26" opacity="0.85"/>
+  <circle cx="880" cy="220" r="92" fill="#0b1226" stroke="#67e8f9" stroke-width="8"/>
+  <text x="120" y="250" fill="#e2e8f0" font-family="Verdana, Geneva, sans-serif" font-size="88" font-weight="700">Cosmix</text>
+  <text x="120" y="330" fill="#bfdbfe" font-family="Verdana, Geneva, sans-serif" font-size="44" font-weight="500">Group Invite</text>
+  <text x="120" y="420" fill="#cbd5e1" font-family="Verdana, Geneva, sans-serif" font-size="34">Join chat, folders, and bookmarked insights.</text>
+  <rect x="120" y="470" width="330" height="68" rx="34" fill="#22d3ee" opacity="0.95"/>
+  <text x="168" y="514" fill="#0f172a" font-family="Verdana, Geneva, sans-serif" font-size="30" font-weight="700">Open in Cosmix</text>
+</svg>

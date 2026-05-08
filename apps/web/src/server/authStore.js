@@ -42,6 +42,15 @@ function normalizeName(value) {
   return String(value || '').trim().replace(/\s+/g, ' ');
 }
 
+function buildUsernameSeedFromName(name) {
+  const base = normalizeName(name)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '.')
+    .replace(/^\.+|\.+$/g, '')
+    .slice(0, 20);
+  return base || `member.${Date.now().toString().slice(-5)}`;
+}
+
 function validateUsername(value) {
   const trimmed = String(value || '').trim();
   if (!trimmed) throw new Error('Username is required.');
@@ -385,6 +394,21 @@ export async function signUpUser(payload) {
 
   await users.insertAsync(user);
   return buildClientUser(user);
+}
+
+export async function quickJoinWithName(payload) {
+  const displayName = normalizeName(payload.name || payload.username || '');
+  if (!displayName) throw new Error('Name is required.');
+
+  const usernameSeed = buildUsernameSeedFromName(displayName);
+  const username = `${usernameSeed}.${crypto.randomBytes(2).toString('hex')}`;
+  const password = crypto.randomBytes(8).toString('hex');
+  return signUpUser({
+    username,
+    name: displayName,
+    password,
+    email: '',
+  });
 }
 
 export async function loginWithUsernamePassword(payload) {
