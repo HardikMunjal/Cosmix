@@ -100,442 +100,640 @@ function parseReplyEnvelope(text) {
 
 function createStyles(theme) {
   return {
-    page: {
-      minHeight: '100vh',
+    root: {
+      height: '100vh',
+      display: 'flex',
       background: theme.pageBg,
       color: theme.textPrimary,
       fontFamily: theme.font,
-      padding: '24px',
-    },
-    shell: {
-      maxWidth: '1480px',
-      margin: '0 auto',
-      display: 'grid',
-      gap: '16px',
-    },
-    layout: {
-      display: 'grid',
-      gridTemplateColumns: '340px minmax(0, 1fr)',
-      gap: '16px',
-      minHeight: 'calc(100vh - 48px)',
-    },
-    panel: {
-      borderRadius: '28px',
-      border: `1px solid ${theme.cardBorder}`,
-      background: theme.panelBg,
-      boxShadow: `0 24px 64px ${theme.shadow}`,
+      overflow: 'hidden',
     },
     sidebar: {
-      padding: '18px',
-      display: 'grid',
-      gap: '16px',
-      alignContent: 'start',
-      minHeight: 0,
-      overflowY: 'auto',
+      width: '260px',
+      flexShrink: 0,
+      display: 'flex',
+      flexDirection: 'column',
+      background: theme.panelBg,
+      borderRight: `1px solid ${theme.cardBorder}`,
+      overflow: 'hidden',
+      zIndex: 30,
     },
-    block: {
-      display: 'grid',
+    sidebarHeader: {
+      padding: '12px 14px',
+      borderBottom: `1px solid ${theme.cardBorder}`,
+      display: 'flex',
+      alignItems: 'center',
       gap: '10px',
-      padding: '14px',
-      borderRadius: '22px',
-      background: theme.cardBg,
-      border: `1px solid ${theme.cardBorder}`,
+      flexShrink: 0,
     },
-    sectionTitle: {
-      margin: 0,
-      fontSize: '11px',
+    sidebarAvatar: {
+      width: '34px',
+      height: '34px',
+      borderRadius: '12px',
+      background: `linear-gradient(135deg, ${theme.blue}, ${theme.purple})`,
+      color: '#fff',
+      fontWeight: 800,
+      fontSize: '12px',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0,
+    },
+    sidebarUsername: {
+      flex: 1,
+      fontSize: '13px',
+      fontWeight: 800,
+      color: theme.textHeading,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+    },
+    sidebarSearch: {
+      padding: '8px 12px',
+      borderBottom: `1px solid ${theme.cardBorder}`,
+      flexShrink: 0,
+    },
+    sidebarSearchInput: {
+      width: '100%',
+      borderRadius: '20px',
+      border: `1px solid ${theme.inputBorder}`,
+      background: theme.inputBg,
+      color: theme.textPrimary,
+      padding: '7px 12px',
+      fontSize: '13px',
+      outline: 'none',
+      fontFamily: theme.font,
+      boxSizing: 'border-box',
+    },
+    sidebarScroll: {
+      flex: 1,
+      overflowY: 'auto',
+      paddingBottom: '4px',
+    },
+    sidebarSectionLabel: {
+      padding: '8px 14px 4px',
+      fontSize: '10px',
       textTransform: 'uppercase',
       letterSpacing: '0.12em',
       fontWeight: 800,
       color: theme.textMuted,
     },
-    textInput: {
+    sidebarItem: {
       width: '100%',
-      borderRadius: '16px',
-      border: `1px solid ${theme.inputBorder}`,
-      background: theme.inputBg,
-      color: theme.textPrimary,
-      padding: '12px 14px',
-      fontSize: '14px',
-      outline: 'none',
-      fontFamily: theme.font,
-    },
-    textarea: {
-      width: '100%',
-      minHeight: '88px',
-      resize: 'vertical',
-      borderRadius: '18px',
-      border: `1px solid ${theme.inputBorder}`,
-      background: theme.inputBg,
-      color: theme.textPrimary,
-      padding: '12px 14px',
-      fontSize: '14px',
-      outline: 'none',
-      fontFamily: theme.font,
-    },
-    select: {
-      width: '100%',
-      borderRadius: '16px',
-      border: `1px solid ${theme.inputBorder}`,
-      background: theme.inputBg,
-      color: theme.textPrimary,
-      padding: '12px 14px',
-      fontSize: '14px',
-      outline: 'none',
-      fontFamily: theme.font,
-    },
-    primaryButton: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '10px',
+      padding: '8px 14px',
       border: 'none',
-      borderRadius: '16px',
-      background: `linear-gradient(135deg, ${theme.blue}, ${theme.orange})`,
-      color: '#fff',
-      padding: '12px 14px',
+      background: 'none',
       cursor: 'pointer',
-      fontSize: '13px',
-      fontWeight: 800,
-    },
-    secondaryButton: {
-      borderRadius: '16px',
-      border: `1px solid ${theme.cardBorder}`,
-      background: theme.panelBg,
-      color: theme.textPrimary,
-      padding: '12px 14px',
-      cursor: 'pointer',
-      fontSize: '13px',
-      fontWeight: 800,
-    },
-    listButton: {
-      width: '100%',
       textAlign: 'left',
-      display: 'grid',
-      gap: '4px',
-      padding: '12px 14px',
-      borderRadius: '18px',
-      border: `1px solid ${theme.cardBorder}`,
-      background: theme.panelBg,
-      cursor: 'pointer',
       color: theme.textPrimary,
+      fontFamily: theme.font,
     },
-    listTitle: {
-      fontSize: '14px',
-      fontWeight: 800,
-      color: theme.textHeading,
-    },
-    listMeta: {
-      fontSize: '12px',
-      color: theme.textSecondary,
-      fontWeight: 700,
-    },
-    actionsRow: {
-      display: 'flex',
-      gap: '10px',
-      flexWrap: 'wrap',
-    },
-    searchCard: {
-      display: 'grid',
-      gap: '8px',
-      padding: '12px 14px',
-      borderRadius: '18px',
-      border: `1px solid ${theme.cardBorder}`,
-      background: theme.panelBg,
-    },
-    searchMetaRow: {
-      display: 'flex',
-      justifyContent: 'space-between',
-      gap: '10px',
-      alignItems: 'center',
-      flexWrap: 'wrap',
-    },
-    main: {
-      display: 'grid',
-      gridTemplateRows: 'auto auto minmax(0, 1fr) auto',
-      minHeight: 0,
-      overflow: 'hidden',
-    },
-    topBar: {
-      padding: '18px 20px',
-      borderBottom: `1px solid ${theme.cardBorder}`,
-      display: 'flex',
-      justifyContent: 'space-between',
-      flexWrap: 'wrap',
-      gap: '14px',
-      alignItems: 'center',
-      background: `linear-gradient(180deg, ${theme.panelBg}, ${theme.cardBg})`,
-    },
-    connectionPill: {
-      padding: '10px 14px',
-      borderRadius: '999px',
-      border: `1px solid ${theme.cardBorder}`,
+    sidebarItemActive: {
       background: theme.cardBg,
-      color: theme.textSecondary,
+    },
+    sidebarItemAvatar: {
+      width: '34px',
+      height: '34px',
+      borderRadius: '12px',
+      display: 'grid',
+      placeItems: 'center',
+      color: '#fff',
+      fontWeight: 800,
       fontSize: '12px',
-      fontWeight: 800,
-      textTransform: 'uppercase',
-      letterSpacing: '0.08em',
+      flexShrink: 0,
     },
-    threadName: {
-      margin: 0,
-      fontSize: '26px',
-      fontWeight: 800,
-      color: theme.textHeading,
+    sidebarItemText: {
+      flex: 1,
+      minWidth: 0,
     },
-    threadMeta: {
-      margin: '8px 0 0',
-      color: theme.textSecondary,
+    sidebarItemName: {
       fontSize: '13px',
-      lineHeight: 1.6,
+      fontWeight: 700,
+      color: theme.textHeading,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
     },
-    insightGrid: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-      gap: '14px',
-      padding: '16px 20px',
-      borderBottom: `1px solid ${theme.cardBorder}`,
-      background: theme.cardBg,
-      overflowY: 'auto',
-      maxHeight: '360px',
-    },
-    insightCard: {
-      display: 'grid',
-      gap: '12px',
-      padding: '16px',
-      borderRadius: '22px',
-      border: `1px solid ${theme.cardBorder}`,
-      background: theme.panelBg,
-    },
-    badgeRow: {
-      display: 'flex',
-      gap: '8px',
-      flexWrap: 'wrap',
-    },
-    badge: {
-      padding: '8px 10px',
-      borderRadius: '999px',
-      border: `1px solid ${theme.cardBorder}`,
-      background: theme.cardBg,
-      color: theme.textSecondary,
+    sidebarItemMeta: {
       fontSize: '11px',
-      fontWeight: 800,
-      textTransform: 'uppercase',
-      letterSpacing: '0.08em',
+      color: theme.textMuted,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
     },
-    unreadBadge: {
-      minWidth: '24px',
-      height: '24px',
-      padding: '0 8px',
+    sidebarUnread: {
+      minWidth: '18px',
+      height: '18px',
+      padding: '0 5px',
       borderRadius: '999px',
       background: theme.orange,
       color: '#fff',
-      display: 'grid',
-      placeItems: 'center',
-      fontSize: '11px',
+      fontSize: '10px',
       fontWeight: 800,
-      justifySelf: 'start',
-    },
-    imageGrid: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-      gap: '12px',
-    },
-    imageCard: {
-      borderRadius: '20px',
-      overflow: 'hidden',
-      border: `1px solid ${theme.cardBorder}`,
-      background: theme.cardBg,
-      display: 'grid',
-    },
-    imageFrame: {
-      width: '100%',
-      aspectRatio: '4 / 3',
-      objectFit: 'cover',
-      background: theme.panelDarkBg,
-    },
-    imageMeta: {
-      padding: '12px',
-      display: 'grid',
-      gap: '10px',
-    },
-    messages: {
-      minHeight: 0,
-      overflowY: 'auto',
-      padding: '18px 20px',
-      display: 'grid',
-      gap: '12px',
-      background: `linear-gradient(180deg, ${theme.panelDarkBg}, ${theme.cardBg})`,
-    },
-    empty: {
-      minHeight: '220px',
       display: 'grid',
       placeItems: 'center',
-      textAlign: 'center',
-      color: theme.textSecondary,
-      lineHeight: 1.8,
-      padding: '20px',
-    },
-    messageRow: {
-      display: 'flex',
-      gap: '10px',
-      alignItems: 'flex-start',
-    },
-    avatar: {
-      width: '42px',
-      height: '42px',
-      borderRadius: '16px',
-      display: 'grid',
-      placeItems: 'center',
-      color: '#fff',
-      fontWeight: 800,
-      fontSize: '14px',
       flexShrink: 0,
     },
-    messageCard: {
-      maxWidth: 'min(82%, 760px)',
-      padding: '12px 14px',
-      borderRadius: '20px',
-      border: `1px solid ${theme.cardBorder}`,
-      background: theme.panelBg,
-      boxShadow: `0 12px 32px ${theme.shadow}`,
-      display: 'grid',
-      gap: '6px',
-      wordBreak: 'break-word',
+    onlineDot: {
+      width: '8px',
+      height: '8px',
+      borderRadius: '50%',
+      background: theme.green,
+      flexShrink: 0,
     },
-    messageMeta: {
+    offlineDot: {
+      width: '8px',
+      height: '8px',
+      borderRadius: '50%',
+      background: theme.textMuted,
+      flexShrink: 0,
+    },
+    sidebarActions: {
+      padding: '10px 12px',
+      borderTop: `1px solid ${theme.cardBorder}`,
       display: 'flex',
-      gap: '10px',
-      flexWrap: 'wrap',
-      alignItems: 'center',
-      color: theme.textMuted,
-      fontSize: '11px',
-      fontWeight: 800,
-      textTransform: 'uppercase',
-      letterSpacing: '0.08em',
-    },
-    messageMetaSpacer: {
-      marginLeft: 'auto',
-      display: 'flex',
-      gap: '6px',
-      alignItems: 'center',
-    },
-    tinyIconButton: {
-      width: '24px',
-      height: '24px',
-      padding: 0,
-      borderRadius: '8px',
-      border: `1px solid ${theme.cardBorder}`,
-      background: theme.cardBg,
-      color: theme.textSecondary,
-      fontSize: '12px',
-      cursor: 'pointer',
-      display: 'grid',
-      placeItems: 'center',
-      lineHeight: 1,
-    },
-    replyQuote: {
-      borderLeft: `3px solid ${theme.blue}`,
-      borderRadius: '10px',
-      padding: '6px 8px',
-      background: theme.cardBg,
-      color: theme.textSecondary,
-      fontSize: '12px',
-      lineHeight: 1.4,
-      marginBottom: '2px',
-    },
-    inlineReplyComposer: {
-      marginTop: '8px',
-      display: 'grid',
       gap: '8px',
+      flexShrink: 0,
+    },
+    sidebarActionBtn: {
+      flex: 1,
       padding: '8px',
       borderRadius: '12px',
       border: `1px solid ${theme.cardBorder}`,
       background: theme.cardBg,
+      color: theme.textSecondary,
+      cursor: 'pointer',
+      fontSize: '18px',
+      display: 'grid',
+      placeItems: 'center',
+      fontFamily: theme.font,
     },
-    tinyInput: {
+    sidebarActionBtnActive: {
+      background: `${theme.blue}22`,
+      border: `1px solid ${theme.blue}`,
+    },
+    expansionPanel: {
+      padding: '12px 14px',
+      borderTop: `1px solid ${theme.cardBorder}`,
+      background: theme.cardBg,
+      display: 'grid',
+      gap: '8px',
+      maxHeight: '280px',
+      overflowY: 'auto',
+    },
+    main: {
+      flex: 1,
+      display: 'flex',
+      flexDirection: 'column',
+      minWidth: 0,
+      overflow: 'hidden',
+    },
+    topBar: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      padding: '10px 14px',
+      borderBottom: `1px solid ${theme.cardBorder}`,
+      background: theme.panelBg,
+      flexShrink: 0,
+    },
+    hamburger: {
+      width: '34px',
+      height: '34px',
+      borderRadius: '12px',
+      border: `1px solid ${theme.cardBorder}`,
+      background: theme.cardBg,
+      color: theme.textPrimary,
+      cursor: 'pointer',
+      fontSize: '16px',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0,
+    },
+    topBarTitle: {
+      flex: 1,
+      minWidth: 0,
+    },
+    chatName: {
+      fontSize: '15px',
+      fontWeight: 800,
+      color: theme.textHeading,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+      margin: 0,
+    },
+    chatMeta: {
+      fontSize: '11px',
+      color: theme.textMuted,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+      margin: 0,
+    },
+    topBarIcons: {
+      display: 'flex',
+      gap: '4px',
+      alignItems: 'center',
+      flexShrink: 0,
+    },
+    iconBtn: {
+      width: '32px',
+      height: '32px',
+      borderRadius: '10px',
+      border: `1px solid ${theme.cardBorder}`,
+      background: theme.cardBg,
+      color: theme.textSecondary,
+      cursor: 'pointer',
+      fontSize: '14px',
+      display: 'grid',
+      placeItems: 'center',
+      fontFamily: theme.font,
+    },
+    iconBtnActive: {
+      background: theme.blue,
+      color: '#fff',
+      border: `1px solid ${theme.blue}`,
+    },
+    connDot: {
+      width: '8px',
+      height: '8px',
+      borderRadius: '50%',
+      flexShrink: 0,
+    },
+    body: {
+      flex: 1,
+      display: 'flex',
+      minHeight: 0,
+      overflow: 'hidden',
+    },
+    messages: {
+      flex: 1,
+      overflowY: 'auto',
+      padding: '12px 14px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '4px',
+    },
+    msgRow: {
+      display: 'flex',
+      gap: '8px',
+      alignItems: 'flex-end',
+    },
+    msgRowOwn: {
+      flexDirection: 'row-reverse',
+      alignSelf: 'flex-end',
+      maxWidth: '76%',
+    },
+    msgRowOther: {
+      alignSelf: 'flex-start',
+      maxWidth: '76%',
+    },
+    msgAvatar: {
+      width: '28px',
+      height: '28px',
+      borderRadius: '10px',
+      display: 'grid',
+      placeItems: 'center',
+      color: '#fff',
+      fontWeight: 800,
+      fontSize: '11px',
+      flexShrink: 0,
+      marginBottom: '20px',
+    },
+    msgBubbleOwn: {
+      padding: '9px 13px',
+      borderRadius: '18px 18px 4px 18px',
+      background: `linear-gradient(135deg, ${theme.blue}, ${theme.purple})`,
+      color: '#fff',
+      wordBreak: 'break-word',
+    },
+    msgBubbleOther: {
+      padding: '9px 13px',
+      borderRadius: '18px 18px 18px 4px',
+      background: theme.cardBg,
+      color: theme.textPrimary,
+      border: `1px solid ${theme.cardBorder}`,
+      wordBreak: 'break-word',
+    },
+    msgText: {
+      fontSize: '14px',
+      lineHeight: 1.5,
+      whiteSpace: 'pre-wrap',
+    },
+    replyQuote: {
+      borderLeft: `3px solid rgba(255,255,255,0.5)`,
+      padding: '4px 8px',
+      marginBottom: '6px',
+      fontSize: '11px',
+      opacity: 0.8,
+      borderRadius: '0 6px 6px 0',
+    },
+    replyQuoteOther: {
+      borderLeft: `3px solid ${theme.blue}`,
+      padding: '4px 8px',
+      marginBottom: '6px',
+      fontSize: '11px',
+      color: theme.textMuted,
+      background: `${theme.blue}11`,
+      borderRadius: '0 6px 6px 0',
+    },
+    inlineReplyBox: {
+      marginTop: '8px',
+      padding: '8px',
+      borderRadius: '12px',
+      border: `1px solid ${theme.cardBorder}`,
+      background: `${theme.blue}11`,
+      display: 'grid',
+      gap: '7px',
+    },
+    tinyTextarea: {
       width: '100%',
       borderRadius: '10px',
       border: `1px solid ${theme.inputBorder}`,
       background: theme.inputBg,
       color: theme.textPrimary,
-      padding: '8px 10px',
+      padding: '7px 10px',
       fontSize: '12px',
       outline: 'none',
       fontFamily: theme.font,
       resize: 'vertical',
-      minHeight: '54px',
+      minHeight: '52px',
+      boxSizing: 'border-box',
     },
-    tinyActionRow: {
+    tinyBtnRow: {
       display: 'flex',
-      gap: '8px',
+      gap: '6px',
       justifyContent: 'flex-end',
     },
-    tinyButton: {
-      borderRadius: '10px',
+    tinyBtn: {
+      padding: '5px 10px',
+      borderRadius: '8px',
       border: `1px solid ${theme.cardBorder}`,
-      background: theme.panelBg,
-      color: theme.textPrimary,
-      padding: '6px 10px',
+      background: theme.cardBg,
+      color: theme.textSecondary,
       cursor: 'pointer',
       fontSize: '11px',
-      fontWeight: 800,
+      fontWeight: 700,
+      fontFamily: theme.font,
     },
-    messageText: {
-      fontSize: '15px',
-      lineHeight: 1.6,
-      color: theme.textPrimary,
-      whiteSpace: 'pre-wrap',
+    tinyBtnPrimary: {
+      background: theme.blue,
+      color: '#fff',
+      border: `1px solid ${theme.blue}`,
     },
     typingBar: {
-      padding: '0 20px 12px',
-      color: theme.textSecondary,
-      fontSize: '12px',
-      fontWeight: 700,
+      padding: '0 14px 4px',
+      color: theme.textMuted,
+      fontSize: '11px',
+      flexShrink: 0,
+      minHeight: '20px',
     },
     composer: {
       borderTop: `1px solid ${theme.cardBorder}`,
-      padding: '16px 20px 20px',
-      background: theme.cardBg,
-      display: 'grid',
-      gap: '10px',
-    },
-    composerRow: {
+      padding: '10px 12px',
+      background: theme.panelBg,
       display: 'flex',
-      gap: '10px',
+      gap: '8px',
       alignItems: 'flex-end',
+      flexShrink: 0,
+    },
+    composerInput: {
+      flex: 1,
+      borderRadius: '20px',
+      border: `1px solid ${theme.inputBorder}`,
+      background: theme.inputBg,
+      color: theme.textPrimary,
+      padding: '10px 16px',
+      fontSize: '14px',
+      outline: 'none',
+      fontFamily: theme.font,
+      resize: 'none',
+      lineHeight: 1.5,
+      overflowY: 'auto',
+    },
+    sendBtn: {
+      width: '42px',
+      height: '42px',
+      borderRadius: '14px',
+      border: 'none',
+      background: `linear-gradient(135deg, ${theme.blue}, ${theme.purple})`,
+      color: '#fff',
+      cursor: 'pointer',
+      fontSize: '18px',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0,
+    },
+    sidePanel: {
+      width: '280px',
+      flexShrink: 0,
+      borderLeft: `1px solid ${theme.cardBorder}`,
+      background: theme.panelBg,
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+    },
+    sidePanelHeader: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '10px 14px',
+      borderBottom: `1px solid ${theme.cardBorder}`,
+      flexShrink: 0,
+    },
+    sidePanelTitle: {
+      fontSize: '12px',
+      fontWeight: 800,
+      textTransform: 'uppercase',
+      letterSpacing: '0.08em',
+      color: theme.textMuted,
+      margin: 0,
+    },
+    sidePanelClose: {
+      width: '26px',
+      height: '26px',
+      borderRadius: '8px',
+      border: `1px solid ${theme.cardBorder}`,
+      background: theme.cardBg,
+      color: theme.textSecondary,
+      cursor: 'pointer',
+      fontSize: '14px',
+      display: 'grid',
+      placeItems: 'center',
+      fontFamily: theme.font,
+    },
+    sidePanelContent: {
+      flex: 1,
+      overflowY: 'auto',
+      padding: '12px 14px',
+      display: 'grid',
+      gap: '12px',
+      alignContent: 'start',
+    },
+    formRow: {
+      display: 'grid',
+      gap: '8px',
+    },
+    label: {
+      fontSize: '11px',
+      fontWeight: 700,
+      color: theme.textMuted,
+      textTransform: 'uppercase',
+      letterSpacing: '0.08em',
+    },
+    input: {
+      width: '100%',
+      borderRadius: '12px',
+      border: `1px solid ${theme.inputBorder}`,
+      background: theme.inputBg,
+      color: theme.textPrimary,
+      padding: '8px 12px',
+      fontSize: '13px',
+      outline: 'none',
+      fontFamily: theme.font,
+      boxSizing: 'border-box',
+    },
+    panelTextarea: {
+      width: '100%',
+      borderRadius: '12px',
+      border: `1px solid ${theme.inputBorder}`,
+      background: theme.inputBg,
+      color: theme.textPrimary,
+      padding: '8px 12px',
+      fontSize: '13px',
+      outline: 'none',
+      fontFamily: theme.font,
+      resize: 'vertical',
+      minHeight: '72px',
+      boxSizing: 'border-box',
+    },
+    select: {
+      width: '100%',
+      borderRadius: '12px',
+      border: `1px solid ${theme.inputBorder}`,
+      background: theme.inputBg,
+      color: theme.textPrimary,
+      padding: '8px 12px',
+      fontSize: '13px',
+      outline: 'none',
+      fontFamily: theme.font,
+    },
+    btn: {
+      width: '100%',
+      padding: '9px 12px',
+      borderRadius: '12px',
+      border: 'none',
+      background: `linear-gradient(135deg, ${theme.blue}, ${theme.purple})`,
+      color: '#fff',
+      cursor: 'pointer',
+      fontSize: '12px',
+      fontWeight: 800,
+      fontFamily: theme.font,
+    },
+    btnSecondary: {
+      background: theme.cardBg,
+      color: theme.textPrimary,
+      border: `1px solid ${theme.cardBorder}`,
     },
     helperText: {
-      fontSize: '12px',
-      color: theme.textSecondary,
-      lineHeight: 1.6,
+      fontSize: '11px',
+      color: theme.textMuted,
+      lineHeight: 1.5,
       margin: 0,
+    },
+    sectionTitle: {
+      fontSize: '11px',
+      fontWeight: 800,
+      textTransform: 'uppercase',
+      letterSpacing: '0.08em',
+      color: theme.textMuted,
+      margin: 0,
+    },
+    badge: {
+      padding: '3px 7px',
+      borderRadius: '999px',
+      border: `1px solid ${theme.cardBorder}`,
+      background: theme.cardBg,
+      color: theme.textMuted,
+      fontSize: '10px',
+      fontWeight: 800,
+      textTransform: 'uppercase',
+      letterSpacing: '0.06em',
+    },
+    badgeRow: {
+      display: 'flex',
+      gap: '6px',
+      flexWrap: 'wrap',
+    },
+    listItem: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      padding: '8px 10px',
+      borderRadius: '12px',
+      border: `1px solid ${theme.cardBorder}`,
+      background: theme.cardBg,
+    },
+    listItemText: {
+      flex: 1,
+      minWidth: 0,
+    },
+    listItemTitle: {
+      fontSize: '13px',
+      fontWeight: 700,
+      color: theme.textHeading,
+    },
+    listItemMeta: {
+      fontSize: '11px',
+      color: theme.textMuted,
+    },
+    emptyState: {
+      flex: 1,
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: '8px',
+      textAlign: 'center',
+      padding: '24px',
+      color: theme.textMuted,
+    },
+    backdrop: {
+      position: 'fixed',
+      inset: 0,
+      background: 'rgba(0,0,0,0.5)',
+      zIndex: 20,
     },
     toastStack: {
       position: 'fixed',
-      right: '20px',
-      bottom: '20px',
+      bottom: '16px',
+      right: '16px',
       display: 'grid',
-      gap: '10px',
-      zIndex: 40,
-      width: 'min(360px, calc(100vw - 32px))',
+      gap: '8px',
+      zIndex: 100,
+      width: 'min(320px, calc(100vw - 24px))',
     },
     toast: {
-      padding: '14px 16px',
-      borderRadius: '18px',
+      padding: '12px 14px',
+      borderRadius: '16px',
       border: `1px solid ${theme.cardBorder}`,
       background: theme.panelBg,
-      boxShadow: `0 18px 44px ${theme.shadow}`,
-      display: 'grid',
-      gap: '6px',
+      boxShadow: `0 8px 24px ${theme.shadow}`,
     },
     toastTitle: {
-      margin: 0,
-      fontSize: '13px',
+      fontSize: '12px',
       fontWeight: 800,
       color: theme.textHeading,
+      margin: 0,
     },
     toastBody: {
-      margin: 0,
-      fontSize: '12px',
-      lineHeight: 1.5,
-      color: theme.textSecondary,
+      fontSize: '11px',
+      color: theme.textMuted,
+      margin: '3px 0 0',
+      lineHeight: 1.4,
     },
   };
 }
@@ -585,9 +783,14 @@ export default function ChatPage() {
   const [memberSecurityForm, setMemberSecurityForm] = useState({ username: '', role: 'member', canView: true, canPost: true, canComment: true, canInvite: false });
   const [activeReplyMessageId, setActiveReplyMessageId] = useState('');
   const [replyDrafts, setReplyDrafts] = useState({});
+  const [showSidebar, setShowSidebar] = useState(false);
+  const [activePanelTab, setActivePanelTab] = useState('');
+  const [sidebarPanel, setSidebarPanel] = useState('');
+  const [sidebarFilter, setSidebarFilter] = useState('');
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
+    const composerRef = useRef(null);
   const inviteHandledRef = useRef(false);
   const activeChatRef = useRef(null);
   const incomingRequestsRef = useRef([]);
@@ -623,6 +826,18 @@ export default function ChatPage() {
     () => bootstrap.groups.filter((group) => group.parentGroupId === selectedGroup?.id),
     [bootstrap.groups, selectedGroup?.id],
   );
+
+  const filteredFriends = useMemo(() => {
+    if (!sidebarFilter.trim()) return bootstrap.friends;
+    const q = sidebarFilter.toLowerCase();
+    return bootstrap.friends.filter((f) => f.toLowerCase().includes(q));
+  }, [bootstrap.friends, sidebarFilter]);
+
+  const filteredGroups = useMemo(() => {
+    if (!sidebarFilter.trim()) return flattenedGroups;
+    const q = sidebarFilter.toLowerCase();
+    return flattenedGroups.filter(({ group }) => group.name.toLowerCase().includes(q));
+  }, [flattenedGroups, sidebarFilter]);
 
   useEffect(() => {
     activeChatRef.current = activeChat;
@@ -1309,576 +1524,527 @@ export default function ChatPage() {
   const canManageFolders = selectedMembership?.role === 'owner' || selectedMembership?.role === 'admin' || !selectedGroup?.settings?.onlyAdminsCreateFolders;
   const canBookmarkMessages = selectedMembership?.role === 'owner' || selectedMembership?.role === 'admin' || !selectedGroup?.settings?.onlyAdminsBookmarkMessages;
 
-  return (
-    <div className="chat-page" style={styles.page}>
-      <div style={styles.shell}>
-        <div className="chat-layout" style={styles.layout}>
-          <aside style={{ ...styles.panel, ...styles.sidebar }}>
-            <form style={styles.block} onSubmit={handleJoinByToken}>
-              <p style={styles.sectionTitle}>Join By Share Token</p>
-              <input
-                style={styles.textInput}
-                value={inviteToken}
-                onChange={(event) => setInviteToken(event.target.value)}
-                placeholder="Paste a group token"
-              />
-              <button type="submit" style={styles.primaryButton}>Join Shared Group</button>
-            </form>
+  // ── panel render helpers ────────────────────────────────────────────────
+  function renderMembersPanel() {
+    return (
+      <>
+        <div style={styles.badgeRow}>
+          {selectedGroup.memberships.map((m) => (
+            <span key={`${selectedGroup.id}-${m.username}`} style={styles.badge}>
+              {m.username} · {m.role}
+            </span>
+          ))}
+        </div>
+        {canInviteToGroup ? (
+          <form style={styles.formRow} onSubmit={handleUpdateVisibility}>
+            <p style={styles.label}>Update Members</p>
+            <input style={styles.input} value={visibilityForm.members} onChange={(e) => setVisibilityForm((p) => ({ ...p, members: e.target.value }))} placeholder="Members (comma separated)" />
+            <input style={styles.input} value={visibilityForm.viewers} onChange={(e) => setVisibilityForm((p) => ({ ...p, viewers: e.target.value }))} placeholder="Viewers (comma separated)" />
+            <button type="submit" style={styles.btn}>Save</button>
+          </form>
+        ) : <p style={styles.helperText}>Only users with invite permission can change visibility.</p>}
+        {childGroups.length > 0 && (
+          <div style={styles.formRow}>
+            <p style={styles.label}>Subgroups</p>
+            {childGroups.map((g) => (
+              <button key={g.id} type="button" style={{ ...styles.btn, ...styles.btnSecondary }} onClick={() => { selectGroup(g); setActivePanelTab(''); }}>
+                ↳ {g.name}
+              </button>
+            ))}
+          </div>
+        )}
+      </>
+    );
+  }
 
-            <section style={styles.block}>
-              <p style={styles.sectionTitle}>Add Buddy</p>
-              <input
-                style={styles.textInput}
-                value={buddySearch}
-                onChange={(event) => setBuddySearch(event.target.value)}
-              />
-              {buddySearchState === 'loading' ? <p style={styles.helperText}>Searching users...</p> : null}
-              {buddySearchError ? <p style={styles.helperText}>{buddySearchError}</p> : null}
-              {buddySearch.trim() && buddySearchState === 'done' && buddyResults.length === 0 ? <p style={styles.helperText}>No matching users found.</p> : null}
-              {buddyResults.map((result) => {
-                const isBuddy = bootstrap.friends.includes(result.username);
-                const isPending = bootstrap.outgoingRequests.includes(result.username);
-                const hasIncoming = bootstrap.incomingRequests.includes(result.username);
-                return (
-                  <div key={result.id} style={styles.searchCard}>
-                    <div style={styles.searchMetaRow}>
-                      <div>
-                        <div style={styles.listTitle}>{result.name || result.username}</div>
-                        <div style={styles.listMeta}>@{result.username}</div>
-                      </div>
-                      {isBuddy ? <span style={styles.badge}>Buddy</span> : null}
-                      {isPending ? <span style={styles.badge}>Pending</span> : null}
-                      {hasIncoming ? <span style={styles.badge}>Requested you</span> : null}
+  function renderFoldersPanel() {
+    return (
+      <>
+        {canManageFolders ? (
+          <form style={styles.formRow} onSubmit={handleCreateFolder}>
+            <p style={styles.label}>Create Folder</p>
+            <input style={styles.input} value={folderForm.name} onChange={(e) => setFolderForm((p) => ({ ...p, name: e.target.value }))} placeholder="Folder name" />
+            <input style={styles.input} value={folderForm.description} onChange={(e) => setFolderForm((p) => ({ ...p, description: e.target.value }))} placeholder="Description (optional)" />
+            <button type="submit" style={styles.btn}>Create</button>
+          </form>
+        ) : <p style={styles.helperText}>Only admins/owner can create folders.</p>}
+        {(selectedGroup.folders || []).length ? (
+          <div style={styles.formRow}>
+            <p style={styles.label}>Folders ({selectedGroup.folders.length})</p>
+            {selectedGroup.folders.map((folder) => (
+              <div key={folder.id} style={styles.listItem}>
+                <div style={styles.listItemText}>
+                  <div style={styles.listItemTitle}>📁 {folder.name}</div>
+                  <div style={styles.listItemMeta}>{folder.description || 'No description'} · {folder.items.length} items</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : <p style={styles.helperText}>No folders yet.</p>}
+      </>
+    );
+  }
+
+  function renderBookmarksPanel() {
+    return (
+      <>
+        <button type="button" style={{ ...styles.btn, ...styles.btnSecondary }} onClick={() => setShowBookmarkedOnly((v) => !v)}>
+          {showBookmarkedOnly ? '📨 Show All Messages' : '🔖 Show Bookmarked Only'}
+        </button>
+        {(selectedGroup.bookmarks || []).length ? (
+          <div style={styles.formRow}>
+            <p style={styles.label}>Bookmarks ({selectedGroup.bookmarks.length})</p>
+            {selectedGroup.bookmarks.map((bookmark) => (
+              <div key={bookmark.id} style={styles.listItem}>
+                <div style={styles.listItemText}>
+                  <div style={styles.listItemMeta}>by {bookmark.bookmarkedBy}</div>
+                  <div style={styles.listItemTitle}>Msg {String(bookmark.messageId || '').slice(0, 8)}…</div>
+                  {bookmark.note ? <div style={styles.helperText}>{bookmark.note}</div> : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : <p style={styles.helperText}>No bookmarks yet. Tap 🔖 on a message.</p>}
+      </>
+    );
+  }
+
+  function renderMediaPanel() {
+    return (
+      <>
+        <div style={styles.formRow}>
+          <p style={styles.label}>Upload Image</p>
+          <input style={styles.input} value={imageCaption} onChange={(e) => setImageCaption(e.target.value)} placeholder="Optional caption" />
+          <button type="button" style={{ ...styles.btn, ...styles.btnSecondary }} onClick={() => fileInputRef.current?.click()} disabled={!canPostToGroup}>
+            📎 Choose Image
+          </button>
+          <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleGroupImageUpload} />
+          <p style={styles.helperText}>{selectedGroup.images.length} images in this group</p>
+        </div>
+        {selectedGroup.images.length > 0 && (
+          <div style={{ display: 'grid', gap: '10px' }}>
+            {selectedGroup.images.map((image) => (
+              <div key={image.id} style={{ borderRadius: '12px', overflow: 'hidden', border: `1px solid ${theme.cardBorder}` }}>
+                <img src={image.imageUrl} alt={image.caption || ''} style={{ width: '100%', aspectRatio: '4/3', objectFit: 'cover', display: 'block' }} />
+                <div style={{ padding: '8px 10px' }}>
+                  <div style={styles.listItemTitle}>{image.caption || 'Untitled'}</div>
+                  <div style={styles.listItemMeta}>by {image.uploadedBy}</div>
+                  {canCommentInGroup ? (
+                    <div style={{ display: 'grid', gap: '6px', marginTop: '8px' }}>
+                      <input style={styles.input} value={commentDrafts[image.id] || ''} onChange={(e) => setCommentDrafts((p) => ({ ...p, [image.id]: e.target.value }))} placeholder="Add comment…" />
+                      <button type="button" style={styles.btn} onClick={() => handleImageComment(image.id)}>Post</button>
                     </div>
-                    <div style={styles.actionsRow}>
-                      <button
-                        type="button"
-                        style={styles.secondaryButton}
-                        onClick={() => selectFriend(result.username)}
-                        disabled={!isBuddy}
-                      >
-                        Open Chat
-                      </button>
-                      <button
-                        type="button"
-                        style={styles.primaryButton}
-                        onClick={() => handleBuddyRequest(result.username)}
-                        disabled={isBuddy || isPending}
-                      >
-                        {isBuddy ? 'Connected' : isPending ? 'Requested' : 'Send Request'}
-                      </button>
-                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </>
+    );
+  }
+
+  function renderInvitePanel() {
+    const inviteUrl = selectedGroup?.shareToken
+      ? `${typeof window !== 'undefined' ? window.location.origin : ''}/join-group/${encodeURIComponent(selectedGroup.shareToken)}`
+      : '';
+    return (
+      <>
+        {inviteUrl && (
+          <div style={styles.formRow}>
+            <p style={styles.label}>Invite Link</p>
+            <div style={{ ...styles.listItem, wordBreak: 'break-all' }}>
+              <span style={{ ...styles.listItemMeta, fontSize: '11px' }}>{inviteUrl}</span>
+            </div>
+            <button type="button" style={styles.btn} onClick={() => navigator.clipboard?.writeText(inviteUrl).then(() => reportStatus('Link copied!'))}>
+              📋 Copy Link
+            </button>
+            <button type="button" style={{ ...styles.btn, background: '#25D366', border: 'none', color: '#fff' }} onClick={openWhatsAppShare}>
+              💬 Share on WhatsApp
+            </button>
+          </div>
+        )}
+      </>
+    );
+  }
+
+  function renderSettingsPanel() {
+    return isGroupOwner ? (
+      <>
+        <form style={styles.formRow} onSubmit={handleSaveGroupSettings}>
+          <p style={styles.label}>Group Settings</p>
+          <label style={styles.helperText}>
+            <input type="checkbox" checked={groupSettingsForm.allowJoinByLink} onChange={(e) => setGroupSettingsForm((p) => ({ ...p, allowJoinByLink: e.target.checked }))} />
+            {' '}Allow join by link
+          </label>
+          <input style={styles.input} type="number" value={groupSettingsForm.clearMessagesAfterHours} onChange={(e) => setGroupSettingsForm((p) => ({ ...p, clearMessagesAfterHours: e.target.value }))} placeholder="Auto-clear after N hours (empty = never)" />
+          <label style={styles.helperText}>
+            <input type="checkbox" checked={groupSettingsForm.onlyAdminsCreateFolders} onChange={(e) => setGroupSettingsForm((p) => ({ ...p, onlyAdminsCreateFolders: e.target.checked }))} />
+            {' '}Only admins create folders
+          </label>
+          <label style={styles.helperText}>
+            <input type="checkbox" checked={groupSettingsForm.onlyAdminsBookmarkMessages} onChange={(e) => setGroupSettingsForm((p) => ({ ...p, onlyAdminsBookmarkMessages: e.target.checked }))} />
+            {' '}Only admins bookmark
+          </label>
+          <button type="submit" style={styles.btn}>Save Settings</button>
+        </form>
+        <form style={styles.formRow} onSubmit={handleUpdateMemberSecurity}>
+          <p style={styles.label}>Member Permissions</p>
+          <input style={styles.input} value={memberSecurityForm.username} onChange={(e) => setMemberSecurityForm((p) => ({ ...p, username: e.target.value }))} placeholder="Username to update" />
+          <select style={styles.select} value={memberSecurityForm.role} onChange={(e) => setMemberSecurityForm((p) => ({ ...p, role: e.target.value }))}>
+            <option value="admin">Admin</option>
+            <option value="member">Member</option>
+            <option value="viewer">Viewer</option>
+          </select>
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+            <label style={styles.helperText}><input type="checkbox" checked={memberSecurityForm.canView} onChange={(e) => setMemberSecurityForm((p) => ({ ...p, canView: e.target.checked }))} /> View</label>
+            <label style={styles.helperText}><input type="checkbox" checked={memberSecurityForm.canPost} onChange={(e) => setMemberSecurityForm((p) => ({ ...p, canPost: e.target.checked }))} /> Post</label>
+            <label style={styles.helperText}><input type="checkbox" checked={memberSecurityForm.canComment} onChange={(e) => setMemberSecurityForm((p) => ({ ...p, canComment: e.target.checked }))} /> Comment</label>
+            <label style={styles.helperText}><input type="checkbox" checked={memberSecurityForm.canInvite} onChange={(e) => setMemberSecurityForm((p) => ({ ...p, canInvite: e.target.checked }))} /> Invite</label>
+          </div>
+          <button type="submit" style={{ ...styles.btn, ...styles.btnSecondary }}>Update Member</button>
+        </form>
+      </>
+    ) : <p style={styles.helperText}>Only the group owner can manage settings.</p>;
+  }
+
+  // ── render ──────────────────────────────────────────────────────────────
+  return (
+    <div style={styles.root}>
+      {/* Mobile backdrop */}
+      {showSidebar && <div style={styles.backdrop} className="sidebar-backdrop" onClick={() => setShowSidebar(false)} />}
+
+      {/* Sidebar */}
+      <aside className={`chat-sidebar${showSidebar ? ' chat-sidebar--open' : ''}`} style={styles.sidebar}>
+        <div style={styles.sidebarHeader}>
+          <div style={styles.sidebarAvatar}>{(user?.username || '?').slice(0, 2).toUpperCase()}</div>
+          <span style={styles.sidebarUsername}>{user?.username || 'Loading…'}</span>
+          <div style={{ ...styles.connDot, background: connectionState === 'connected' ? theme.green : connectionState === 'connecting' ? theme.orange : theme.red }} title={connectionState} />
+        </div>
+
+        <div style={styles.sidebarSearch}>
+          <input style={styles.sidebarSearchInput} placeholder="Search chats…" value={sidebarFilter} onChange={(e) => setSidebarFilter(e.target.value)} />
+        </div>
+
+        <div style={styles.sidebarScroll}>
+          {bootstrap.incomingRequests.length > 0 && (
+            <>
+              <p style={styles.sidebarSectionLabel}>Requests ({bootstrap.incomingRequests.length})</p>
+              {bootstrap.incomingRequests.map((entry) => (
+                <div key={entry} style={{ ...styles.sidebarItem, gap: '8px' }}>
+                  <div style={{ ...styles.sidebarItemAvatar, background: getUserColor(entry, theme) }}>{entry.slice(0, 2).toUpperCase()}</div>
+                  <div style={styles.sidebarItemText}>
+                    <div style={styles.sidebarItemName}>{entry}</div>
+                    <div style={styles.sidebarItemMeta}>Buddy request</div>
                   </div>
+                  <button type="button" style={{ ...styles.tinyBtn, ...styles.tinyBtnPrimary }} onClick={() => handleAcceptBuddy(entry)}>✓</button>
+                </div>
+              ))}
+            </>
+          )}
+
+          {filteredFriends.length > 0 && (
+            <>
+              <p style={styles.sidebarSectionLabel}>Direct Messages</p>
+              {filteredFriends.map((friendName) => {
+                const chatKey = getChatKey({ type: 'dm', id: buildDmId(user?.username || '', friendName) });
+                const isActive = activeChat?.type === 'dm' && activeChat?.name === friendName;
+                return (
+                  <button key={friendName} type="button" className="sidebar-item" style={{ ...styles.sidebarItem, ...(isActive ? styles.sidebarItemActive : {}) }} onClick={() => { selectFriend(friendName); setShowSidebar(false); }}>
+                    <div style={{ ...styles.sidebarItemAvatar, background: getUserColor(friendName, theme) }}>{friendName.slice(0, 2).toUpperCase()}</div>
+                    <div style={styles.sidebarItemText}>
+                      <div style={styles.sidebarItemName}>{friendName}</div>
+                      <div style={styles.sidebarItemMeta}>{onlineUsers.includes(friendName) ? 'Online' : 'Offline'}</div>
+                    </div>
+                    <div style={onlineUsers.includes(friendName) ? styles.onlineDot : styles.offlineDot} />
+                    {unreadCounts[chatKey] ? <span style={styles.sidebarUnread}>{unreadCounts[chatKey]}</span> : null}
+                  </button>
                 );
               })}
-            </section>
+            </>
+          )}
 
-            <section style={styles.block}>
-              <p style={styles.sectionTitle}>Buddy Requests</p>
-              {bootstrap.incomingRequests.length ? bootstrap.incomingRequests.map((entry) => (
-                <div key={entry} style={styles.actionsRow}>
-                  <button type="button" style={{ ...styles.listButton, flex: 1 }} onClick={() => handleAcceptBuddy(entry)}>
-                    <span style={styles.listTitle}>{entry}</span>
-                    <span style={styles.listMeta}>Accept buddy request</span>
+          {filteredGroups.length > 0 && (
+            <>
+              <p style={styles.sidebarSectionLabel}>Groups</p>
+              {filteredGroups.map(({ group, depth }) => {
+                const chatKey = getChatKey({ type: 'group', id: group.id });
+                const isActive = activeChat?.type === 'group' && activeChat?.id === group.id;
+                return (
+                  <button key={group.id} type="button" className="sidebar-item" style={{ ...styles.sidebarItem, paddingLeft: `${14 + depth * 12}px`, ...(isActive ? styles.sidebarItemActive : {}) }} onClick={() => { selectGroup(group); setShowSidebar(false); }}>
+                    <div style={{ ...styles.sidebarItemAvatar, background: getUserColor(group.name, theme), fontSize: '15px' }}>{depth ? '↳' : '#'}</div>
+                    <div style={styles.sidebarItemText}>
+                      <div style={styles.sidebarItemName}>{group.name}</div>
+                      <div style={styles.sidebarItemMeta}>{group.memberships.length} members</div>
+                    </div>
+                    {unreadCounts[chatKey] ? <span style={styles.sidebarUnread}>{unreadCounts[chatKey]}</span> : null}
+                  </button>
+                );
+              })}
+            </>
+          )}
+
+          {filteredFriends.length === 0 && filteredGroups.length === 0 && bootstrap.incomingRequests.length === 0 && (
+            <div style={{ padding: '24px 14px', textAlign: 'center', color: theme.textMuted, fontSize: '12px', lineHeight: 1.7 }}>
+              {sidebarFilter ? 'No matches.' : 'No conversations yet.\nUse the buttons below to get started.'}
+            </div>
+          )}
+        </div>
+
+        <div style={styles.sidebarActions}>
+          <button type="button" title="Add Buddy" style={{ ...styles.sidebarActionBtn, ...(sidebarPanel === 'buddy' ? styles.sidebarActionBtnActive : {}) }} onClick={() => setSidebarPanel(sidebarPanel === 'buddy' ? '' : 'buddy')}>👤</button>
+          <button type="button" title="Create Group" style={{ ...styles.sidebarActionBtn, ...(sidebarPanel === 'group' ? styles.sidebarActionBtnActive : {}) }} onClick={() => setSidebarPanel(sidebarPanel === 'group' ? '' : 'group')}>💬</button>
+          <button type="button" title="Join by Token" style={{ ...styles.sidebarActionBtn, ...(sidebarPanel === 'token' ? styles.sidebarActionBtnActive : {}) }} onClick={() => setSidebarPanel(sidebarPanel === 'token' ? '' : 'token')}>🔗</button>
+        </div>
+
+        {sidebarPanel === 'buddy' && (
+          <div style={styles.expansionPanel}>
+            <p style={styles.sectionTitle}>Find & Add Buddy</p>
+            <input style={styles.input} value={buddySearch} onChange={(e) => setBuddySearch(e.target.value)} placeholder="Search username…" />
+            {buddySearchState === 'loading' && <p style={styles.helperText}>Searching…</p>}
+            {buddySearchError && <p style={styles.helperText}>{buddySearchError}</p>}
+            {buddySearch.trim() && buddySearchState === 'done' && buddyResults.length === 0 && <p style={styles.helperText}>No users found.</p>}
+            {buddyResults.map((result) => {
+              const isBuddy = bootstrap.friends.includes(result.username);
+              const isPending = bootstrap.outgoingRequests.includes(result.username);
+              return (
+                <div key={result.id} style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: '12px', fontWeight: 700, color: theme.textHeading }}>{result.name || result.username}</div>
+                    <div style={{ fontSize: '11px', color: theme.textMuted }}>@{result.username}</div>
+                  </div>
+                  <button type="button" style={{ ...styles.tinyBtn, ...(isBuddy || isPending ? {} : styles.tinyBtnPrimary) }} disabled={isBuddy || isPending} onClick={() => handleBuddyRequest(result.username)}>
+                    {isBuddy ? '✓' : isPending ? '⏳' : '+Add'}
                   </button>
                 </div>
-              )) : <p style={styles.helperText}>No pending requests.</p>}
-            </section>
+              );
+            })}
+          </div>
+        )}
 
-            <section style={styles.block}>
-              <p style={styles.sectionTitle}>Buddies</p>
-              {bootstrap.friends.length ? bootstrap.friends.map((friendName) => (
-                <button key={friendName} type="button" style={styles.listButton} onClick={() => selectFriend(friendName)}>
-                  <span style={styles.listTitle}>@{friendName}</span>
-                  <span style={styles.listMeta}>{onlineUsers.includes(friendName) ? 'Online now' : 'Offline'}</span>
-                  {unreadCounts[getChatKey({ type: 'dm', id: buildDmId(user?.username || '', friendName) })] ? (
-                    <span style={styles.unreadBadge}>
-                      {unreadCounts[getChatKey({ type: 'dm', id: buildDmId(user?.username || '', friendName) })]}
-                    </span>
-                  ) : null}
-                </button>
-              )) : <p style={styles.helperText}>Accepted buddies will appear here for direct messaging.</p>}
-            </section>
+        {sidebarPanel === 'group' && (
+          <form style={styles.expansionPanel} onSubmit={handleCreateGroup}>
+            <p style={styles.sectionTitle}>Create Group</p>
+            <input style={styles.input} value={groupForm.name} onChange={(e) => setGroupForm((p) => ({ ...p, name: e.target.value }))} placeholder="Group name" />
+            <textarea style={{ ...styles.input, minHeight: '52px', resize: 'vertical' }} value={groupForm.description} onChange={(e) => setGroupForm((p) => ({ ...p, description: e.target.value }))} placeholder="Description (optional)" />
+            <select style={styles.select} value={groupForm.parentGroupId} onChange={(e) => setGroupForm((p) => ({ ...p, parentGroupId: e.target.value }))}>
+              <option value="">Top-level group</option>
+              {bootstrap.groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+            </select>
+            <input style={styles.input} value={groupForm.members} onChange={(e) => setGroupForm((p) => ({ ...p, members: e.target.value }))} placeholder="Members (comma separated)" />
+            <input style={styles.input} value={groupForm.viewers} onChange={(e) => setGroupForm((p) => ({ ...p, viewers: e.target.value }))} placeholder="Viewers (comma separated)" />
+            <button type="submit" style={styles.btn}>Create Group</button>
+          </form>
+        )}
 
-            <section style={styles.block}>
-              <p style={styles.sectionTitle}>Groups And Subgroups</p>
-              {flattenedGroups.length ? flattenedGroups.map(({ group, depth }) => (
-                <button
-                  key={group.id}
-                  type="button"
-                  style={{ ...styles.listButton, marginLeft: depth * 14 }}
-                  onClick={() => selectGroup(group)}
-                >
-                  <span style={styles.listTitle}>{depth ? 'Subgroup' : 'Group'}: {group.name}</span>
-                  <span style={styles.listMeta}>{group.memberships.length} visible members</span>
-                  {unreadCounts[getChatKey({ type: 'group', id: group.id })] ? (
-                    <span style={styles.unreadBadge}>{unreadCounts[getChatKey({ type: 'group', id: group.id })]}</span>
-                  ) : null}
-                </button>
-              )) : <p style={styles.helperText}>No custom groups yet.</p>}
-            </section>
+        {sidebarPanel === 'token' && (
+          <form style={styles.expansionPanel} onSubmit={handleJoinByToken}>
+            <p style={styles.sectionTitle}>Join by Token</p>
+            <input style={styles.input} value={inviteToken} onChange={(e) => setInviteToken(e.target.value)} placeholder="Paste group token" />
+            <button type="submit" style={styles.btn}>Join Group</button>
+          </form>
+        )}
+      </aside>
 
-            <form style={styles.block} onSubmit={handleCreateGroup}>
-              <p style={styles.sectionTitle}>Create Group</p>
-              <input
-                style={styles.textInput}
-                value={groupForm.name}
-                onChange={(event) => setGroupForm((previous) => ({ ...previous, name: event.target.value }))}
-                placeholder="Group name"
-              />
-              <textarea
-                style={styles.textarea}
-                value={groupForm.description}
-                onChange={(event) => setGroupForm((previous) => ({ ...previous, description: event.target.value }))}
-                placeholder="What is this group for?"
-              />
-              <select
-                style={styles.select}
-                value={groupForm.parentGroupId}
-                onChange={(event) => setGroupForm((previous) => ({ ...previous, parentGroupId: event.target.value }))}
-              >
-                <option value="">Top-level group</option>
-                {bootstrap.groups.map((group) => (
-                  <option key={group.id} value={group.id}>{group.name}</option>
-                ))}
-              </select>
-              <input
-                style={styles.textInput}
-                value={groupForm.members}
-                onChange={(event) => setGroupForm((previous) => ({ ...previous, members: event.target.value }))}
-                placeholder="Members who can post, comma separated"
-              />
-              <input
-                style={styles.textInput}
-                value={groupForm.viewers}
-                onChange={(event) => setGroupForm((previous) => ({ ...previous, viewers: event.target.value }))}
-                placeholder="View-only users, comma separated"
-              />
-              <button type="submit" style={styles.primaryButton}>Create Group</button>
-            </form>
-          </aside>
+      {/* Main chat area */}
+      <main style={styles.main}>
+        {/* Top bar */}
+        <div style={styles.topBar}>
+          <button type="button" className="hamburger-btn" style={styles.hamburger} onClick={() => setShowSidebar(true)}>☰</button>
+          <div style={styles.topBarTitle}>
+            <h2 style={styles.chatName}>
+              {activeChat
+                ? activeChat.type === 'dm'
+                  ? `@${activeChat.label || activeChat.name}`
+                  : `#${activeChat.label || activeChat.name}`
+                : 'Cosmix Chat'}
+            </h2>
+            {activeChat && (
+              <p style={styles.chatMeta}>
+                {activeChat.type === 'dm'
+                  ? (onlineUsers.includes(activeChat.name) ? 'Online' : 'Offline')
+                  : (selectedGroup?.description || `${selectedGroup?.memberships?.length || 0} members`)}
+              </p>
+            )}
+          </div>
+          <div style={styles.topBarIcons}>
+            <div style={{ ...styles.connDot, background: connectionState === 'connected' ? theme.green : connectionState === 'connecting' ? theme.orange : theme.red }} title={connectionState} />
+            {selectedGroup && (
+              <>
+                <button type="button" title="Members" style={{ ...styles.iconBtn, ...(activePanelTab === 'members' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'members' ? '' : 'members')}>👥</button>
+                <button type="button" title="Folders" style={{ ...styles.iconBtn, ...(activePanelTab === 'folders' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'folders' ? '' : 'folders')}>📁</button>
+                <button type="button" title="Bookmarks" style={{ ...styles.iconBtn, ...(activePanelTab === 'bookmarks' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'bookmarks' ? '' : 'bookmarks')}>🔖</button>
+                <button type="button" title="Media" style={{ ...styles.iconBtn, ...(activePanelTab === 'media' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'media' ? '' : 'media')}>🖼️</button>
+                <button type="button" title="Invite" style={{ ...styles.iconBtn, ...(activePanelTab === 'invite' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'invite' ? '' : 'invite')}>🔗</button>
+                {isGroupOwner && <button type="button" title="Settings" style={{ ...styles.iconBtn, ...(activePanelTab === 'settings' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'settings' ? '' : 'settings')}>⚙️</button>}
+              </>
+            )}
+          </div>
+        </div>
 
-          <section style={{ ...styles.panel, ...styles.main }}>
-            <div style={styles.topBar}>
-              <div>
-                <h2 style={styles.threadName}>
-                  {activeChat
-                    ? activeChat.type === 'dm'
-                      ? `@${activeChat.label || activeChat.name}`
-                      : `#${activeChat.label || activeChat.name}`
-                    : 'No conversation selected'}
-                </h2>
-                <p style={styles.threadMeta}>
-                  {!activeChat
-                    ? 'Start by connecting with a buddy or joining a group.'
-                    : activeChat.type === 'dm'
-                    ? 'Direct messaging is available for connected buddies.'
-                    : selectedGroup?.description || 'Only members of this group can view and post here.'}
+        {/* Body: messages + optional side panel */}
+        <div style={styles.body}>
+          {/* Messages */}
+          <div style={styles.messages}>
+            {visibleMessages.length ? visibleMessages.map((message) => {
+              const isOwn = message.user === user?.username;
+              const parsed = parseReplyEnvelope(message.text || message.gif || '');
+              return (
+                <div key={message.id || `${message.user}-${message.timestamp}`} className="msg-group" style={{ display: 'flex', flexDirection: 'column' }}>
+                  <div style={{ ...styles.msgRow, ...(isOwn ? styles.msgRowOwn : styles.msgRowOther) }}>
+                    {!isOwn && (
+                      <div style={{ ...styles.msgAvatar, background: getUserColor(message.user || 'user', theme) }}>
+                        {(message.user || 'U').slice(0, 2).toUpperCase()}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', ...(isOwn ? { alignItems: 'flex-end' } : {}) }}>
+                      {!isOwn && <span style={{ fontSize: '11px', fontWeight: 800, color: getUserColor(message.user || 'user', theme), paddingLeft: '2px' }}>{message.user}</span>}
+                      <div style={isOwn ? styles.msgBubbleOwn : styles.msgBubbleOther}>
+                        {parsed.replyToMessageId && (
+                          <div style={isOwn ? styles.replyQuote : styles.replyQuoteOther}>↩ Reply to {parsed.replyToUser}</div>
+                        )}
+                        <div style={styles.msgText}>{parsed.body || (message.text || message.gif || '')}</div>
+                        {activeReplyMessageId === message.id && (
+                          <div style={styles.inlineReplyBox}>
+                            <div style={styles.replyQuoteOther}>Replying to {message.user}</div>
+                            <textarea style={styles.tinyTextarea} value={replyDrafts[message.id] || ''} onChange={(e) => handleReplyDraftChange(message.id, e.target.value)} placeholder="Write reply…" autoFocus />
+                            <div style={styles.tinyBtnRow}>
+                              <button type="button" style={styles.tinyBtn} onClick={() => setActiveReplyMessageId('')}>Cancel</button>
+                              <button type="button" style={{ ...styles.tinyBtn, ...styles.tinyBtnPrimary }} onClick={() => handleSendInlineReply(message)}>Send</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', ...(isOwn ? { justifyContent: 'flex-end' } : {}) }}>
+                        <span style={{ fontSize: '10px', color: theme.textMuted }}>
+                          {new Date(message.timestamp || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                        <span className="msg-actions" style={{ display: 'flex', gap: '3px' }}>
+                          <button type="button" className="msg-action-btn" style={{ width: '22px', height: '22px', borderRadius: '7px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, color: theme.textSecondary, cursor: 'pointer', fontSize: '11px', display: 'grid', placeItems: 'center', fontFamily: theme.font }} title="Reply" onClick={() => toggleReplyBox(message.id)}>↩</button>
+                          {selectedGroup && canBookmarkMessages && (
+                            <button type="button" className="msg-action-btn" style={{ width: '22px', height: '22px', borderRadius: '7px', border: `1px solid ${bookmarkedMessageIds.has(message.id) ? theme.orange : theme.cardBorder}`, background: theme.panelBg, color: bookmarkedMessageIds.has(message.id) ? theme.orange : theme.textSecondary, cursor: 'pointer', fontSize: '11px', display: 'grid', placeItems: 'center', fontFamily: theme.font }} title={bookmarkedMessageIds.has(message.id) ? 'Bookmarked' : 'Bookmark'} onClick={() => handleBookmarkMessage(message.id)}>🔖</button>
+                          )}
+                          {selectedGroup && (selectedGroup.folders || []).length > 0 && (
+                            <button type="button" className="msg-action-btn" style={{ width: '22px', height: '22px', borderRadius: '7px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, color: theme.textSecondary, cursor: 'pointer', fontSize: '11px', display: 'grid', placeItems: 'center', fontFamily: theme.font }} title="Save to folder" onClick={() => handleSaveMessageToFolder(message.id)}>📁</button>
+                          )}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            }) : (
+              <div style={styles.emptyState}>
+                <div style={{ fontSize: '40px', opacity: 0.35 }}>{activeChat ? '💬' : '🌐'}</div>
+                <p style={{ fontSize: '14px', lineHeight: 1.6, margin: 0 }}>
+                  {activeChat ? 'No messages yet — say hello! 👋' : 'Select a buddy or group to start chatting'}
                 </p>
               </div>
+            )}
+            <div ref={messagesEndRef} />
+          </div>
 
-              <div style={styles.actionsRow}>
-                <span style={styles.connectionPill}>{connectionState}</span>
-                {selectedGroup ? (
-                <div style={styles.actionsRow}>
-                  <button type="button" style={styles.secondaryButton} onClick={openWhatsAppShare}>Share To WhatsApp</button>
-                  <button type="button" style={styles.secondaryButton} onClick={() => navigator.clipboard?.writeText(`${window.location.origin}/join-group/${encodeURIComponent(selectedGroup.shareToken)}`)}>Copy Invite Link</button>
-                </div>
-                ) : null}
+          {/* Side panel */}
+          {activePanelTab && selectedGroup && (
+            <div className="side-panel" style={styles.sidePanel}>
+              <div style={styles.sidePanelHeader}>
+                <p style={styles.sidePanelTitle}>
+                  {activePanelTab === 'members' ? '👥 Members' : activePanelTab === 'folders' ? '📁 Folders' : activePanelTab === 'bookmarks' ? '🔖 Bookmarks' : activePanelTab === 'media' ? '🖼️ Media' : activePanelTab === 'invite' ? '🔗 Invite' : '⚙️ Settings'}
+                </p>
+                <button type="button" style={styles.sidePanelClose} onClick={() => setActivePanelTab('')}>✕</button>
+              </div>
+              <div style={styles.sidePanelContent}>
+                {activePanelTab === 'members' && renderMembersPanel()}
+                {activePanelTab === 'folders' && renderFoldersPanel()}
+                {activePanelTab === 'bookmarks' && renderBookmarksPanel()}
+                {activePanelTab === 'media' && renderMediaPanel()}
+                {activePanelTab === 'invite' && renderInvitePanel()}
+                {activePanelTab === 'settings' && renderSettingsPanel()}
               </div>
             </div>
-
-            {selectedGroup ? (
-              <div style={styles.insightGrid}>
-                <section style={styles.insightCard}>
-                  <p style={styles.sectionTitle}>Visibility</p>
-                  <div style={styles.badgeRow}>
-                    {selectedGroup.memberships.map((membership) => (
-                      <span key={`${selectedGroup.id}-${membership.username}`} style={styles.badge}>
-                        {membership.username} · {membership.role}
-                      </span>
-                    ))}
-                  </div>
-                  {canInviteToGroup ? (
-                    <form style={{ display: 'grid', gap: '10px' }} onSubmit={handleUpdateVisibility}>
-                      <input
-                        style={styles.textInput}
-                        value={visibilityForm.members}
-                        onChange={(event) => setVisibilityForm((previous) => ({ ...previous, members: event.target.value }))}
-                        placeholder="Members who can post"
-                      />
-                      <input
-                        style={styles.textInput}
-                        value={visibilityForm.viewers}
-                        onChange={(event) => setVisibilityForm((previous) => ({ ...previous, viewers: event.target.value }))}
-                        placeholder="View-only usernames"
-                      />
-                      <button type="submit" style={styles.primaryButton}>Save Visibility</button>
-                    </form>
-                  ) : <p style={styles.helperText}>Only users with invite permission can change visibility.</p>}
-                </section>
-
-                <section style={styles.insightCard}>
-                  <p style={styles.sectionTitle}>Group Security And Retention</p>
-                  {isGroupOwner ? (
-                    <form style={{ display: 'grid', gap: '10px' }} onSubmit={handleSaveGroupSettings}>
-                      <label style={styles.helperText}>
-                        <input
-                          type="checkbox"
-                          checked={groupSettingsForm.allowJoinByLink}
-                          onChange={(event) => setGroupSettingsForm((previous) => ({ ...previous, allowJoinByLink: event.target.checked }))}
-                        />
-                        {' '}Allow users to join through shared link
-                      </label>
-                      <input
-                        style={styles.textInput}
-                        value={groupSettingsForm.clearMessagesAfterHours}
-                        onChange={(event) => setGroupSettingsForm((previous) => ({ ...previous, clearMessagesAfterHours: event.target.value }))}
-                        placeholder="Clear group messages after hours (leave empty to keep forever)"
-                      />
-                      <label style={styles.helperText}>
-                        <input
-                          type="checkbox"
-                          checked={groupSettingsForm.onlyAdminsCreateFolders}
-                          onChange={(event) => setGroupSettingsForm((previous) => ({ ...previous, onlyAdminsCreateFolders: event.target.checked }))}
-                        />
-                        {' '}Only admins/owner can create folders
-                      </label>
-                      <label style={styles.helperText}>
-                        <input
-                          type="checkbox"
-                          checked={groupSettingsForm.onlyAdminsBookmarkMessages}
-                          onChange={(event) => setGroupSettingsForm((previous) => ({ ...previous, onlyAdminsBookmarkMessages: event.target.checked }))}
-                        />
-                        {' '}Only admins/owner can bookmark messages
-                      </label>
-                      <button type="submit" style={styles.primaryButton}>Save Group Security</button>
-                    </form>
-                  ) : <p style={styles.helperText}>Only group owner can manage security and auto-clear settings.</p>}
-
-                  {isGroupOwner ? (
-                    <form style={{ display: 'grid', gap: '10px' }} onSubmit={handleUpdateMemberSecurity}>
-                      <input
-                        style={styles.textInput}
-                        value={memberSecurityForm.username}
-                        onChange={(event) => setMemberSecurityForm((previous) => ({ ...previous, username: event.target.value }))}
-                        placeholder="Member username to update"
-                      />
-                      <select
-                        style={styles.select}
-                        value={memberSecurityForm.role}
-                        onChange={(event) => setMemberSecurityForm((previous) => ({ ...previous, role: event.target.value }))}
-                      >
-                        <option value="admin">Admin</option>
-                        <option value="member">Member</option>
-                        <option value="viewer">Viewer</option>
-                      </select>
-                      <div style={styles.badgeRow}>
-                        <label style={styles.helperText}><input type="checkbox" checked={memberSecurityForm.canView} onChange={(event) => setMemberSecurityForm((previous) => ({ ...previous, canView: event.target.checked }))} /> View</label>
-                        <label style={styles.helperText}><input type="checkbox" checked={memberSecurityForm.canPost} onChange={(event) => setMemberSecurityForm((previous) => ({ ...previous, canPost: event.target.checked }))} /> Post</label>
-                        <label style={styles.helperText}><input type="checkbox" checked={memberSecurityForm.canComment} onChange={(event) => setMemberSecurityForm((previous) => ({ ...previous, canComment: event.target.checked }))} /> Comment</label>
-                        <label style={styles.helperText}><input type="checkbox" checked={memberSecurityForm.canInvite} onChange={(event) => setMemberSecurityForm((previous) => ({ ...previous, canInvite: event.target.checked }))} /> Invite</label>
-                      </div>
-                      <button type="submit" style={styles.secondaryButton}>Update Member Security</button>
-                    </form>
-                  ) : null}
-                </section>
-
-                <section style={styles.insightCard}>
-                  <p style={styles.sectionTitle}>Folders For Important Items</p>
-                  {canManageFolders ? (
-                    <form style={{ display: 'grid', gap: '10px' }} onSubmit={handleCreateFolder}>
-                      <input
-                        style={styles.textInput}
-                        value={folderForm.name}
-                        onChange={(event) => setFolderForm((previous) => ({ ...previous, name: event.target.value }))}
-                        placeholder="Folder name"
-                      />
-                      <input
-                        style={styles.textInput}
-                        value={folderForm.description}
-                        onChange={(event) => setFolderForm((previous) => ({ ...previous, description: event.target.value }))}
-                        placeholder="Folder description"
-                      />
-                      <button type="submit" style={styles.primaryButton}>Create Folder</button>
-                    </form>
-                  ) : <p style={styles.helperText}>Only admins/owner can create folders in this group.</p>}
-                  {(selectedGroup.folders || []).length ? (
-                    <div style={{ display: 'grid', gap: '8px' }}>
-                      {selectedGroup.folders.map((folder) => (
-                        <div key={folder.id} style={{ ...styles.block, padding: '10px' }}>
-                          <div style={styles.listTitle}>{folder.name}</div>
-                          <div style={styles.listMeta}>{folder.description || 'No description'} · {folder.items.length} saved items</div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : <p style={styles.helperText}>No folders yet.</p>}
-                </section>
-
-                <section style={styles.insightCard}>
-                  <p style={styles.sectionTitle}>Bookmarks</p>
-                  <button type="button" style={styles.secondaryButton} onClick={() => setShowBookmarkedOnly((value) => !value)}>
-                    {showBookmarkedOnly ? 'Show All Messages' : 'Show Only Bookmarked Messages'}
-                  </button>
-                  {(selectedGroup.bookmarks || []).length ? (
-                    <div style={{ display: 'grid', gap: '8px', maxHeight: 220, overflowY: 'auto' }}>
-                      {selectedGroup.bookmarks.map((bookmark) => (
-                        <div key={bookmark.id} style={{ ...styles.block, padding: '10px' }}>
-                          <div style={styles.listMeta}>{bookmark.bookmarkedBy} bookmarked message {bookmark.messageId}</div>
-                          <div style={styles.helperText}>{bookmark.note || 'No note'}</div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : <p style={styles.helperText}>No bookmarks in this group yet.</p>}
-                </section>
-
-                <section style={styles.insightCard}>
-                  <p style={styles.sectionTitle}>Media Board</p>
-                  <input
-                    style={styles.textInput}
-                    value={imageCaption}
-                    onChange={(event) => setImageCaption(event.target.value)}
-                    placeholder="Optional image caption"
-                  />
-                  <div style={styles.actionsRow}>
-                    <button
-                      type="button"
-                      style={styles.secondaryButton}
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={!canPostToGroup}
-                    >
-                      Upload Group Image
-                    </button>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="image/*"
-                      style={{ display: 'none' }}
-                      onChange={handleGroupImageUpload}
-                    />
-                    <span style={styles.badge}>{selectedGroup.images.length} images</span>
-                  </div>
-                  <p style={styles.helperText}>Images upload to a dedicated chat folder in S3 and stay attached to this group with threaded comments.</p>
-                </section>
-
-                <section style={{ ...styles.insightCard, gridColumn: '1 / -1' }}>
-                  <p style={styles.sectionTitle}>Subgroups And Image Threads</p>
-                  {childGroups.length ? (
-                    <div style={styles.badgeRow}>
-                      {childGroups.map((group) => (
-                        <button key={group.id} type="button" style={styles.secondaryButton} onClick={() => selectGroup(group)}>
-                          Open {group.name}
-                        </button>
-                      ))}
-                    </div>
-                  ) : <p style={styles.helperText}>No subgroups below this group yet.</p>}
-
-                  {selectedGroup.images.length ? (
-                    <div style={styles.imageGrid}>
-                      {selectedGroup.images.map((image) => (
-                        <article key={image.id} style={styles.imageCard}>
-                          <img src={image.imageUrl} alt={image.caption || selectedGroup.name} style={styles.imageFrame} />
-                          <div style={styles.imageMeta}>
-                            <div>
-                              <div style={styles.listTitle}>{image.caption || 'Untitled image'}</div>
-                              <div style={styles.listMeta}>Uploaded by {image.uploadedBy}</div>
-                            </div>
-                            {(selectedGroup.folders || []).length && canManageFolders ? (
-                              <button
-                                type="button"
-                                style={styles.secondaryButton}
-                                onClick={() => {
-                                  const folderId = selectedGroup.folders[0].id;
-                                  submitJson(`/groups/${selectedGroup.id}/folders/${folderId}/items`, 'POST', {
-                                    actorUsername: user.username,
-                                    imageId: image.id,
-                                  }, (payload) => {
-                                    const refreshed = payload.groups.find((group) => group.id === selectedGroup.id);
-                                    return refreshed ? { type: 'group', id: refreshed.id, name: refreshed.name, label: refreshed.name } : getDefaultChat(payload, user?.username);
-                                  }).then(() => reportStatus('Image saved to folder.')).catch((error) => reportError(error.message));
-                                }}
-                              >
-                                Save Image To Folder
-                              </button>
-                            ) : null}
-                            <div style={{ display: 'grid', gap: '8px' }}>
-                              {image.comments.map((comment) => (
-                                <div key={comment.id} style={{ ...styles.block, padding: '10px' }}>
-                                  <div style={styles.listMeta}>{comment.commentedBy}</div>
-                                  <div style={styles.helperText}>{comment.body}</div>
-                                </div>
-                              ))}
-                            </div>
-                            {canCommentInGroup ? (
-                              <div style={{ display: 'grid', gap: '8px' }}>
-                                <input
-                                  style={styles.textInput}
-                                  value={commentDrafts[image.id] || ''}
-                                  onChange={(event) => setCommentDrafts((previous) => ({ ...previous, [image.id]: event.target.value }))}
-                                  placeholder="Comment on this image"
-                                />
-                                <button type="button" style={styles.primaryButton} onClick={() => handleImageComment(image.id)}>Post Comment</button>
-                              </div>
-                            ) : null}
-                          </div>
-                        </article>
-                      ))}
-                    </div>
-                  ) : <p style={styles.helperText}>No images in this group yet.</p>}
-                </section>
-              </div>
-            ) : null}
-
-            <div style={styles.messages}>
-              {visibleMessages.length ? visibleMessages.map((message) => (
-                <div key={message.id || `${message.user}-${message.timestamp}`} style={styles.messageRow}>
-                  <div style={{ ...styles.avatar, background: getUserColor(message.user || 'user', theme) }}>
-                    {(message.user || 'U').slice(0, 2).toUpperCase()}
-                  </div>
-                  <div style={styles.messageCard}>
-                    {(() => {
-                      const parsed = parseReplyEnvelope(message.text || message.gif || '');
-                      return (
-                        <>
-                    <div style={styles.messageMeta}>
-                      <span>{message.user}</span>
-                      <span>{new Date(message.timestamp || Date.now()).toLocaleString()}</span>
-                      <span>{message.chat?.type === 'dm' ? 'Direct' : 'Group'}</span>
-                      <span style={styles.messageMetaSpacer}>
-                        <button
-                          type="button"
-                          style={styles.tinyIconButton}
-                          title="Reply"
-                          onClick={() => toggleReplyBox(message.id)}
-                        >
-                          ↩
-                        </button>
-                        {selectedGroup && canBookmarkMessages ? (
-                          <button
-                            type="button"
-                            style={{
-                              ...styles.tinyIconButton,
-                              color: bookmarkedMessageIds.has(message.id) ? theme.orange : styles.tinyIconButton.color,
-                              border: bookmarkedMessageIds.has(message.id) ? `1px solid ${theme.orange}` : styles.tinyIconButton.border,
-                            }}
-                            title={bookmarkedMessageIds.has(message.id) ? 'Bookmarked' : 'Bookmark'}
-                            onClick={() => handleBookmarkMessage(message.id)}
-                          >
-                            🔖
-                          </button>
-                        ) : null}
-                      </span>
-                    </div>
-                    {parsed.replyToMessageId ? (
-                      <div style={styles.replyQuote}>
-                        Reply to {parsed.replyToUser || 'message'}
-                      </div>
-                    ) : null}
-                    <div style={styles.messageText}>{parsed.body || (message.text || message.gif || '')}</div>
-                    {activeReplyMessageId === message.id ? (
-                      <div style={styles.inlineReplyComposer}>
-                        <div style={styles.replyQuote}>Replying to {message.user}</div>
-                        <textarea
-                          style={styles.tinyInput}
-                          value={replyDrafts[message.id] || ''}
-                          onChange={(event) => handleReplyDraftChange(message.id, event.target.value)}
-                          placeholder="Write a quick reply"
-                        />
-                        <div style={styles.tinyActionRow}>
-                          <button type="button" style={styles.tinyButton} onClick={() => setActiveReplyMessageId('')}>Cancel</button>
-                          <button type="button" style={styles.tinyButton} onClick={() => handleSendInlineReply(message)}>Reply</button>
-                        </div>
-                      </div>
-                    ) : null}
-                    {selectedGroup && message.chat?.type === 'group' ? (
-                      <div style={styles.actionsRow}>
-                        {(selectedGroup.folders || []).length ? (
-                          <>
-                            <select
-                              style={{ ...styles.select, maxWidth: 220, padding: '8px 10px' }}
-                              value={folderSelections[message.id] || selectedGroup.folders[0].id}
-                              onChange={(event) => setFolderSelections((previous) => ({ ...previous, [message.id]: event.target.value }))}
-                            >
-                              {selectedGroup.folders.map((folder) => (
-                                <option key={folder.id} value={folder.id}>{folder.name}</option>
-                              ))}
-                            </select>
-                            <button type="button" style={styles.secondaryButton} onClick={() => handleSaveMessageToFolder(message.id)}>
-                              Save To Folder
-                            </button>
-                          </>
-                        ) : null}
-                      </div>
-                    ) : null}
-                        </>
-                      );
-                    })()}
-                  </div>
-                </div>
-              )) : (
-                <div style={styles.empty}>
-                  {activeChat
-                    ? 'No messages yet in this conversation.'
-                    : 'No buddy or group conversation is available yet.'}
-                </div>
-              )}
-              <div ref={messagesEndRef} />
-            </div>
-
-            <div style={styles.typingBar}>
-              {typingUsers.length ? `${typingUsers.join(', ')} typing...` : ' '}
-            </div>
-
-            <form style={styles.composer} onSubmit={handleSendMessage}>
-              <div style={styles.composerRow}>
-                <textarea
-                  style={styles.textarea}
-                  value={composerText}
-                  onChange={handleComposerChange}
-                  placeholder={activeChat ? `Message ${activeChat.name}` : 'Select a buddy or group'}
-                  disabled={!activeChat}
-                />
-                <button type="submit" style={styles.primaryButton} disabled={!activeChat}>Send</button>
-              </div>
-              <p style={styles.helperText}>
-                {!activeChat
-                  ? 'Messaging is available only with accepted buddies or members of your groups.'
-                  : activeChat.type === 'dm'
-                  ? 'Direct messages require an accepted buddy connection.'
-                  : selectedGroup
-                    ? 'Posting inside custom groups follows the group visibility and posting rules.'
-                    : 'Messaging is available only inside your allowed conversations.'}
-              </p>
-            </form>
-          </section>
+          )}
         </div>
-      </div>
 
-      {toasts.length ? (
+        {/* Typing bar */}
+        <div style={styles.typingBar}>
+          {typingUsers.length ? `${typingUsers.join(', ')} is typing…` : ''}
+        </div>
+
+        {/* Composer */}
+        <form style={styles.composer} onSubmit={handleSendMessage}>
+          <textarea
+            ref={composerRef}
+            style={styles.composerInput}
+            value={composerText}
+            onChange={handleComposerChange}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(e); } }}
+            placeholder={activeChat ? `Message ${activeChat.name}…` : 'Select a chat to start messaging'}
+            disabled={!activeChat}
+            rows={1}
+          />
+          <button type="submit" style={styles.sendBtn} disabled={!activeChat || !composerText.trim()}>➤</button>
+        </form>
+      </main>
+
+      {/* Toasts */}
+      {toasts.length > 0 && (
         <div style={styles.toastStack}>
           {toasts.map((toast) => (
             <div key={toast.id} style={styles.toast}>
               <p style={styles.toastTitle}>{toast.title}</p>
-              {toast.body ? <p style={styles.toastBody}>{toast.body}</p> : null}
+              {toast.body && <p style={styles.toastBody}>{toast.body}</p>}
             </div>
           ))}
         </div>
-      ) : null}
+      )}
 
       <style jsx>{`
-        @media (max-width: 980px) {
-          .chat-layout {
-            grid-template-columns: 1fr !important;
-          }
+        /* Mobile: sidebar slides in from left */
+        .chat-sidebar {
+          position: fixed;
+          top: 0; left: 0; bottom: 0;
+          z-index: 30;
+          transform: translateX(-260px);
+          transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
         }
-
-        @media (max-width: 760px) {
-          .chat-page {
-            padding: 14px;
+        .chat-sidebar--open {
+          transform: translateX(0);
+          box-shadow: 4px 0 28px rgba(0,0,0,0.28);
+        }
+        /* Desktop: sidebar always visible, hamburger hidden */
+        @media (min-width: 680px) {
+          .chat-sidebar {
+            position: relative;
+            transform: none !important;
+            top: auto; left: auto; bottom: auto;
+            box-shadow: none !important;
           }
-
-          .chat-layout {
-            gap: 12px;
+          .sidebar-backdrop { display: none !important; }
+          .hamburger-btn { display: none !important; }
+        }
+        /* Hover effects */
+        .sidebar-item:hover {
+          background: ${theme.cardBg};
+        }
+        /* Message action buttons: hidden until hover on desktop, always visible on touch */
+        .msg-actions {
+          opacity: 0;
+          transition: opacity 0.15s;
+        }
+        .msg-group:hover .msg-actions {
+          opacity: 1;
+        }
+        @media (hover: none) {
+          .msg-actions { opacity: 1 !important; }
+        }
+        /* Side panel: overlay on mobile */
+        @media (max-width: 680px) {
+          .side-panel {
+            position: fixed !important;
+            top: 0; right: 0; bottom: 0;
+            z-index: 25;
+            width: min(300px, 88vw) !important;
+            box-shadow: -4px 0 28px rgba(0,0,0,0.25);
           }
         }
       `}</style>
