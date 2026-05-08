@@ -1332,7 +1332,7 @@ export class ChatService {
         const actor = this.normalizeUsername(actorUsername);
         await this.assertGroupOwner(actor, groupId);
 
-        const clearMessagesAfterHours = payload.clearMessagesAfterHours == null || payload.clearMessagesAfterHours === ''
+        const clearMessagesAfterHours = payload.clearMessagesAfterHours == null
             ? null
             : Number(payload.clearMessagesAfterHours);
         if (clearMessagesAfterHours != null && (!Number.isFinite(clearMessagesAfterHours) || clearMessagesAfterHours < 1)) {

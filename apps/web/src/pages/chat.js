@@ -85,6 +85,19 @@ function flattenGroups(groups, parentGroupId = null, depth = 0) {
   ]);
 }
 
+function parseReplyEnvelope(text) {
+  const raw = String(text || '');
+  const match = raw.match(/^\[reply:([^:\]]+):([^\]]+)\]\n?([\s\S]*)$/);
+  if (!match) {
+    return { replyToMessageId: '', replyToUser: '', body: raw };
+  }
+  return {
+    replyToMessageId: match[1] || '',
+    replyToUser: match[2] || '',
+    body: match[3] || '',
+  };
+}
+
 function createStyles(theme) {
   return {
     page: {
@@ -390,11 +403,79 @@ function createStyles(theme) {
       display: 'flex',
       gap: '10px',
       flexWrap: 'wrap',
+      alignItems: 'center',
       color: theme.textMuted,
       fontSize: '11px',
       fontWeight: 800,
       textTransform: 'uppercase',
       letterSpacing: '0.08em',
+    },
+    messageMetaSpacer: {
+      marginLeft: 'auto',
+      display: 'flex',
+      gap: '6px',
+      alignItems: 'center',
+    },
+    tinyIconButton: {
+      width: '24px',
+      height: '24px',
+      padding: 0,
+      borderRadius: '8px',
+      border: `1px solid ${theme.cardBorder}`,
+      background: theme.cardBg,
+      color: theme.textSecondary,
+      fontSize: '12px',
+      cursor: 'pointer',
+      display: 'grid',
+      placeItems: 'center',
+      lineHeight: 1,
+    },
+    replyQuote: {
+      borderLeft: `3px solid ${theme.blue}`,
+      borderRadius: '10px',
+      padding: '6px 8px',
+      background: theme.cardBg,
+      color: theme.textSecondary,
+      fontSize: '12px',
+      lineHeight: 1.4,
+      marginBottom: '2px',
+    },
+    inlineReplyComposer: {
+      marginTop: '8px',
+      display: 'grid',
+      gap: '8px',
+      padding: '8px',
+      borderRadius: '12px',
+      border: `1px solid ${theme.cardBorder}`,
+      background: theme.cardBg,
+    },
+    tinyInput: {
+      width: '100%',
+      borderRadius: '10px',
+      border: `1px solid ${theme.inputBorder}`,
+      background: theme.inputBg,
+      color: theme.textPrimary,
+      padding: '8px 10px',
+      fontSize: '12px',
+      outline: 'none',
+      fontFamily: theme.font,
+      resize: 'vertical',
+      minHeight: '54px',
+    },
+    tinyActionRow: {
+      display: 'flex',
+      gap: '8px',
+      justifyContent: 'flex-end',
+    },
+    tinyButton: {
+      borderRadius: '10px',
+      border: `1px solid ${theme.cardBorder}`,
+      background: theme.panelBg,
+      color: theme.textPrimary,
+      padding: '6px 10px',
+      cursor: 'pointer',
+      fontSize: '11px',
+      fontWeight: 800,
     },
     messageText: {
       fontSize: '15px',
@@ -500,9 +581,10 @@ export default function ChatPage() {
   });
   const [folderForm, setFolderForm] = useState({ name: '', description: '' });
   const [folderSelections, setFolderSelections] = useState({});
-  const [bookmarkNotes, setBookmarkNotes] = useState({});
   const [showBookmarkedOnly, setShowBookmarkedOnly] = useState(false);
   const [memberSecurityForm, setMemberSecurityForm] = useState({ username: '', role: 'member', canView: true, canPost: true, canComment: true, canInvite: false });
+  const [activeReplyMessageId, setActiveReplyMessageId] = useState('');
+  const [replyDrafts, setReplyDrafts] = useState({});
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -1142,7 +1224,7 @@ export default function ChatPage() {
       await submitJson(`/groups/${selectedGroup.id}/bookmarks`, 'POST', {
         actorUsername: user.username,
         messageId,
-        note: String(bookmarkNotes[messageId] || '').trim(),
+        note: '',
       }, (payload) => {
         const refreshed = payload.groups.find((group) => group.id === selectedGroup.id);
         return refreshed ? { type: 'group', id: refreshed.id, name: refreshed.name, label: refreshed.name } : getDefaultChat(payload, user?.username);
@@ -1151,6 +1233,31 @@ export default function ChatPage() {
     } catch (error) {
       reportError(error.message);
     }
+  }
+
+  function toggleReplyBox(messageId) {
+    setActiveReplyMessageId((previous) => (previous === messageId ? '' : messageId));
+  }
+
+  function handleReplyDraftChange(messageId, value) {
+    setReplyDrafts((previous) => ({ ...previous, [messageId]: value }));
+  }
+
+  function handleSendInlineReply(targetMessage) {
+    if (!socket || connectionState !== 'connected' || !activeChat) return;
+    const draft = String(replyDrafts[targetMessage.id] || '').trim();
+    if (!draft) return;
+
+    const replyEnvelope = `[reply:${targetMessage.id}:${targetMessage.user || 'user'}]\n${draft}`;
+    socket.emit('message', {
+      type: 'text',
+      text: replyEnvelope,
+      chat: { type: activeChat.type, id: activeChat.id, name: activeChat.name },
+      timestamp: new Date().toISOString(),
+    });
+
+    setReplyDrafts((previous) => ({ ...previous, [targetMessage.id]: '' }));
+    setActiveReplyMessageId('');
   }
 
   function selectFriend(friendName) {
@@ -1629,28 +1736,62 @@ export default function ChatPage() {
                     {(message.user || 'U').slice(0, 2).toUpperCase()}
                   </div>
                   <div style={styles.messageCard}>
+                    {(() => {
+                      const parsed = parseReplyEnvelope(message.text || message.gif || '');
+                      return (
+                        <>
                     <div style={styles.messageMeta}>
                       <span>{message.user}</span>
                       <span>{new Date(message.timestamp || Date.now()).toLocaleString()}</span>
                       <span>{message.chat?.type === 'dm' ? 'Direct' : 'Group'}</span>
+                      <span style={styles.messageMetaSpacer}>
+                        <button
+                          type="button"
+                          style={styles.tinyIconButton}
+                          title="Reply"
+                          onClick={() => toggleReplyBox(message.id)}
+                        >
+                          ↩
+                        </button>
+                        {selectedGroup && canBookmarkMessages ? (
+                          <button
+                            type="button"
+                            style={{
+                              ...styles.tinyIconButton,
+                              color: bookmarkedMessageIds.has(message.id) ? theme.orange : styles.tinyIconButton.color,
+                              border: bookmarkedMessageIds.has(message.id) ? `1px solid ${theme.orange}` : styles.tinyIconButton.border,
+                            }}
+                            title={bookmarkedMessageIds.has(message.id) ? 'Bookmarked' : 'Bookmark'}
+                            onClick={() => handleBookmarkMessage(message.id)}
+                          >
+                            🔖
+                          </button>
+                        ) : null}
+                      </span>
                     </div>
-                    <div style={styles.messageText}>{message.text || message.gif || ''}</div>
+                    {parsed.replyToMessageId ? (
+                      <div style={styles.replyQuote}>
+                        Reply to {parsed.replyToUser || 'message'}
+                      </div>
+                    ) : null}
+                    <div style={styles.messageText}>{parsed.body || (message.text || message.gif || '')}</div>
+                    {activeReplyMessageId === message.id ? (
+                      <div style={styles.inlineReplyComposer}>
+                        <div style={styles.replyQuote}>Replying to {message.user}</div>
+                        <textarea
+                          style={styles.tinyInput}
+                          value={replyDrafts[message.id] || ''}
+                          onChange={(event) => handleReplyDraftChange(message.id, event.target.value)}
+                          placeholder="Write a quick reply"
+                        />
+                        <div style={styles.tinyActionRow}>
+                          <button type="button" style={styles.tinyButton} onClick={() => setActiveReplyMessageId('')}>Cancel</button>
+                          <button type="button" style={styles.tinyButton} onClick={() => handleSendInlineReply(message)}>Reply</button>
+                        </div>
+                      </div>
+                    ) : null}
                     {selectedGroup && message.chat?.type === 'group' ? (
                       <div style={styles.actionsRow}>
-                        {canBookmarkMessages ? (
-                          <>
-                            <input
-                              style={{ ...styles.textInput, maxWidth: 220, padding: '8px 10px' }}
-                              value={bookmarkNotes[message.id] || ''}
-                              onChange={(event) => setBookmarkNotes((previous) => ({ ...previous, [message.id]: event.target.value }))}
-                              placeholder="Bookmark note"
-                            />
-                            <button type="button" style={styles.secondaryButton} onClick={() => handleBookmarkMessage(message.id)}>
-                              {bookmarkedMessageIds.has(message.id) ? 'Update Bookmark' : 'Bookmark'}
-                            </button>
-                          </>
-                        ) : null}
-
                         {(selectedGroup.folders || []).length ? (
                           <>
                             <select
@@ -1669,6 +1810,9 @@ export default function ChatPage() {
                         ) : null}
                       </div>
                     ) : null}
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
               )) : (
