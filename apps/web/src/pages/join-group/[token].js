@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 export default function JoinGroupPage({ siteOrigin }) {
   const router = useRouter();
-  const token = String(router.query.token || '').trim();
+  const token = String(router.query.token || router.query.t || '').trim();
   const [sessionUser, setSessionUser] = useState(null);
   const [groupInfo, setGroupInfo] = useState(null);
   const [displayName, setDisplayName] = useState('');
@@ -67,7 +67,10 @@ export default function JoinGroupPage({ siteOrigin }) {
     router.replace(`/chat?groupInvite=${encodeURIComponent(token)}`);
   }
 
-  const imageUrl = `${siteOrigin || ''}/cosmix-share-logo.svg`;
+  const imageUrl = `${siteOrigin || ''}/cosmix-share-logo.png`;
+  const canonicalUrl = token
+    ? `${siteOrigin || ''}/join-group/${encodeURIComponent(token)}`
+    : `${siteOrigin || ''}/join-group`;
 
   return (
     <>
@@ -76,17 +79,22 @@ export default function JoinGroupPage({ siteOrigin }) {
         <meta property="og:title" content="Join Group on Cosmix" />
         <meta property="og:description" content="Join your Cosmix group chat with one tap." />
         <meta property="og:type" content="website" />
+        <meta property="og:url" content={canonicalUrl} />
         <meta property="og:image" content={imageUrl} />
-        <meta property="og:image:type" content="image/svg+xml" />
+        <meta property="og:image:type" content="image/png" />
+        <meta property="og:image:width" content="1200" />
+        <meta property="og:image:height" content="630" />
+        <meta property="og:image:alt" content="Cosmix app invite" />
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:title" content="Join Group on Cosmix" />
         <meta name="twitter:description" content="Join your Cosmix group chat with one tap." />
         <meta name="twitter:image" content={imageUrl} />
+        <meta name="twitter:image:alt" content="Cosmix app invite" />
       </Head>
 
       <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: 'linear-gradient(160deg, #020617, #1d4ed8)', color: '#e2e8f0', padding: 16, fontFamily: 'Verdana, Geneva, sans-serif' }}>
         <section style={{ width: '100%', maxWidth: 560, borderRadius: 24, padding: 24, border: '1px solid rgba(148,163,184,0.35)', background: 'rgba(15,23,42,0.86)', boxShadow: '0 22px 56px rgba(2,6,23,0.45)', display: 'grid', gap: 14 }}>
-          <img src="/cosmix-share-logo.svg" alt="Cosmix" style={{ width: '100%', borderRadius: 18, border: '1px solid rgba(148,163,184,0.3)' }} />
+          <img src="/cosmix-share-logo.png" alt="Cosmix" style={{ width: '100%', borderRadius: 18, border: '1px solid rgba(148,163,184,0.3)' }} />
           <h1 style={{ margin: 0, fontSize: 30, lineHeight: 1.2 }}>{groupInfo ? `Join ${groupInfo.name}` : 'Join Group on Cosmix'}</h1>
           <p style={{ margin: 0, color: '#bfdbfe' }}>{groupInfo?.description || 'Use this invite to join the group chat, folders, and bookmarks.'}</p>
           <p style={{ margin: 0, color: '#cbd5e1' }}>{status}</p>

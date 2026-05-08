@@ -788,11 +788,14 @@ export default function ChatPage() {
   const [sidebarPanel, setSidebarPanel] = useState('');
   const [sidebarFilter, setSidebarFilter] = useState('');
 
+  const messagesContainerRef = useRef(null);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
-    const composerRef = useRef(null);
+  const composerRef = useRef(null);
   const inviteHandledRef = useRef(false);
   const activeChatRef = useRef(null);
+  const previousChatKeyRef = useRef('');
+  const previousMessageCountRef = useRef(0);
   const incomingRequestsRef = useRef([]);
   const permissionAskedRef = useRef(false);
 
@@ -1111,8 +1114,32 @@ export default function ChatPage() {
   }, [activeChat, connectionState, user?.username]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [visibleMessages]);
+    const chatKey = getChatKey(activeChat);
+    const nextCount = visibleMessages.length;
+    const chatChanged = previousChatKeyRef.current !== chatKey;
+
+    if (chatChanged) {
+      previousChatKeyRef.current = chatKey;
+      previousMessageCountRef.current = nextCount;
+      return;
+    }
+
+    const previousCount = previousMessageCountRef.current;
+    previousMessageCountRef.current = nextCount;
+    if (nextCount <= previousCount) return;
+
+    const container = messagesContainerRef.current;
+    if (!container) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      return;
+    }
+
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    const isNearBottom = distanceFromBottom <= 120;
+    if (isNearBottom) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [activeChat, visibleMessages]);
 
   useEffect(() => {
     if (!selectedGroup) return;
@@ -1512,8 +1539,8 @@ export default function ChatPage() {
 
   function openWhatsAppShare() {
     if (!selectedGroup || typeof window === 'undefined') return;
-    const inviteUrl = `${window.location.origin}/join-group/${encodeURIComponent(selectedGroup.shareToken)}`;
-    const message = `Join ${selectedGroup.name} on Cosmix: ${inviteUrl}`;
+    const inviteUrl = `${window.location.origin}/join-group/${selectedGroup.shareToken}`;
+    const message = `Join ${selectedGroup.name} on Cosmix\n\n${inviteUrl}`;
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer');
   }
 
@@ -1646,7 +1673,7 @@ export default function ChatPage() {
 
   function renderInvitePanel() {
     const inviteUrl = selectedGroup?.shareToken
-      ? `${typeof window !== 'undefined' ? window.location.origin : ''}/join-group/${encodeURIComponent(selectedGroup.shareToken)}`
+      ? `${typeof window !== 'undefined' ? window.location.origin : ''}/join-group/${selectedGroup.shareToken}`
       : '';
     return (
       <>
@@ -1885,7 +1912,7 @@ export default function ChatPage() {
         {/* Body: messages + optional side panel */}
         <div style={styles.body}>
           {/* Messages */}
-          <div style={styles.messages}>
+          <div ref={messagesContainerRef} style={styles.messages}>
             {visibleMessages.length ? visibleMessages.map((message) => {
               const isOwn = message.user === user?.username;
               const parsed = parseReplyEnvelope(message.text || message.gif || '');
