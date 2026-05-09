@@ -1,24 +1,14 @@
-FROM node:20-slim AS builder
+FROM node:20-slim
 
 WORKDIR /usr/src/app
 ENV NODE_OPTIONS=--max-old-space-size=1536
+ENV NODE_ENV=production
 
 COPY apps/web/package.json ./
 RUN npm install --legacy-peer-deps
 
 COPY apps/web/ ./
 RUN npm run build
-
-FROM node:20-slim AS runner
-
-WORKDIR /usr/src/app
-ENV NODE_ENV=production
-
-COPY --from=builder /usr/src/app/.next ./.next
-COPY --from=builder /usr/src/app/next.config.js ./next.config.js
-COPY --from=builder /usr/src/app/public ./public
-COPY --from=builder /usr/src/app/package.json ./package.json
-COPY --from=builder /usr/src/app/node_modules ./node_modules
 
 EXPOSE 3005
 
