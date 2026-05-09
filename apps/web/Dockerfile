@@ -8,7 +8,6 @@ RUN npm install --legacy-peer-deps
 
 COPY apps/web/ ./
 RUN npm run build
-RUN npm prune --omit=dev
 
 FROM node:20-slim AS runner
 
