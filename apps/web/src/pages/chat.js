@@ -7,7 +7,9 @@ let socket = null;
 
 function sameChat(left, right) {
   if (!left || !right) return false;
-  return left.type === right.type && left.id === right.id && left.name === right.name;
+  if (left.type !== right.type) return false;
+  if (left.id && right.id) return left.id === right.id;
+  return left.name === right.name;
 }
 
 function getChatKey(chat) {
@@ -884,6 +886,7 @@ export default function ChatPage() {
     const activeChatCandidate = nextChat || activeChatRef.current;
 
     if (nextChat) {
+      activeChatRef.current = nextChat;
       setActiveChat(nextChat);
       return;
     }
@@ -900,7 +903,9 @@ export default function ChatPage() {
       return;
     }
 
-    const matchingGroup = nextBootstrap.groups.find((group) => group.id === activeChatCandidate.id);
+    const matchingGroup = nextBootstrap.groups.find((group) => (
+      group.id === activeChatCandidate.id || group.name === activeChatCandidate.name
+    ));
     if (!matchingGroup) {
       setActiveChat(fallbackChat);
     }
@@ -942,6 +947,7 @@ export default function ChatPage() {
   }
 
   function selectChat(nextChat) {
+    activeChatRef.current = nextChat;
     setActiveChat(nextChat);
     setTypingUsers([]);
     const chatKey = getChatKey(nextChat);

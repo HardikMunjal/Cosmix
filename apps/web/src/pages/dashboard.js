@@ -385,6 +385,36 @@ export default function Dashboard() {
           .dashboard-header-actions { width: 100%; justify-content: space-between; }
           .dashboard-module-grid, .dashboard-scorecard-grid, .dashboard-market-modules { grid-template-columns: 1fr !important; }
         }
+        @media (max-width: 560px) {
+          .dashboard-page { padding: 10px !important; }
+          .dashboard-title { font-size: 24px !important; }
+          .dashboard-panel { border-radius: 18px !important; padding: 12px !important; gap: 10px !important; }
+          .dashboard-profile-shell { gap: 8px !important; }
+          .dashboard-avatar-wrap { padding: 6px !important; }
+          .dashboard-avatar-glow { width: 120px !important; height: 120px !important; }
+          .dashboard-module-grid button,
+          .dashboard-market-modules button {
+            padding: 8px 9px !important;
+            gap: 3px !important;
+            border-radius: 11px !important;
+          }
+          .dashboard-module-grid button div:nth-child(1),
+          .dashboard-market-modules button div:nth-child(1) {
+            width: 28px !important;
+            height: 28px !important;
+            border-radius: 8px !important;
+            font-size: 10px !important;
+          }
+          .dashboard-module-grid button div:nth-child(2),
+          .dashboard-market-modules button div:nth-child(2) {
+            font-size: 13px !important;
+          }
+          .dashboard-module-grid button div:nth-child(3),
+          .dashboard-market-modules button div:nth-child(3) {
+            font-size: 10px !important;
+            line-height: 1.25 !important;
+          }
+        }
         @media (max-width: 1100px) {
           .dashboard-module-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
         }
@@ -394,7 +424,7 @@ export default function Dashboard() {
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '18px', flexWrap: 'wrap' }} className="dashboard-header">
           <div>
             <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.14em', color: theme.textMuted, fontWeight: 800, marginBottom: '8px' }}>Cosmix dashboard</div>
-            <h1 style={{ margin: 0, fontSize: '34px', color: theme.textHeading }}>Welcome back, {user.username}</h1>
+            <h1 style={{ margin: 0, fontSize: '34px', color: theme.textHeading }} className="dashboard-title">Welcome back, {user.username}</h1>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }} className="dashboard-header-actions">
@@ -406,10 +436,10 @@ export default function Dashboard() {
         </header>
 
         <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.12fr) minmax(320px, 0.88fr)', gap: '16px' }} className="dashboard-top-grid">
-          <div style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: `linear-gradient(135deg, ${theme.cardBg}, ${theme.cyan}10, ${theme.orange}10)`, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '14px' }}>
+          <div style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: `linear-gradient(135deg, ${theme.cardBg}, ${theme.cyan}10, ${theme.orange}10)`, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '14px' }} className="dashboard-panel">
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) minmax(0, 1fr)', gap: '14px', alignItems: 'stretch' }} className="dashboard-profile-shell">
-              <div style={{ borderRadius: '22px', padding: '12px', background: 'transparent', border: 'none', display: 'grid', placeItems: 'center', position: 'relative', overflow: 'hidden' }}>
-                <div style={{ position: 'absolute', width: '180px', height: '180px', borderRadius: '50%', filter: 'blur(34px)', background: `${theme.blue}44` }} />
+              <div style={{ borderRadius: '22px', padding: '12px', background: 'transparent', border: 'none', display: 'grid', placeItems: 'center', position: 'relative', overflow: 'hidden' }} className="dashboard-avatar-wrap">
+                <div style={{ position: 'absolute', width: '180px', height: '180px', borderRadius: '50%', filter: 'blur(34px)', background: `${theme.blue}44` }} className="dashboard-avatar-glow" />
                 <Avatar user={user} size={236} theme={theme} />
               </div>
 
@@ -421,6 +451,7 @@ export default function Dashboard() {
 
           <div
             style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '14px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '8px', cursor: 'pointer' }}
+            className="dashboard-panel"
             role="button"
             tabIndex={0}
             onClick={() => router.push('/wellness')}
@@ -452,6 +483,7 @@ export default function Dashboard() {
         <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.18fr) minmax(300px, 0.82fr)', gap: '16px' }} className="dashboard-market-grid">
           <div
             style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '12px', cursor: 'pointer' }}
+            className="dashboard-panel"
             role="button"
             tabIndex={0}
             onClick={() => router.push('/nifty-strategies')}
@@ -472,7 +504,7 @@ export default function Dashboard() {
             <MetricGrid items={marketCards} theme={theme} />
           </div>
 
-          <div style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '12px', alignContent: 'start' }}>
+          <div style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '12px', alignContent: 'start' }} className="dashboard-panel">
 
             <div style={{ display: 'grid', gap: '8px' }} className="dashboard-market-modules">
               {tradingDeskModules.map((module) => (
@@ -488,7 +520,7 @@ export default function Dashboard() {
           </div>
         </section>
 
-        <section style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '14px' }}>
+        <section style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '14px' }} className="dashboard-panel">
           <div>
             <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800, marginBottom: '8px' }}>Workspace</div>
             <div style={{ fontSize: '24px', fontWeight: 800, color: theme.textHeading }}>Workspace</div>

@@ -154,6 +154,24 @@ export default function Home() {
           .login-page { padding: 14px !important; }
           .login-panel { padding: 22px !important; }
           .login-tab-row { grid-template-columns: 1fr !important; }
+          .login-panel h1 { font-size: 24px !important; }
+          .login-panel p { font-size: 13px !important; line-height: 1.45 !important; }
+          .login-panel input,
+          .login-panel button {
+            min-height: 44px !important;
+            font-size: 14px !important;
+            border-radius: 12px !important;
+          }
+          .login-panel label {
+            margin-top: 12px !important;
+            margin-bottom: 6px !important;
+            font-size: 12px !important;
+          }
+        }
+        @media (max-width: 420px) {
+          .login-page { padding: 10px !important; }
+          .login-panel { padding: 16px !important; border-radius: 18px !important; }
+          .login-panel h1 { font-size: 20px !important; }
         }
       `}</style>
 
