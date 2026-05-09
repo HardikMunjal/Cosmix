@@ -2138,9 +2138,59 @@ export default function NiftyStrategiesPage() {
           .nifty-info-band { font-size: 11px !important; }
           .market-ticker { gap: 6px !important; }
         }
+        @media (max-width: 560px) {
+          .nifty-learnings-ticker { display: none !important; }
+          .market-ticker {
+            flex-wrap: nowrap !important;
+            overflow-x: auto !important;
+            overscroll-behavior-x: contain !important;
+            gap: 7px !important;
+            margin-bottom: 12px !important;
+            padding-bottom: 4px !important;
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+          }
+          .market-ticker::-webkit-scrollbar { display: none; }
+          .market-ticker .mkt-pill {
+            flex: 0 0 172px !important;
+            min-width: 172px !important;
+            padding: 8px 10px !important;
+            border-radius: 12px !important;
+          }
+          .nifty-header-actions {
+            width: 100% !important;
+            display: grid !important;
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            gap: 8px !important;
+          }
+          .nifty-header-actions button {
+            width: 100% !important;
+            min-height: 38px !important;
+            font-size: 12px !important;
+            padding: 9px 10px !important;
+          }
+          .nifty-valuation-bar {
+            margin-bottom: 12px !important;
+            padding: 10px !important;
+            gap: 10px !important;
+          }
+          .nifty-refresh-wrap,
+          .nifty-valuation-wrap {
+            min-width: 0 !important;
+            max-width: none !important;
+            width: 100% !important;
+            flex: 1 1 100% !important;
+          }
+          .nifty-refresh-row { grid-template-columns: 1fr !important; }
+          .nifty-performance-panel { padding: 10px !important; margin-bottom: 12px !important; }
+          .nifty-performance-chart { height: 210px !important; }
+          .nifty-strategy-summary { padding: 9px !important; }
+          .nifty-strategy-body { padding: 0 8px 10px !important; }
+        }
         @media (max-width: 400px) {
           .nifty-page-container { padding: 8px !important; }
           .nifty-summary-grid { grid-template-columns: 1fr !important; }
+          .nifty-header-actions { grid-template-columns: 1fr !important; }
         }
         @keyframes learnings-scroll {
           0% { transform: translateX(100%); }
@@ -2164,7 +2214,7 @@ export default function NiftyStrategiesPage() {
         if (!allLearnings.length) return null;
         const items = [...allLearnings, ...allLearnings]; // duplicate for seamless loop
         return (
-          <div style={styles.learningsTicker}>
+          <div style={styles.learningsTicker} className="nifty-learnings-ticker">
             <span style={styles.learningsTickerLabel}>💡 Lessons</span>
             <div style={styles.learningsTickerTrack}>
               <div className="learnings-scroll-inner" style={styles.learningsScrollInner}>
@@ -2273,10 +2323,11 @@ export default function NiftyStrategiesPage() {
           background: theme.cardBgGradient,
           boxShadow: `0 10px 22px ${theme.shadow}`,
         }}
+        className="nifty-valuation-bar"
       >
-        <div style={styles.refreshControlWrap}>
+        <div style={styles.refreshControlWrap} className="nifty-refresh-wrap">
           <div style={styles.valuationTitle}>Live refresh</div>
-          <div style={styles.refreshControlRow}>
+          <div style={styles.refreshControlRow} className="nifty-refresh-row">
             <label style={styles.refreshToggleLabel}>
               <input
                 type="checkbox"
@@ -2307,7 +2358,7 @@ export default function NiftyStrategiesPage() {
           <div style={styles.refreshStatusText}>{refreshStatusLabel}</div>
           <div style={styles.refreshMetaText}>{lastRefreshAt ? `Last successful refresh: ${new Date(lastRefreshAt).toLocaleTimeString()}` : 'Waiting for first successful refresh'}</div>
         </div>
-        <div style={styles.valuationControlWrap}>
+        <div style={styles.valuationControlWrap} className="nifty-valuation-wrap">
           <label htmlFor="current-valuation-source" style={{ ...styles.valuationLabel, color: theme.textHeading }}>MTM valuation method</label>
           <select
             id="current-valuation-source"
@@ -2335,6 +2386,7 @@ export default function NiftyStrategiesPage() {
             background: theme.panelBg,
             boxShadow: `0 10px 26px ${theme.shadow}`,
           }}
+          className="nifty-performance-panel"
         >
           <div style={styles.performanceHeader}>
             <div>
@@ -2367,7 +2419,7 @@ export default function NiftyStrategiesPage() {
             </div>
           </div>
 
-          <div style={styles.performanceChartWrap}>
+          <div style={styles.performanceChartWrap} className="nifty-performance-chart">
             <ResponsiveContainer width="100%" height={260}>
               <AreaChart
                 data={strategyPerformanceSeries}
@@ -2586,7 +2638,7 @@ export default function NiftyStrategiesPage() {
                   <div><strong>Break-even:</strong> {metrics.breakEvens.length ? metrics.breakEvens.join(', ') : '—'}</div>
                 </div>
 
-                <details style={styles.innerExpand} open>
+                <details style={styles.innerExpand}>
                   <summary style={styles.expandTitle}>Expand graphs</summary>
                   <div style={styles.graphGrid} className="nifty-graph-grid">
                     <div style={styles.graphCard}>
