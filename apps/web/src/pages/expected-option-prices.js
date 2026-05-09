@@ -285,12 +285,18 @@ export default function ExpectedOptionPrices() {
   return (
     <>
       <style>{`
-        @media (max-width: 900px) {
-          .expected-prices-page {
-            padding: 16px !important;
-          }
+        @media (max-width: 1100px) {
           .expected-prices-layout {
             grid-template-columns: 1fr !important;
+          }
+          .expected-prices-summary {
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+          }
+        }
+
+        @media (max-width: 900px) {
+          .expected-prices-page {
+            padding: 14px !important;
           }
           .expected-prices-header {
             flex-direction: column !important;
@@ -308,27 +314,33 @@ export default function ExpectedOptionPrices() {
           .expected-prices-option-grid {
             grid-template-columns: 1fr !important;
           }
+          .expected-prices-strategy-profiles {
+            grid-template-columns: 1fr !important;
+          }
+          .expected-prices-strategy-metrics {
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+          }
         }
 
         @media (max-width: 640px) {
           .expected-prices-page {
-            padding: 12px !important;
+            padding: 10px !important;
           }
           .expected-prices-title {
-            font-size: 26px !important;
+            font-size: 24px !important;
           }
           .expected-prices-panel {
-            padding: 14px !important;
-            border-radius: 16px !important;
+            padding: 12px !important;
+            border-radius: 14px !important;
           }
           .expected-prices-table-wrap {
-            border-radius: 12px !important;
+            border-radius: 10px !important;
           }
           .expected-prices-table {
-            min-width: 760px !important;
+            min-width: 700px !important;
           }
           .expected-prices-expiry {
-            padding: 12px !important;
+            padding: 10px !important;
           }
           .expected-sticky-head,
           .expected-sticky-cell {
@@ -342,20 +354,28 @@ export default function ExpectedOptionPrices() {
           .expected-prices-actions button {
             width: 100%;
           }
+          .expected-prices-strategy-leg-row {
+            flex-direction: column !important;
+            align-items: flex-start !important;
+            gap: 4px !important;
+          }
         }
 
         @media (max-width: 520px) {
           .expected-prices-table {
-            min-width: 680px !important;
+            min-width: 620px !important;
           }
           .expected-prices-title {
-            font-size: 22px !important;
+            font-size: 21px !important;
           }
           .expected-prices-panel {
-            padding: 12px !important;
+            padding: 10px !important;
           }
           .expected-prices-option-grid {
-            gap: 10px !important;
+            gap: 8px !important;
+          }
+          .expected-prices-strategy-metrics {
+            grid-template-columns: 1fr !important;
           }
         }
       `}</style>
@@ -526,7 +546,7 @@ export default function ExpectedOptionPrices() {
                             </div>
                           </div>
 
-                          <div style={styles.strategyProfilesGrid}>
+                          <div style={styles.strategyProfilesGrid} className="expected-prices-strategy-profiles">
                             {family.profiles.map((profile) => (
                               <div key={`${family.key}-${profile.key}`} style={styles.strategyProfileCard}>
                                 <div style={styles.strategyProfileTop}>
@@ -539,14 +559,14 @@ export default function ExpectedOptionPrices() {
 
                                 <div style={styles.strategyLegList}>
                                   {profile.legs.map((leg) => (
-                                    <div key={`${family.key}-${profile.key}-${leg.side}-${leg.quantity}-${leg.type}-${leg.strike}`} style={styles.strategyLegRow}>
+                                    <div key={`${family.key}-${profile.key}-${leg.side}-${leg.quantity}-${leg.type}-${leg.strike}`} style={styles.strategyLegRow} className="expected-prices-strategy-leg-row">
                                       <span>{formatLeg(leg)}</span>
                                       <span>{currency(leg.premium)}</span>
                                     </div>
                                   ))}
                                 </div>
 
-                                <div style={styles.strategyMetricsGrid}>
+                                <div style={styles.strategyMetricsGrid} className="expected-prices-strategy-metrics">
                                   <div style={styles.strategyMetricBox}>
                                     <div style={styles.strategyMetricLabel}>Entry credit</div>
                                     <div style={styles.strategyMetricValue}>{currency(profile.entryCredit)}</div>

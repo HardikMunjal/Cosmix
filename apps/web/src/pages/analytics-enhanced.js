@@ -115,20 +115,28 @@ export default function AnalyticsEnhanced() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: theme.pageBg, color: theme.textPrimary, padding: 24, fontFamily: theme.font }}>
+    <div style={{ minHeight: '100vh', background: theme.pageBg, color: theme.textPrimary, padding: 24, fontFamily: theme.font }} className="strategy-analytics-page">
       <style>{`
         * { box-sizing: border-box; }
         @media (max-width: 900px) {
-          .strategy-grid, .strategy-kpi-grid { grid-template-columns: 1fr !important; }
+          .strategy-grid { grid-template-columns: 1fr !important; }
+          .strategy-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+        }
+        @media (max-width: 640px) {
+          .strategy-analytics-page { padding: 12px !important; }
+          .strategy-analytics-header { flex-direction: column !important; align-items: flex-start !important; }
+          .strategy-analytics-actions { width: 100% !important; }
+          .strategy-analytics-actions button { flex: 1 1 140px; }
+          .strategy-kpi-grid { grid-template-columns: 1fr !important; }
         }
       `}</style>
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 18 }} className="strategy-analytics-header">
         <div>
           <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800, color: theme.textHeading }}>Strategy Analytics</h1>
           <p style={{ margin: '5px 0 0 0', color: theme.textSecondary, fontSize: 13 }}>Nifty strategy P/L dashboard</p>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8 }} className="strategy-analytics-actions">
           <button onClick={loadData} style={{ background: theme.buttonSecondaryBg || theme.cardBgAlt, color: theme.buttonSecondaryText || theme.textPrimary, border: `1px solid ${theme.buttonSecondaryBorder || theme.cardBorder}`, borderRadius: 10, padding: '9px 14px', cursor: 'pointer' }}>Refresh</button>
           <button onClick={() => router.push('/dashboard')} style={{ background: theme.buttonSecondaryBg || theme.cardBgAlt, color: theme.buttonSecondaryText || theme.textPrimary, border: `1px solid ${theme.buttonSecondaryBorder || theme.cardBorder}`, borderRadius: 10, padding: '9px 14px', cursor: 'pointer' }}>Dashboard</button>
         </div>

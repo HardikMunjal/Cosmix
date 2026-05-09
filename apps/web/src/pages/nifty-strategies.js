@@ -2107,36 +2107,36 @@ export default function NiftyStrategiesPage() {
           .nifty-leg-toolbar { align-items: flex-start !important; }
         }
         @media (max-width: 640px) {
-          .nifty-page-container { padding: 12px !important; }
-          .nifty-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 8px !important; }
+          .nifty-page-container { padding: 10px !important; }
+          .nifty-summary-grid { grid-template-columns: 1fr !important; gap: 8px !important; }
           .nifty-metrics-grid { grid-template-columns: 1fr !important; }
           .nifty-performance-kpis { grid-template-columns: 1fr !important; }
           .nifty-header { flex-direction: column !important; }
           .nifty-header-actions { width: 100% !important; }
-          .nifty-header-actions button { flex: 1 !important; min-height: 44px !important; font-size: 13px !important; }
-          .nifty-strategy-summary { flex-direction: column !important; align-items: flex-start !important; gap: 8px !important; padding: 12px !important; }
-          .nifty-strategy-title { font-size: 15px !important; }
-          .nifty-strategy-body { padding: 0 12px 12px !important; }
+          .nifty-header-actions button { flex: 1 !important; min-height: 40px !important; font-size: 12px !important; }
+          .nifty-strategy-summary { flex-direction: column !important; align-items: flex-start !important; gap: 8px !important; padding: 10px !important; }
+          .nifty-strategy-title { font-size: 14px !important; }
+          .nifty-strategy-body { padding: 0 10px 10px !important; }
           .nifty-card-actions { flex-direction: column !important; }
-          .nifty-card-actions button { width: 100% !important; min-height: 44px !important; }
+          .nifty-card-actions button { width: 100% !important; min-height: 40px !important; }
           .nifty-past-date-controls { width: 100% !important; }
           .nifty-past-date-controls input[type="datetime-local"] { width: 100% !important; }
           .nifty-analyzer-grid { grid-template-columns: 1fr !important; }
           .nifty-analyzer-header { flex-direction: column !important; align-items: flex-start !important; }
           .nifty-close-form { flex-direction: column !important; align-items: stretch !important; }
           .nifty-close-form input { width: 100% !important; }
-          .nifty-close-form button { min-height: 40px !important; }
-          .nifty-profit-banner { padding: 12px !important; }
+          .nifty-close-form button { min-height: 38px !important; }
+          .nifty-profit-banner { padding: 10px !important; }
           .nifty-profit-banner > div:first-child { flex-direction: column !important; gap: 8px !important; }
-          .nifty-leg-editor { padding: 10px !important; }
+          .nifty-leg-editor { padding: 8px !important; }
           .nifty-leg-editor-row { flex-direction: column !important; }
           .nifty-leg-editor-row select, .nifty-leg-editor-row input { width: 100% !important; }
-          .nifty-section-header { font-size: 15px !important; }
-          .nifty-page-title { font-size: 22px !important; }
-          .nifty-badge { font-size: 11px !important; padding: 4px 8px !important; }
-          .nifty-summary-value { font-size: 18px !important; }
+          .nifty-section-header { font-size: 14px !important; }
+          .nifty-page-title { font-size: 20px !important; }
+          .nifty-badge { font-size: 10px !important; padding: 3px 7px !important; }
+          .nifty-summary-value { font-size: 17px !important; }
           .nifty-info-band { font-size: 11px !important; }
-          .market-ticker { gap: 8px !important; }
+          .market-ticker { gap: 6px !important; }
         }
         @media (max-width: 400px) {
           .nifty-page-container { padding: 8px !important; }

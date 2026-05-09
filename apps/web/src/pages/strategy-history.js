@@ -167,9 +167,21 @@ export default function StrategyHistoryPage() {
           .sh-table-wrap { overflow-x: auto; }
         }
         @media (max-width: 600px) {
-          .sh-stats-grid { grid-template-columns: repeat(2, 1fr) !important; }
+          .sh-stats-grid { grid-template-columns: 1fr !important; }
           .sh-header { flex-direction: column !important; align-items: flex-start !important; gap: 10px !important; }
           .sh-filter-row { flex-direction: column !important; align-items: stretch !important; }
+          .sh-table-header { display: none !important; }
+          .sh-row {
+            display: grid !important;
+            grid-template-columns: 1fr !important;
+            gap: 4px !important;
+            padding: 10px 12px !important;
+          }
+          .sh-row > div {
+            width: 100% !important;
+            min-width: 0 !important;
+            padding: 3px 0 !important;
+          }
         }
       `}</style>
 
@@ -231,7 +243,7 @@ export default function StrategyHistoryPage() {
         : (
           <div style={styles.tableWrap} className="sh-table-wrap">
             {/* Sort header */}
-            <div style={styles.tableHeader}>
+            <div style={styles.tableHeader} className="sh-table-header">
               {[
                 ['name', 'Strategy Name', '1fr'],
                 ['startDate', 'Started', '130px'],

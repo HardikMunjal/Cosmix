@@ -385,6 +385,9 @@ export default function Dashboard() {
           .dashboard-header-actions { width: 100%; justify-content: space-between; }
           .dashboard-module-grid, .dashboard-scorecard-grid, .dashboard-market-modules { grid-template-columns: 1fr !important; }
         }
+        @media (max-width: 1100px) {
+          .dashboard-module-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+        }
       `}</style>
 
       <div style={{ maxWidth: '1320px', margin: '0 auto', display: 'grid', gap: '18px' }}>
@@ -471,13 +474,14 @@ export default function Dashboard() {
 
           <div style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '12px', alignContent: 'start' }}>
 
-            <div style={{ display: 'grid', gap: '12px' }} className="dashboard-market-modules">
+            <div style={{ display: 'grid', gap: '8px' }} className="dashboard-market-modules">
               {tradingDeskModules.map((module) => (
-                <button key={module.path} type="button" onClick={() => router.push(module.path)} style={{ textAlign: 'left', borderRadius: '18px', border: `1px solid ${module.accent}44`, background: `linear-gradient(135deg, ${theme.cardBg}, ${module.accent}10)`, padding: '12px 14px', cursor: 'pointer', display: 'grid', gap: '8px', color: theme.textPrimary }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <div style={{ width: '42px', height: '42px', borderRadius: '12px', display: 'grid', placeItems: 'center', fontSize: '13px', fontWeight: 800, color: module.accent, background: `${module.accent}18`, border: `1px solid ${module.accent}30` }}>{module.icon}</div>
-                    <div style={{ fontSize: '17px', fontWeight: 800, color: theme.textHeading }}>{module.title}</div>
+                <button key={module.path} type="button" onClick={() => router.push(module.path)} style={{ textAlign: 'left', borderRadius: '14px', border: `1px solid ${module.accent}44`, background: `linear-gradient(135deg, ${theme.cardBg}, ${module.accent}09)`, padding: '10px 12px', cursor: 'pointer', display: 'grid', gap: '4px', color: theme.textPrimary }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <div style={{ width: '32px', height: '32px', borderRadius: '10px', display: 'grid', placeItems: 'center', fontSize: '11px', fontWeight: 800, color: module.accent, background: `${module.accent}18`, border: `1px solid ${module.accent}30` }}>{module.icon}</div>
+                    <div style={{ fontSize: '14px', fontWeight: 800, color: theme.textHeading }}>{module.title}</div>
                   </div>
+                  <div style={{ fontSize: '11px', color: theme.textMuted, lineHeight: 1.35 }}>{module.desc}</div>
                 </button>
               ))}
             </div>
@@ -490,11 +494,12 @@ export default function Dashboard() {
             <div style={{ fontSize: '24px', fontWeight: 800, color: theme.textHeading }}>Workspace</div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: '14px' }} className="dashboard-module-grid">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '10px' }} className="dashboard-module-grid">
             {workspaceModules.map((module) => (
-              <button key={module.path} type="button" onClick={() => router.push(module.path)} style={{ textAlign: 'left', borderRadius: '22px', border: `1px solid ${module.accent}55`, background: `linear-gradient(135deg, ${theme.cardBg}, ${module.accent}10)`, padding: '14px', cursor: 'pointer', display: 'grid', gap: '10px', color: theme.textPrimary, boxShadow: `0 16px 36px ${theme.shadow}` }}>
-                <div style={{ width: '48px', height: '48px', borderRadius: '14px', display: 'grid', placeItems: 'center', fontSize: '14px', fontWeight: 800, color: module.accent, background: `${module.accent}18`, border: `1px solid ${module.accent}30` }}>{module.icon}</div>
-                <div style={{ fontSize: '18px', fontWeight: 800, color: theme.textHeading }}>{module.title}</div>
+              <button key={module.path} type="button" onClick={() => router.push(module.path)} style={{ textAlign: 'left', borderRadius: '14px', border: `1px solid ${module.accent}55`, background: `linear-gradient(135deg, ${theme.cardBg}, ${module.accent}08)`, padding: '10px', cursor: 'pointer', display: 'grid', gap: '5px', color: theme.textPrimary, boxShadow: `0 8px 20px ${theme.shadow}` }}>
+                <div style={{ width: '34px', height: '34px', borderRadius: '10px', display: 'grid', placeItems: 'center', fontSize: '11px', fontWeight: 800, color: module.accent, background: `${module.accent}18`, border: `1px solid ${module.accent}30` }}>{module.icon}</div>
+                <div style={{ fontSize: '14px', fontWeight: 800, color: theme.textHeading }}>{module.title}</div>
+                <div style={{ fontSize: '11px', color: theme.textMuted, lineHeight: 1.3 }}>{module.desc}</div>
               </button>
             ))}
           </div>

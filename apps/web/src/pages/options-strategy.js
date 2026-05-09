@@ -1380,25 +1380,43 @@ export default function OptionsStrategy() {
       <style>{`
         * { box-sizing: border-box; }
         html, body { margin: 0; padding: 0; width: 100%; overflow-x: hidden; }
+        @media (max-width: 920px) {
+          .strategy-top-grid { grid-template-columns: 1fr !important; }
+          .strategy-metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+          .strategy-save-row { grid-template-columns: 1fr 1fr !important; }
+        }
         @media (max-width: 768px) {
           h1 { font-size: 18px !important; }
           h2 { font-size: 15px !important; }
-          input, select { font-size: 12px !important; }
-          .strategy-page { padding: 14px !important; }
+          input, select, textarea, button { font-size: 12px !important; }
+          .strategy-page { padding: 12px !important; }
           .strategy-header { flex-direction: column !important; align-items: stretch !important; }
-          .strategy-top-grid { grid-template-columns: 1fr !important; }
           .strategy-controls-row { grid-template-columns: 1fr !important; gap: 6px !important; }
-          .strategy-legs-shell { overflow-x: auto; padding-bottom: 4px; }
-          .strategy-legs-header,
-          .strategy-leg-row { min-width: 760px; }
-          .strategy-payoff-chart { height: 240px !important; }
+          .strategy-legs-shell { overflow: visible !important; padding-bottom: 0 !important; }
+          .strategy-legs-header { display: none !important; }
+          .strategy-leg-row {
+            min-width: 0 !important;
+            display: grid !important;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px !important;
+            padding: 10px !important;
+            border: 1px solid ${theme.cardBorder};
+            border-radius: 10px;
+            margin-bottom: 8px;
+          }
+          .strategy-leg-row > * { width: 100% !important; min-width: 0 !important; }
+          .strategy-metrics-grid { grid-template-columns: 1fr !important; gap: 8px !important; }
+          .strategy-save-row { grid-template-columns: 1fr !important; }
+          .strategy-save-row button { width: 100% !important; }
+          .strategy-payoff-chart { height: 220px !important; }
         }
         @media (max-width: 520px) {
-          .strategy-page { padding: 10px !important; }
-          .strategy-card { padding: 14px !important; }
-          .strategy-hero-card { padding: 14px !important; }
-          .strategy-payoff-chart { height: 220px !important; }
+          .strategy-page { padding: 8px !important; }
+          .strategy-card { padding: 12px !important; }
+          .strategy-hero-card { padding: 12px !important; }
+          .strategy-payoff-chart { height: 200px !important; }
           .strategy-chart-meta { flex-direction: column !important; align-items: flex-start !important; }
+          .strategy-leg-row { grid-template-columns: 1fr !important; }
         }
       `}</style>
       <div style={styles.container} className="strategy-page">
@@ -1580,7 +1598,7 @@ export default function OptionsStrategy() {
           </div>
         </div>
 
-        {legs.length > 0 && <div style={styles.metricsGrid}>
+        {legs.length > 0 && <div style={styles.metricsGrid} className="strategy-metrics-grid">
           <div style={styles.metricCard}>
             <div style={styles.metricLabel}>Entry Net Credit / Debit</div>
             <div style={styles.metricValue}>Rs. {metrics.entryNetPremium.toFixed(2)}</div>
@@ -1626,7 +1644,7 @@ export default function OptionsStrategy() {
               Editing saved strategy <strong>{strategyName}</strong>. Save again to update the same dashboard box.
             </div>
           ) : null}
-          <div style={styles.saveRow}>
+          <div style={styles.saveRow} className="strategy-save-row">
             <input
               type="text"
               value={strategyName}

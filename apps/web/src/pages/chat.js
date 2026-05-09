@@ -109,7 +109,7 @@ function createStyles(theme) {
       overflow: 'hidden',
     },
     sidebar: {
-      width: '260px',
+      width: '244px',
       flexShrink: 0,
       display: 'flex',
       flexDirection: 'column',
@@ -119,7 +119,7 @@ function createStyles(theme) {
       zIndex: 30,
     },
     sidebarHeader: {
-      padding: '12px 14px',
+      padding: '10px 12px',
       borderBottom: `1px solid ${theme.cardBorder}`,
       display: 'flex',
       alignItems: 'center',
@@ -127,9 +127,9 @@ function createStyles(theme) {
       flexShrink: 0,
     },
     sidebarAvatar: {
-      width: '34px',
-      height: '34px',
-      borderRadius: '12px',
+      width: '30px',
+      height: '30px',
+      borderRadius: '10px',
       background: `linear-gradient(135deg, ${theme.blue}, ${theme.purple})`,
       color: '#fff',
       fontWeight: 800,
@@ -140,7 +140,7 @@ function createStyles(theme) {
     },
     sidebarUsername: {
       flex: 1,
-      fontSize: '13px',
+      fontSize: '12px',
       fontWeight: 800,
       color: theme.textHeading,
       overflow: 'hidden',
@@ -148,18 +148,18 @@ function createStyles(theme) {
       whiteSpace: 'nowrap',
     },
     sidebarSearch: {
-      padding: '8px 12px',
+      padding: '7px 10px',
       borderBottom: `1px solid ${theme.cardBorder}`,
       flexShrink: 0,
     },
     sidebarSearchInput: {
       width: '100%',
-      borderRadius: '20px',
+      borderRadius: '16px',
       border: `1px solid ${theme.inputBorder}`,
       background: theme.inputBg,
       color: theme.textPrimary,
-      padding: '7px 12px',
-      fontSize: '13px',
+      padding: '6px 10px',
+      fontSize: '12px',
       outline: 'none',
       fontFamily: theme.font,
       boxSizing: 'border-box',
@@ -170,7 +170,7 @@ function createStyles(theme) {
       paddingBottom: '4px',
     },
     sidebarSectionLabel: {
-      padding: '8px 14px 4px',
+      padding: '7px 12px 4px',
       fontSize: '10px',
       textTransform: 'uppercase',
       letterSpacing: '0.12em',
@@ -181,8 +181,8 @@ function createStyles(theme) {
       width: '100%',
       display: 'flex',
       alignItems: 'center',
-      gap: '10px',
-      padding: '8px 14px',
+      gap: '8px',
+      padding: '7px 12px',
       border: 'none',
       background: 'none',
       cursor: 'pointer',
@@ -194,14 +194,14 @@ function createStyles(theme) {
       background: theme.cardBg,
     },
     sidebarItemAvatar: {
-      width: '34px',
-      height: '34px',
-      borderRadius: '12px',
+      width: '30px',
+      height: '30px',
+      borderRadius: '10px',
       display: 'grid',
       placeItems: 'center',
       color: '#fff',
       fontWeight: 800,
-      fontSize: '12px',
+      fontSize: '11px',
       flexShrink: 0,
     },
     sidebarItemText: {
@@ -209,7 +209,7 @@ function createStyles(theme) {
       minWidth: 0,
     },
     sidebarItemName: {
-      fontSize: '13px',
+      fontSize: '12px',
       fontWeight: 700,
       color: theme.textHeading,
       overflow: 'hidden',
@@ -217,7 +217,7 @@ function createStyles(theme) {
       whiteSpace: 'nowrap',
     },
     sidebarItemMeta: {
-      fontSize: '11px',
+      fontSize: '10px',
       color: theme.textMuted,
       overflow: 'hidden',
       textOverflow: 'ellipsis',
@@ -251,7 +251,7 @@ function createStyles(theme) {
       flexShrink: 0,
     },
     sidebarActions: {
-      padding: '10px 12px',
+      padding: '8px 10px',
       borderTop: `1px solid ${theme.cardBorder}`,
       display: 'flex',
       gap: '8px',
@@ -259,13 +259,13 @@ function createStyles(theme) {
     },
     sidebarActionBtn: {
       flex: 1,
-      padding: '8px',
-      borderRadius: '12px',
+      padding: '7px',
+      borderRadius: '10px',
       border: `1px solid ${theme.cardBorder}`,
       background: theme.cardBg,
       color: theme.textSecondary,
       cursor: 'pointer',
-      fontSize: '18px',
+      fontSize: '15px',
       display: 'grid',
       placeItems: 'center',
       fontFamily: theme.font,
@@ -294,20 +294,20 @@ function createStyles(theme) {
       display: 'flex',
       alignItems: 'center',
       gap: '8px',
-      padding: '10px 14px',
+      padding: '9px 12px',
       borderBottom: `1px solid ${theme.cardBorder}`,
       background: theme.panelBg,
       flexShrink: 0,
     },
     hamburger: {
-      width: '34px',
-      height: '34px',
-      borderRadius: '12px',
+      width: '30px',
+      height: '30px',
+      borderRadius: '10px',
       border: `1px solid ${theme.cardBorder}`,
       background: theme.cardBg,
       color: theme.textPrimary,
       cursor: 'pointer',
-      fontSize: '16px',
+      fontSize: '14px',
       display: 'grid',
       placeItems: 'center',
       flexShrink: 0,
@@ -317,7 +317,7 @@ function createStyles(theme) {
       minWidth: 0,
     },
     chatName: {
-      fontSize: '15px',
+      fontSize: '14px',
       fontWeight: 800,
       color: theme.textHeading,
       overflow: 'hidden',
@@ -326,7 +326,7 @@ function createStyles(theme) {
       margin: 0,
     },
     chatMeta: {
-      fontSize: '11px',
+      fontSize: '10px',
       color: theme.textMuted,
       overflow: 'hidden',
       textOverflow: 'ellipsis',
@@ -335,19 +335,19 @@ function createStyles(theme) {
     },
     topBarIcons: {
       display: 'flex',
-      gap: '4px',
+      gap: '3px',
       alignItems: 'center',
       flexShrink: 0,
     },
     iconBtn: {
-      width: '32px',
-      height: '32px',
-      borderRadius: '10px',
+      width: '28px',
+      height: '28px',
+      borderRadius: '8px',
       border: `1px solid ${theme.cardBorder}`,
       background: theme.cardBg,
       color: theme.textSecondary,
       cursor: 'pointer',
-      fontSize: '14px',
+      fontSize: '12px',
       display: 'grid',
       placeItems: 'center',
       fontFamily: theme.font,
@@ -881,25 +881,26 @@ export default function ChatPage() {
   function applyBootstrap(nextBootstrap, nextChat = null) {
     setBootstrap(nextBootstrap);
     const fallbackChat = getDefaultChat(nextBootstrap, user?.username);
+    const activeChatCandidate = nextChat || activeChatRef.current;
 
     if (nextChat) {
       setActiveChat(nextChat);
       return;
     }
 
-    if (!activeChat) {
+    if (!activeChatCandidate) {
       setActiveChat(fallbackChat);
       return;
     }
 
-    if (activeChat.type === 'dm') {
-      if (!nextBootstrap.friends.includes(activeChat.name)) {
+    if (activeChatCandidate.type === 'dm') {
+      if (!nextBootstrap.friends.includes(activeChatCandidate.name)) {
         setActiveChat(fallbackChat);
       }
       return;
     }
 
-    const matchingGroup = nextBootstrap.groups.find((group) => group.id === activeChat.id);
+    const matchingGroup = nextBootstrap.groups.find((group) => group.id === activeChatCandidate.id);
     if (!matchingGroup) {
       setActiveChat(fallbackChat);
     }

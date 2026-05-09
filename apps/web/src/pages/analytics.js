@@ -212,19 +212,19 @@ export default function Analytics() {
           .analytics-wide-card { grid-column: span 1 !important; }
         }
         @media (max-width: 640px) {
-          .analytics-page { padding: 14px !important; }
-          .analytics-grid { grid-template-columns: 1fr !important; }
+          .analytics-page { padding: 12px !important; }
+          .analytics-grid { grid-template-columns: 1fr !important; gap: 10px !important; }
           .analytics-header { flex-direction: column !important; align-items: flex-start !important; }
           .analytics-header-actions { width: 100%; flex-wrap: wrap; }
-          .analytics-header-actions > * { flex: 1 1 140px; }
-          .analytics-summary { grid-template-columns: 1fr !important; }
-          .analytics-gauges { flex-wrap: wrap; gap: 18px !important; justify-content: flex-start !important; }
+          .analytics-header-actions > * { flex: 1 1 120px; }
+          .analytics-summary { grid-template-columns: 1fr !important; gap: 8px !important; }
+          .analytics-gauges { flex-wrap: wrap; gap: 14px !important; justify-content: flex-start !important; }
           .analytics-active-row { flex-wrap: wrap; align-items: flex-start !important; }
           .analytics-active-row > span:last-child { min-width: 0 !important; text-align: left !important; }
         }
         @media (max-width: 420px) {
-          .analytics-page { padding: 10px !important; }
-          .analytics-card { padding: 14px !important; }
+          .analytics-page { padding: 8px !important; }
+          .analytics-card { padding: 12px !important; }
         }
       `}</style>
 
