@@ -1,5 +1,5 @@
 import { useRouter } from 'next/router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import io from 'socket.io-client';
 import { useTheme } from '../lib/ThemePicker';
 
@@ -98,6 +98,10 @@ function parseReplyEnvelope(text) {
     replyToUser: match[2] || '',
     body: match[3] || '',
   };
+}
+
+function normalizeUsername(value) {
+  return String(value || '').trim().toLowerCase();
 }
 
 function createStyles(theme) {
@@ -844,6 +848,13 @@ export default function ChatPage() {
     return flattenedGroups.filter(({ group }) => group.name.toLowerCase().includes(q));
   }, [flattenedGroups, sidebarFilter]);
 
+  const onlineUserSet = useMemo(
+    () => new Set((onlineUsers || []).map((name) => normalizeUsername(name)).filter(Boolean)),
+    [onlineUsers],
+  );
+
+  const isUserOnline = useCallback((username) => onlineUserSet.has(normalizeUsername(username)), [onlineUserSet]);
+
   useEffect(() => {
     activeChatRef.current = activeChat;
   }, [activeChat]);
@@ -924,6 +935,41 @@ export default function ChatPage() {
   function describeChat(chat) {
     if (!chat) return 'conversation';
     return chat.type === 'dm' ? `@${chat.name}` : `#${chat.name}`;
+  }
+
+  async function copyText(text) {
+    const value = String(text || '').trim();
+    if (!value) throw new Error('Nothing to copy.');
+
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(value);
+        return;
+      } catch (_) {
+        // Fallback to legacy copy below.
+      }
+    }
+
+    if (typeof document === 'undefined') {
+      throw new Error('Clipboard is unavailable in this environment.');
+    }
+
+    const textArea = document.createElement('textarea');
+    textArea.value = value;
+    textArea.setAttribute('readonly', 'readonly');
+    textArea.style.position = 'fixed';
+    textArea.style.opacity = '0';
+    textArea.style.pointerEvents = 'none';
+    textArea.style.top = '-9999px';
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    const copied = document.execCommand('copy');
+    document.body.removeChild(textArea);
+
+    if (!copied) {
+      throw new Error('Copy failed. Please copy manually.');
+    }
   }
 
   function isChatOpen(chat) {
@@ -1546,8 +1592,8 @@ export default function ChatPage() {
 
   function openWhatsAppShare() {
     if (!selectedGroup || typeof window === 'undefined') return;
-    const inviteUrl = `${window.location.origin}/join-group/${selectedGroup.shareToken}`;
-    const message = `Join ${selectedGroup.name} on Cosmix\n\n${inviteUrl}`;
+    const inviteUrl = new URL(`/join-group/${encodeURIComponent(String(selectedGroup.shareToken || '').trim())}`, window.location.origin).toString();
+    const message = `${inviteUrl}\n\nJoin ${selectedGroup.name} on Cosmix`;
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer');
   }
 
@@ -1679,8 +1725,8 @@ export default function ChatPage() {
   }
 
   function renderInvitePanel() {
-    const inviteUrl = selectedGroup?.shareToken
-      ? `${typeof window !== 'undefined' ? window.location.origin : ''}/join-group/${selectedGroup.shareToken}`
+    const inviteUrl = selectedGroup?.shareToken && typeof window !== 'undefined'
+      ? new URL(`/join-group/${encodeURIComponent(String(selectedGroup.shareToken || '').trim())}`, window.location.origin).toString()
       : '';
     return (
       <>
@@ -1688,9 +1734,22 @@ export default function ChatPage() {
           <div style={styles.formRow}>
             <p style={styles.label}>Invite Link</p>
             <div style={{ ...styles.listItem, wordBreak: 'break-all' }}>
-              <span style={{ ...styles.listItemMeta, fontSize: '11px' }}>{inviteUrl}</span>
+              <a href={inviteUrl} target="_blank" rel="noreferrer" style={{ ...styles.listItemMeta, fontSize: '11px', color: theme.blue }}>
+                {inviteUrl}
+              </a>
             </div>
-            <button type="button" style={styles.btn} onClick={() => navigator.clipboard?.writeText(inviteUrl).then(() => reportStatus('Link copied!'))}>
+            <button
+              type="button"
+              style={styles.btn}
+              onClick={async () => {
+                try {
+                  await copyText(inviteUrl);
+                  reportStatus('Link copied!');
+                } catch (error) {
+                  reportError(error.message || 'Copy failed.');
+                }
+              }}
+            >
               📋 Copy Link
             </button>
             <button type="button" style={{ ...styles.btn, background: '#25D366', border: 'none', color: '#fff' }} onClick={openWhatsAppShare}>
@@ -1788,9 +1847,9 @@ export default function ChatPage() {
                     <div style={{ ...styles.sidebarItemAvatar, background: getUserColor(friendName, theme) }}>{friendName.slice(0, 2).toUpperCase()}</div>
                     <div style={styles.sidebarItemText}>
                       <div style={styles.sidebarItemName}>{friendName}</div>
-                      <div style={styles.sidebarItemMeta}>{onlineUsers.includes(friendName) ? 'Online' : 'Offline'}</div>
+                      <div style={styles.sidebarItemMeta}>{isUserOnline(friendName) ? 'Online' : 'Offline'}</div>
                     </div>
-                    <div style={onlineUsers.includes(friendName) ? styles.onlineDot : styles.offlineDot} />
+                    <div style={isUserOnline(friendName) ? styles.onlineDot : styles.offlineDot} />
                     {unreadCounts[chatKey] ? <span style={styles.sidebarUnread}>{unreadCounts[chatKey]}</span> : null}
                   </button>
                 );
@@ -1896,12 +1955,13 @@ export default function ChatPage() {
             {activeChat && (
               <p style={styles.chatMeta}>
                 {activeChat.type === 'dm'
-                  ? (onlineUsers.includes(activeChat.name) ? 'Online' : 'Offline')
+                  ? (isUserOnline(activeChat.name) ? 'Online' : 'Offline')
                   : (selectedGroup?.description || `${selectedGroup?.memberships?.length || 0} members`)}
               </p>
             )}
           </div>
           <div style={styles.topBarIcons}>
+            <button type="button" title="Dashboard" style={styles.iconBtn} onClick={() => router.push('/dashboard')}>🏠</button>
             <div style={{ ...styles.connDot, background: connectionState === 'connected' ? theme.green : connectionState === 'connecting' ? theme.orange : theme.red }} title={connectionState} />
             {selectedGroup && (
               <>

@@ -10,19 +10,31 @@ export const config = {
   },
 };
 
-const s3 = new AWS.S3({
-  accessKeyId: process.env.AWS_ACCESS_KEY,
-  secretAccessKey: process.env.AWS_SECRET_KEY,
-  region: process.env.AWS_REGION,
-});
+function resolveAwsUploadConfig() {
+  const accessKeyId = process.env.AWS_ACCESS_KEY || process.env.AWS_ACCESS_KEY_ID || '';
+  const secretAccessKey = process.env.AWS_SECRET_KEY || process.env.AWS_SECRET_ACCESS_KEY || '';
+  const region = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || '';
+  const bucket = process.env.AWS_BUCKET || process.env.AWS_S3_BUCKET || process.env.CHAT_S3_BUCKET || '';
+
+  return {
+    accessKeyId,
+    secretAccessKey,
+    region,
+    bucket,
+  };
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  if (!process.env.AWS_BUCKET || !process.env.AWS_REGION) {
-    return res.status(500).json({ error: 'S3 configuration is missing.' });
+  const awsConfig = resolveAwsUploadConfig();
+
+  if (!awsConfig.bucket || !awsConfig.region) {
+    return res.status(500).json({
+      error: 'S3 configuration is missing. Please configure AWS_BUCKET and AWS_REGION in server environment.',
+    });
   }
 
   try {
@@ -58,10 +70,19 @@ export default async function handler(req, res) {
       const originalName = uploadedFile.originalFilename || uploadedFile.filename || 'group-image';
       const extension = originalName.includes('.') ? originalName.slice(originalName.lastIndexOf('.')) : '.jpg';
       const key = `chat-groups/${groupId}/${username}/${Date.now()}${extension}`;
+      const s3 = new AWS.S3({
+        region: awsConfig.region,
+        ...(awsConfig.accessKeyId && awsConfig.secretAccessKey
+          ? {
+              accessKeyId: awsConfig.accessKeyId,
+              secretAccessKey: awsConfig.secretAccessKey,
+            }
+          : {}),
+      });
 
       try {
         await s3.upload({
-          Bucket: process.env.AWS_BUCKET,
+          Bucket: awsConfig.bucket,
           Key: key,
           Body: fs.createReadStream(uploadedFile.filepath),
           ContentType: uploadedFile.mimetype || 'image/jpeg',
@@ -75,7 +96,7 @@ export default async function handler(req, res) {
 
         return res.status(200).json({
           key,
-          url: `https://${process.env.AWS_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`,
+          url: `https://${awsConfig.bucket}.s3.${awsConfig.region}.amazonaws.com/${key}`,
         });
       } catch (uploadError) {
         console.error('S3 upload failed:', uploadError);

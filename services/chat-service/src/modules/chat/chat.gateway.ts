@@ -25,7 +25,7 @@ export class ChatGateway
 
   /* 🔥 Better Data Structure */
   private users = new Map<string, string>(); // socketId -> username
-  private userSockets = new Map<string, string>(); // username -> socketId
+  private userSockets = new Map<string, Set<string>>(); // username -> socketIds
   private userActors = new Map<string, { username: string; userId?: string | null; avatar?: string | null }>();
 
   /* 🟢 CONNECT */
@@ -39,7 +39,13 @@ export class ChatGateway
 
     if (username) {
       this.users.delete(socket.id);
-      this.userSockets.delete(username);
+      const socketIds = this.userSockets.get(username);
+      if (socketIds) {
+        socketIds.delete(socket.id);
+        if (!socketIds.size) {
+          this.userSockets.delete(username);
+        }
+      }
       this.userActors.delete(socket.id);
 
       this.server.emit('online_users', this.getOnlineUsers());
@@ -61,7 +67,9 @@ export class ChatGateway
     socket.data.avatar = data.avatar || null;
 
     this.users.set(socket.id, username);
-    this.userSockets.set(username, socket.id);
+    const socketIds = this.userSockets.get(username) || new Set<string>();
+    socketIds.add(socket.id);
+    this.userSockets.set(username, socketIds);
     this.userActors.set(socket.id, { username, userId: data.userId || null, avatar: data.avatar || null });
 
     this.server.emit('online_users', this.getOnlineUsers());
@@ -170,17 +178,17 @@ export class ChatGateway
     /* 👤 DIRECT MESSAGE */
     if (data.chat.type === 'dm') {
       const targetUsername = data.chat.name;
-      const targetSocketId = this.userSockets.get(targetUsername);
+      const targetSocketIds = this.userSockets.get(targetUsername);
 
-      if (targetSocketId) {
+      if (targetSocketIds?.size) {
         const receiverPayload = { ...payload };
-
-        // send to receiver
-        this.server.to(targetSocketId).emit('message', receiverPayload);
-
-        // send back to sender (so UI updates)
-        socket.emit('message', payload);
+        targetSocketIds.forEach((targetSocketId) => {
+          this.server.to(targetSocketId).emit('message', receiverPayload);
+        });
       }
+
+      // Always send back to sender so UI updates even if recipient is offline.
+      socket.emit('message', payload);
     }
 
     console.log('Message:', payload);
@@ -195,8 +203,10 @@ export class ChatGateway
     if (data.chat?.type === 'group') {
       this.server.to(data.chat.id || data.chat.name).emit('typing', { user: data.user });
     } else if (data.chat?.type === 'dm') {
-      const targetSocketId = this.userSockets.get(data.chat.name);
-      if (targetSocketId) this.server.to(targetSocketId).emit('typing', { user: data.user });
+      const targetSocketIds = this.userSockets.get(data.chat.name);
+      targetSocketIds?.forEach((targetSocketId) => {
+        this.server.to(targetSocketId).emit('typing', { user: data.user });
+      });
     }
   }
 
@@ -235,6 +245,8 @@ export class ChatGateway
 
   /* 🧠 UTIL */
   private getOnlineUsers(): string[] {
-    return Array.from(this.userSockets.keys());
+    return Array.from(this.userSockets.entries())
+      .filter(([, socketIds]) => socketIds.size > 0)
+      .map(([username]) => username);
   }
 }
