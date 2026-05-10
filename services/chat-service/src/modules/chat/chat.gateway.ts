@@ -161,8 +161,10 @@ export class ChatGateway
           this.server.to(payload.chat.id || data.chat.name).emit('message', aiPayload);
         } else {
           // DM - reply to both
-          const targetSocketId = this.userSockets.get(data.chat.name);
-          if (targetSocketId) this.server.to(targetSocketId).emit('message', aiPayload);
+          const targetSocketIds = this.userSockets.get(data.chat.name);
+          targetSocketIds?.forEach((targetSocketId) => {
+            this.server.to(targetSocketId).emit('message', aiPayload);
+          });
           socket.emit('message', aiPayload);
         }
 
