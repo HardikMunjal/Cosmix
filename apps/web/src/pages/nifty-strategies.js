@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
+import dynamic from 'next/dynamic';
 import {
   Area,
   AreaChart,
@@ -41,6 +42,18 @@ const MARKET_SESSION_OPTIONS = [
   { value: 'europe', label: 'Europe: 8:00-16:30 London', timezone: 'Europe/London', days: [1, 2, 3, 4, 5], start: '08:00', end: '16:30' },
   { value: 'crypto', label: 'Crypto: 24x7', timezone: 'UTC', days: [0, 1, 2, 3, 4, 5, 6], start: '00:00', end: '23:59' },
 ];
+
+const EmbeddedOptionsStrategyPage = dynamic(
+  () => import('./options-strategy').then((mod) => mod.OptionsStrategyPage),
+  {
+    ssr: false,
+    loading: () => (
+      <div style={{ padding: '18px', borderRadius: '14px', border: '1px solid #1e293b', background: 'rgba(15, 23, 42, 0.82)', color: '#94a3b8' }}>
+        Loading strategy builder...
+      </div>
+    ),
+  },
+);
 
 function parseTimeParts(value) {
   const [hoursText, minutesText] = String(value || '00:00').split(':');
@@ -648,22 +661,21 @@ function TinyTrendSparkline({ history = [], color, styles }) {
       style={styles.tickerSparkline}
       aria-label="1 day price trend"
     >
-      <rect x="0.5" y="0.5" width={width - 1} height={height - 1} rx="9" fill="rgba(148,163,184,0.10)" stroke="rgba(255,255,255,0.16)" />
       <polyline
         fill="none"
-        stroke="rgba(255,255,255,0.08)"
+        stroke="rgba(255,255,255,0.12)"
         strokeWidth="1"
         points={`${padding},${height / 2} ${width - padding},${height / 2}`}
       />
       <polyline
         fill="none"
-        stroke="rgba(255,255,255,0.12)"
+        stroke="rgba(255,255,255,0.08)"
         strokeWidth="1"
         points={`${padding},${height - padding} ${width - padding},${height - padding}`}
       />
-      <polygon fill={`${color}2e`} points={areaPoints} />
-      <polyline fill="none" stroke="rgba(255,255,255,0.22)" strokeWidth="4.8" strokeLinejoin="round" strokeLinecap="round" points={points} />
-      <polyline fill="none" stroke={color} strokeWidth="2.8" strokeLinejoin="round" strokeLinecap="round" points={points} />
+      <polygon fill={`${color}20`} points={areaPoints} />
+      <polyline fill="none" stroke="rgba(255,255,255,0.14)" strokeWidth="4" strokeLinejoin="round" strokeLinecap="round" points={points} />
+      <polyline fill="none" stroke={color} strokeWidth="2.3" strokeLinejoin="round" strokeLinecap="round" points={points} />
       <circle cx={width - padding} cy={Number(points.split(' ').slice(-1)[0].split(',')[1])} r="3.2" fill={color} stroke="rgba(255,255,255,0.92)" strokeWidth="1.2" />
     </svg>
   );
@@ -1873,6 +1885,10 @@ export default function NiftyStrategiesPage() {
   const [actionDateTimeByStrategy, setActionDateTimeByStrategy] = useState({});
   const [learningModal, setLearningModal] = useState(null); // { strategyId, actionTimestamp, pendingCloseLeg? }
   const [learningText, setLearningText] = useState('');
+  const [showEmbeddedBuilder, setShowEmbeddedBuilder] = useState(false);
+  const [embeddedBuilderLoaded, setEmbeddedBuilderLoaded] = useState(false);
+  const [embeddedBuilderStrategyId, setEmbeddedBuilderStrategyId] = useState(null);
+  const [embeddedBuilderVersion, setEmbeddedBuilderVersion] = useState(0);
 
   const getActionTimestamp = (strategyId) => {
     if (!usePastActionDate[strategyId]) return new Date().toISOString();
@@ -1909,6 +1925,19 @@ export default function NiftyStrategiesPage() {
     }
     setLearningModal(null);
   };
+
+  const openEmbeddedBuilder = useCallback((strategyId = null) => {
+    if (strategyId == null) {
+      try {
+        sessionStorage.removeItem('nifty-strategy-legs');
+        sessionStorage.removeItem('nifty-strategy-meta');
+      } catch (_) {}
+    }
+    setEmbeddedBuilderLoaded(true);
+    setEmbeddedBuilderStrategyId(strategyId);
+    setEmbeddedBuilderVersion((current) => current + 1);
+    setShowEmbeddedBuilder(true);
+  }, []);
 
   const updateStrategyStatus = async (strategyId, newStatus, actionTimestamp = null, learning = null) => {
     const strategy = savedStrategies.find((s) => s.id === strategyId);
@@ -2177,7 +2206,21 @@ export default function NiftyStrategiesPage() {
   if (!user) return <div style={styles.loading}>Loading...</div>;
 
   return (
-    <div style={styles.container} className="nifty-page-container">
+    <div
+      style={{
+        ...styles.container,
+        '--btn-primary-bg': theme.btnPrimaryBg,
+        '--btn-primary-border': theme.btnPrimaryBorder,
+        '--btn-primary-text': theme.btnPrimaryText,
+        '--btn-secondary-bg': theme.btnSecondaryBg,
+        '--btn-secondary-border': theme.btnSecondaryBorder,
+        '--btn-secondary-text': theme.btnSecondaryText,
+        '--input-bg': theme.inputBg,
+        '--input-border': theme.inputBorder,
+        '--input-text': theme.textPrimary,
+      }}
+      className="nifty-page-container"
+    >
       <style>{`
         .mkt-pill { transition: border-color 0.15s ease, box-shadow 0.15s ease; }
         .mkt-pill:hover { border-color: ${theme.cardBorderHover} !important; }
@@ -2208,6 +2251,9 @@ export default function NiftyStrategiesPage() {
           .nifty-performance-kpis { grid-template-columns: 1fr !important; }
           .nifty-header { flex-direction: column !important; }
           .nifty-header-actions { width: 100% !important; }
+          .nifty-builder-header { flex-direction: column !important; align-items: stretch !important; }
+          .nifty-builder-actions { width: 100% !important; }
+          .nifty-builder-actions button { flex: 1 !important; }
           .nifty-header-actions button { flex: 1 !important; min-height: 34px !important; font-size: 11px !important; }
           .nifty-header-actions button,
           .nifty-card-actions button,
@@ -2244,6 +2290,7 @@ export default function NiftyStrategiesPage() {
           .nifty-strategy-summary .expand-chevron { font-size: 14px !important; }
           .market-ticker { gap: 6px !important; }
           .nifty-stats-more summary { padding: 8px 10px !important; }
+          .nifty-builder-body { padding: 10px !important; }
         }
         @media (max-width: 560px) {
           .nifty-learnings-ticker { display: none !important; }
@@ -2283,6 +2330,7 @@ export default function NiftyStrategiesPage() {
           .nifty-page-title { font-size: 18px !important; }
           .nifty-section-header { font-size: 12px !important; gap: 6px !important; }
           .nifty-summary-value { font-size: 15px !important; }
+          .nifty-builder-actions { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 6px !important; }
           .nifty-strategy-summary { padding: 8px !important; gap: 6px !important; }
           .nifty-strategy-body { padding: 0 8px 8px !important; }
           .nifty-header-actions button,
@@ -2319,6 +2367,7 @@ export default function NiftyStrategiesPage() {
           .nifty-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
           .nifty-header-actions { grid-template-columns: 1fr !important; }
           .nifty-header-actions .header-ghost-btn { display: none !important; }
+          .nifty-builder-actions { grid-template-columns: 1fr !important; }
           .nifty-header-actions button,
           .nifty-card-actions button,
           .nifty-leg-toolbar button,
@@ -2440,16 +2489,9 @@ export default function NiftyStrategiesPage() {
           <button onClick={() => loadSavedStrategies({ showSpinner: false, includeWhatIf: true, refreshIndices: true })} style={styles.secondaryButton}>{refreshing ? 'Refreshing...' : 'Refresh'}</button>
           <button
             type="button"
-            onClick={() => {
-              try { sessionStorage.removeItem('nifty-strategy-legs'); sessionStorage.removeItem('nifty-strategy-meta'); } catch (_) {}
-              router.push('/options-strategy').catch(() => {
-                if (typeof window !== 'undefined') {
-                  window.location.assign('/options-strategy');
-                }
-              });
-            }}
+            onClick={() => openEmbeddedBuilder(null)}
             style={styles.primaryButton}
-          >Create Strategy</button>
+          >{showEmbeddedBuilder ? 'Builder Open' : 'Create Strategy'}</button>
           <button className="header-ghost-btn" onClick={() => router.push('/strategy-history')} style={styles.ghostButton}>History</button>
           <button className="header-ghost-btn" onClick={() => router.push('/dashboard')} style={styles.ghostButton}>Dashboard</button>
         </div>
@@ -2653,6 +2695,40 @@ export default function NiftyStrategiesPage() {
           ))}
         </div>
       </details>
+
+      <section style={styles.builderSection}>
+        <div style={styles.builderSectionHeader} className="nifty-builder-header">
+          <div>
+            <div style={styles.builderSectionTitle}>Strategy Builder + Optimizer</div>
+            <div style={styles.builderSectionHint}>Create, edit, graph, and optimize strategies on this page. The builder loads only when you open it.</div>
+          </div>
+          <div style={styles.builderSectionActions} className="nifty-builder-actions">
+            <button type="button" onClick={() => openEmbeddedBuilder(null)} style={styles.primaryButton}>New draft</button>
+            {embeddedBuilderLoaded ? (
+              <button type="button" onClick={() => setShowEmbeddedBuilder((current) => !current)} style={styles.secondaryButton}>
+                {showEmbeddedBuilder ? 'Hide builder' : 'Show builder'}
+              </button>
+            ) : null}
+          </div>
+        </div>
+        {embeddedBuilderLoaded && showEmbeddedBuilder ? (
+          <div style={styles.builderSectionBody} className="nifty-builder-body">
+            <EmbeddedOptionsStrategyPage
+              key={`${embeddedBuilderStrategyId || 'new'}-${embeddedBuilderVersion}`}
+              embedded
+              hideBackButton
+              strategyIdParam={embeddedBuilderStrategyId}
+              onStrategySaved={() => {
+                loadSavedStrategies({ showSpinner: false, includeWhatIf: true, refreshIndices: true });
+              }}
+              onOpenTracker={() => {
+                setShowEmbeddedBuilder(false);
+                setEmbeddedBuilderStrategyId(null);
+              }}
+            />
+          </div>
+        ) : null}
+      </section>
 
       {loading ? <OrbitalLoader label="Loading saved strategies..." /> : null}
       {!loading && error ? <div style={styles.errorText}>{error}</div> : null}
@@ -2942,7 +3018,7 @@ export default function NiftyStrategiesPage() {
                   {isClosed && (
                     <button onClick={() => updateStrategyStatus(strategy.id, 'watching')} style={styles.secondaryButton}>↩ Move to Watchlist</button>
                   )}
-                  <button onClick={() => router.push(`/options-strategy?strategyId=${encodeURIComponent(String(strategy.id))}`)} style={styles.primaryButton}>Open Strategy Builder</button>
+                  <button onClick={() => openEmbeddedBuilder(String(strategy.id))} style={styles.primaryButton}>Edit In Builder</button>
                   <button onClick={() => deleteSavedStrategy(strategy.id)} style={styles.deleteButton}>Delete</button>
                 </div>
               </div>
@@ -3334,18 +3410,18 @@ const darkStyles = {
   valuationSelect: {
     minHeight: '38px',
     borderRadius: '10px',
-    border: '1px solid #475569',
-    background: '#020617',
-    color: '#f8fafc',
+    border: '1px solid var(--input-border, #475569)',
+    background: 'var(--input-bg, #020617)',
+    color: 'var(--input-text, #f8fafc)',
     padding: '8px 10px',
     fontSize: '12px',
     fontWeight: '600',
     outline: 'none',
   },
   primaryButton: {
-    background: '#172554',
-    border: '1px solid #334155',
-    color: '#f8fafc',
+    background: 'var(--btn-primary-bg, #172554)',
+    border: '1px solid var(--btn-primary-border, #334155)',
+    color: 'var(--btn-primary-text, #f8fafc)',
     borderRadius: '8px',
     padding: '8px 12px',
     cursor: 'pointer',
@@ -3354,9 +3430,9 @@ const darkStyles = {
     fontSize: '12px',
   },
   secondaryButton: {
-    background: '#172033',
-    border: '1px solid #334155',
-    color: '#e2e8f0',
+    background: 'var(--btn-secondary-bg, #172033)',
+    border: '1px solid var(--btn-secondary-border, #334155)',
+    color: 'var(--btn-secondary-text, #e2e8f0)',
     borderRadius: '8px',
     padding: '8px 12px',
     cursor: 'pointer',
@@ -3365,13 +3441,52 @@ const darkStyles = {
   },
   ghostButton: {
     background: 'transparent',
-    border: '1px solid rgba(148,163,184,0.18)',
-    color: '#cbd5e1',
+    border: '1px solid var(--btn-secondary-border, rgba(148,163,184,0.18))',
+    color: 'var(--btn-secondary-text, #cbd5e1)',
     borderRadius: '8px',
     padding: '8px 10px',
     cursor: 'pointer',
     minHeight: '34px',
     fontSize: '12px',
+  },
+  builderSection: {
+    marginBottom: '14px',
+    border: '1px solid #1e293b',
+    borderRadius: '16px',
+    background: 'rgba(15, 23, 42, 0.5)',
+    overflow: 'hidden',
+  },
+  builderSectionHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: '12px',
+    flexWrap: 'wrap',
+    padding: '14px 16px',
+    borderBottom: '1px solid #1e293b',
+    background: 'linear-gradient(135deg, rgba(15,23,42,0.96), rgba(15,23,42,0.72))',
+  },
+  builderSectionTitle: {
+    color: '#f8fafc',
+    fontSize: '15px',
+    fontWeight: '800',
+  },
+  builderSectionHint: {
+    marginTop: '4px',
+    color: '#94a3b8',
+    fontSize: '12px',
+    lineHeight: '1.45',
+    maxWidth: '620px',
+  },
+  builderSectionActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    flexWrap: 'wrap',
+  },
+  builderSectionBody: {
+    padding: '16px',
+    background: 'rgba(2, 6, 23, 0.42)',
   },
   deleteButton: {
     background: '#450a0a',

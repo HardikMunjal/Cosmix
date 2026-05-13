@@ -530,7 +530,7 @@ function MetricBarChart({ items = [], styles }) {
   );
 }
 
-export default function OptionsStrategy() {
+export function OptionsStrategyPage({ embedded = false, hideBackButton = false, onStrategySaved = null, onOpenTracker = null, strategyIdParam = null } = {}) {
   const router = useRouter();
   const { theme, themeId } = useTheme();
   const styles = useMemo(() => applyTheme(darkStyles, themeId, theme), [themeId, theme]);
@@ -611,7 +611,8 @@ export default function OptionsStrategy() {
         if (SAVE_TARGET_OPTIONS.some((option) => option.value === meta.saveTarget)) setSaveTarget(meta.saveTarget);
         // Only restore editingStrategyId when a strategyId param is present in the URL
         // (i.e. editing an existing strategy). For fresh creates we skip this.
-        if (meta.editingStrategyId && typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('strategyId')) {
+        const routedStrategyId = strategyIdParam || (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('strategyId') : null);
+        if (meta.editingStrategyId && routedStrategyId) {
           setEditingStrategyId(meta.editingStrategyId);
         }
       }
@@ -853,9 +854,11 @@ export default function OptionsStrategy() {
     })();
   }, [user]);
 
+  const requestedStrategyId = strategyIdParam || router.query?.strategyId;
+
   useEffect(() => {
-    if (!user || !router.isReady) return;
-    const strategyId = router.query?.strategyId;
+    if (!user || (!embedded && !router.isReady)) return;
+    const strategyId = requestedStrategyId;
     if (!strategyId || loadedStrategyRef.current === String(strategyId)) return;
 
     (async () => {
@@ -896,7 +899,7 @@ export default function OptionsStrategy() {
         setSaveMessage(error.message || 'Unable to load saved strategy.');
       }
     })();
-  }, [router.isReady, router.query, user]);
+  }, [embedded, requestedStrategyId, router.isReady, user]);
 
   useEffect(() => {
     const loadNifty = async () => {
@@ -1179,7 +1182,12 @@ export default function OptionsStrategy() {
       setEditingStrategyId(savedId);
       setSavedStrategies(data.strategies || []);
       setSaveMessage(`${existingStrategy ? 'Updated' : 'Saved'} "${cleanName}" as ${saveTarget === 'active' ? 'Bought' : 'Wishlist'} with fixed entry prices and ${getPricingSourceLabel(pricingSource)} pricing.`);
-      router.push(`/nifty-strategies?saved=${encodeURIComponent(String(savedId))}`);
+      if (typeof onStrategySaved === 'function') {
+        onStrategySaved({ id: savedId, status: saveTarget, name: cleanName });
+      }
+      if (!embedded) {
+        router.push(`/nifty-strategies?saved=${encodeURIComponent(String(savedId))}`);
+      }
     } catch (error) {
       setSaveMessage(error.message || 'Unable to save strategy right now.');
     } finally {
@@ -1419,13 +1427,38 @@ export default function OptionsStrategy() {
           .strategy-leg-row { grid-template-columns: 1fr !important; }
         }
       `}</style>
-      <div style={styles.container} className="strategy-page">
+      <div
+        style={{
+          ...styles.container,
+          ...(embedded ? styles.embeddedContainer : null),
+          '--btn-primary-bg': theme.btnPrimaryBg,
+          '--btn-primary-border': theme.btnPrimaryBorder,
+          '--btn-primary-text': theme.btnPrimaryText,
+          '--btn-secondary-bg': theme.btnSecondaryBg,
+          '--btn-secondary-border': theme.btnSecondaryBorder,
+          '--btn-secondary-text': theme.btnSecondaryText,
+          '--btn-danger-bg': theme.btnDangerBg,
+          '--btn-danger-border': theme.btnDangerBorder,
+          '--btn-danger-text': theme.btnDangerText,
+          '--btn-success-bg': theme.btnSuccessBg,
+          '--btn-success-border': theme.btnSuccessBorder,
+          '--btn-success-text': theme.btnSuccessText,
+          '--input-bg': theme.inputBg,
+          '--input-border': theme.inputBorder,
+          '--input-text': theme.textPrimary,
+        }}
+        className="strategy-page"
+      >
         <div style={styles.header} className="strategy-header">
           <div>
-            <h1 style={styles.title}>Nifty Options Strategy</h1>
-            <div style={styles.subTitle}>Live Nifty spot from {liveSource}</div>
+            <h1 style={styles.title}>{embedded ? 'Create Strategy, Charts, and Optimizer' : 'Nifty Options Strategy'}</h1>
+            <div style={styles.subTitle}>
+              {embedded ? 'Single-page builder with live spot, mixed-expiry pricing, payoff graphs, and optimizers.' : `Live Nifty spot from ${liveSource}`}
+            </div>
           </div>
-          <button onClick={() => router.push('/dashboard')} style={styles.back}>← Back</button>
+          {!hideBackButton ? (
+            <button onClick={() => router.push('/dashboard')} style={styles.back}>← Back</button>
+          ) : null}
         </div>
 
         <div style={styles.topGrid} className="strategy-top-grid">
@@ -1475,7 +1508,7 @@ export default function OptionsStrategy() {
               {rateUserOverride && (
                 <button
                   type="button"
-                  style={{ marginLeft: 6, fontSize: 11, padding: '2px 6px', borderRadius: 4, border: '1px solid #ccc', background: '#f1f5f9', cursor: 'pointer' }}
+                  style={{ marginLeft: 6, fontSize: 11, padding: '2px 6px', borderRadius: 4, border: `1px solid ${theme.btnSecondaryBorder || theme.cardBorder}`, background: theme.btnSecondaryBg || theme.cardBg, color: theme.btnSecondaryText || theme.textPrimary, cursor: 'pointer' }}
                   onClick={() => { setRateUserOverride(false); const rate = calculateRateForExpiry(selectedExpiry); setRateInput(`auto-${rate}`); }}
                   title="Revert to auto rate for expiry"
                 >
@@ -1673,7 +1706,18 @@ export default function OptionsStrategy() {
               {saveLoading ? 'Saving…' : editingStrategyId ? 'Update Strategy' : 'Save to Nifty Tracker'}
             </button>
             <button onClick={resetStrategyDraft} style={styles.secondaryButton}>Reset Legs</button>
-            <button onClick={() => router.push('/nifty-strategies')} style={styles.secondaryButton}>Open Nifty Tracker</button>
+            <button
+              onClick={() => {
+                if (typeof onOpenTracker === 'function') {
+                  onOpenTracker();
+                  return;
+                }
+                router.push('/nifty-strategies');
+              }}
+              style={styles.secondaryButton}
+            >
+              {embedded ? 'Back to tracker list' : 'Open Nifty Tracker'}
+            </button>
           </div>
           <p style={styles.explanation}>
             Saving writes this setup into storage, freezes the current entry premiums, and uses the selected entry date/time for historical tracking. After save, the Nifty tracker page shows live P/L with correct timeline placement.
@@ -2068,6 +2112,10 @@ export default function OptionsStrategy() {
   );
 }
 
+export default function OptionsStrategy() {
+  return <OptionsStrategyPage />;
+}
+
 const darkStyles = {
   container: {
     minHeight: '100vh',
@@ -2075,6 +2123,11 @@ const darkStyles = {
     color: '#e2e8f0',
     padding: '20px',
     fontFamily: 'monospace',
+  },
+  embeddedContainer: {
+    minHeight: 'auto',
+    padding: '0',
+    background: 'transparent',
   },
   loading: {
     minHeight: '100vh',
@@ -2103,9 +2156,9 @@ const darkStyles = {
     fontSize: '12px',
   },
   back: {
-    background: '#111827',
-    color: '#e2e8f0',
-    border: '1px solid #334155',
+    background: 'var(--btn-secondary-bg, #111827)',
+    color: 'var(--btn-secondary-text, #e2e8f0)',
+    border: '1px solid var(--btn-secondary-border, #334155)',
     padding: '10px 14px',
     borderRadius: '8px',
     cursor: 'pointer',
@@ -2209,36 +2262,36 @@ const darkStyles = {
   },
   applyButton: {
     marginTop: '8px',
-    background: '#1d4ed8',
-    color: '#eff6ff',
-    border: 'none',
+    background: 'var(--btn-primary-bg, #1d4ed8)',
+    color: 'var(--btn-primary-text, #eff6ff)',
+    border: '1px solid var(--btn-primary-border, #1d4ed8)',
     borderRadius: '8px',
     padding: '10px 12px',
     cursor: 'pointer',
     fontWeight: 'bold',
   },
   secondaryButton: {
-    background: '#0f172a',
-    color: '#bfdbfe',
-    border: '1px solid #334155',
+    background: 'var(--btn-secondary-bg, #0f172a)',
+    color: 'var(--btn-secondary-text, #bfdbfe)',
+    border: '1px solid var(--btn-secondary-border, #334155)',
     borderRadius: '8px',
     padding: '10px 12px',
     cursor: 'pointer',
     fontWeight: 'bold',
   },
   lockedButton: {
-    background: '#14532d',
-    color: '#dcfce7',
-    border: '1px solid #166534',
+    background: 'var(--btn-success-bg, #14532d)',
+    color: 'var(--btn-success-text, #dcfce7)',
+    border: '1px solid var(--btn-success-border, #166534)',
     borderRadius: '8px',
     padding: '10px 12px',
     cursor: 'pointer',
     fontWeight: 'bold',
   },
   removeButton: {
-    background: '#450a0a',
-    color: '#fecaca',
-    border: '1px solid #7f1d1d',
+    background: 'var(--btn-danger-bg, #450a0a)',
+    color: 'var(--btn-danger-text, #fecaca)',
+    border: '1px solid var(--btn-danger-border, #7f1d1d)',
     borderRadius: '8px',
     padding: '10px 12px',
     cursor: 'pointer',
@@ -2246,9 +2299,9 @@ const darkStyles = {
   },
   input: {
     width: '100%',
-    background: '#020617',
-    color: '#e2e8f0',
-    border: '1px solid #334155',
+    background: 'var(--input-bg, #020617)',
+    color: 'var(--input-text, #e2e8f0)',
+    border: '1px solid var(--input-border, #334155)',
     borderRadius: '8px',
     padding: '10px',
     fontFamily: 'monospace',
@@ -2316,9 +2369,9 @@ const darkStyles = {
     marginBottom: '12px',
   },
   saveButton: {
-    background: '#059669',
-    color: '#ecfdf5',
-    border: 'none',
+    background: 'var(--btn-success-bg, #059669)',
+    color: 'var(--btn-success-text, #ecfdf5)',
+    border: '1px solid var(--btn-success-border, #059669)',
     borderRadius: '8px',
     padding: '10px 12px',
     cursor: 'pointer',
