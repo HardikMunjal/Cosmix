@@ -529,31 +529,31 @@ function getTickerAppearance(key, theme) {
   const palette = {
     NIFTY50: {
       border: '#0f766e',
-      background: 'linear-gradient(135deg, rgba(15,118,110,0.22), rgba(8,47,73,0.82))',
-      glow: 'rgba(45,212,191,0.18)',
-      accent: '#5eead4',
-      price: '#ecfeff',
+      background: 'linear-gradient(135deg, rgba(15,118,110,0.10), rgba(15,23,42,0.94))',
+      glow: 'rgba(45,212,191,0.08)',
+      accent: '#dffcf6',
+      price: '#f8fafc',
     },
     BANKNIFTY: {
       border: '#1d4ed8',
-      background: 'linear-gradient(135deg, rgba(29,78,216,0.22), rgba(30,41,59,0.88))',
-      glow: 'rgba(96,165,250,0.18)',
-      accent: '#93c5fd',
-      price: '#eff6ff',
+      background: 'linear-gradient(135deg, rgba(29,78,216,0.10), rgba(15,23,42,0.94))',
+      glow: 'rgba(96,165,250,0.08)',
+      accent: '#e5f0ff',
+      price: '#f8fafc',
     },
     SENSEX: {
       border: '#7c3aed',
-      background: 'linear-gradient(135deg, rgba(124,58,237,0.2), rgba(30,27,75,0.88))',
-      glow: 'rgba(167,139,250,0.18)',
-      accent: '#c4b5fd',
-      price: '#f5f3ff',
+      background: 'linear-gradient(135deg, rgba(124,58,237,0.10), rgba(15,23,42,0.94))',
+      glow: 'rgba(167,139,250,0.08)',
+      accent: '#f0eaff',
+      price: '#f8fafc',
     },
     INDIAVIX: {
       border: '#ea580c',
-      background: 'linear-gradient(135deg, rgba(234,88,12,0.22), rgba(67,20,7,0.9))',
-      glow: 'rgba(251,146,60,0.18)',
-      accent: '#fdba74',
-      price: '#fff7ed',
+      background: 'linear-gradient(135deg, rgba(234,88,12,0.12), rgba(15,23,42,0.94))',
+      glow: 'rgba(251,146,60,0.08)',
+      accent: '#fff1de',
+      price: '#f8fafc',
     },
     DOWFUT: {
       border: '#be123c',
@@ -615,11 +615,58 @@ function getTickerAppearance(key, theme) {
 
   return palette[key] || {
     border: theme.cardBorder,
-    background: '#0f172a',
-    glow: 'rgba(148,163,184,0.14)',
-    accent: theme.textSecondary,
-    price: theme.textPrimary,
+    background: 'linear-gradient(135deg, rgba(51,65,85,0.12), rgba(15,23,42,0.94))',
+    glow: 'rgba(148,163,184,0.08)',
+    accent: '#f1f5f9',
+    price: '#f8fafc',
   };
+}
+
+function TinyTrendSparkline({ history = [], color, styles }) {
+  const values = (history || []).filter((value) => Number.isFinite(Number(value))).map((value) => Number(value));
+  if (values.length < 2) {
+    return <div style={styles.tickerSparklineEmpty}>No 1D trend</div>;
+  }
+
+  const width = 148;
+  const height = 42;
+  const padding = 3;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const points = values.map((value, index) => {
+    const x = padding + ((index / (values.length - 1)) * (width - (padding * 2)));
+    const y = height - padding - (((value - min) / range) * (height - (padding * 2)));
+    return `${x},${y}`;
+  }).join(' ');
+  const areaPoints = `${padding},${height - padding} ${points} ${width - padding},${height - padding}`;
+
+  return (
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+      style={styles.tickerSparkline}
+      aria-label="1 day price trend"
+    >
+      <rect x="0.5" y="0.5" width={width - 1} height={height - 1} rx="9" fill="rgba(148,163,184,0.10)" stroke="rgba(255,255,255,0.16)" />
+      <polyline
+        fill="none"
+        stroke="rgba(255,255,255,0.08)"
+        strokeWidth="1"
+        points={`${padding},${height / 2} ${width - padding},${height / 2}`}
+      />
+      <polyline
+        fill="none"
+        stroke="rgba(255,255,255,0.12)"
+        strokeWidth="1"
+        points={`${padding},${height - padding} ${width - padding},${height - padding}`}
+      />
+      <polygon fill={`${color}2e`} points={areaPoints} />
+      <polyline fill="none" stroke="rgba(255,255,255,0.22)" strokeWidth="4.8" strokeLinejoin="round" strokeLinecap="round" points={points} />
+      <polyline fill="none" stroke={color} strokeWidth="2.8" strokeLinejoin="round" strokeLinecap="round" points={points} />
+      <circle cx={width - padding} cy={Number(points.split(' ').slice(-1)[0].split(',')[1])} r="3.2" fill={color} stroke="rgba(255,255,255,0.92)" strokeWidth="1.2" />
+    </svg>
+  );
 }
 
 function OrbitalLoader({ label = 'Loading saved strategies...' }) {
@@ -655,16 +702,16 @@ function InlineLoaderChip({ text = 'Updating...' }) {
     <span style={{
       display: 'inline-flex',
       alignItems: 'center',
-      gap: '8px',
-      padding: '4px 10px',
+      gap: '6px',
+      padding: '3px 8px',
       borderRadius: '999px',
       border: '1px solid rgba(56, 189, 248, 0.3)',
-      background: 'rgba(15, 23, 42, 0.75)',
+      background: 'rgba(30, 41, 59, 0.68)',
       color: '#bae6fd',
-      fontSize: '11px',
+      fontSize: '10px',
       fontWeight: 700,
     }}>
-      <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#22d3ee', animation: 'nifty-pulse-dot 1s ease-in-out infinite' }} />
+      <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#22d3ee', animation: 'nifty-pulse-dot 1s ease-in-out infinite' }} />
       {text}
     </span>
   );
@@ -1765,12 +1812,12 @@ export default function NiftyStrategiesPage() {
 
   useEffect(() => {
     if (!user) return;
-    loadSavedStrategies({ showSpinner: true, includeWhatIf: false, refreshIndices: true });
+    loadSavedStrategies({ showSpinner: true, includeWhatIf: true, refreshIndices: true });
   }, [user, loadSavedStrategies]);
 
   useEffect(() => {
     if (!user) return;
-    loadSavedStrategies({ showSpinner: false, includeWhatIf: false, refreshIndices: false });
+    loadSavedStrategies({ showSpinner: false, includeWhatIf: true, refreshIndices: false });
   }, [currentValuationSource, user, loadSavedStrategies]);
 
   useEffect(() => {
@@ -1779,7 +1826,7 @@ export default function NiftyStrategiesPage() {
     const tick = () => {
       if (document.hidden) return;
       if (!isWithinMarketSession(refreshSession)) return;
-      loadSavedStrategies({ showSpinner: false, includeWhatIf: false, refreshIndices: true });
+      loadSavedStrategies({ showSpinner: false, includeWhatIf: true, refreshIndices: true });
     };
 
     const interval = setInterval(tick, refreshIntervalSeconds * 1000);
@@ -1824,7 +1871,7 @@ export default function NiftyStrategiesPage() {
   const [legEditor, setLegEditor] = useState(null);
   const [usePastActionDate, setUsePastActionDate] = useState({});
   const [actionDateTimeByStrategy, setActionDateTimeByStrategy] = useState({});
-  const [learningModal, setLearningModal] = useState(null); // { strategyId, actionTimestamp }
+  const [learningModal, setLearningModal] = useState(null); // { strategyId, actionTimestamp, pendingCloseLeg? }
   const [learningText, setLearningText] = useState('');
 
   const getActionTimestamp = (strategyId) => {
@@ -1840,6 +1887,27 @@ export default function NiftyStrategiesPage() {
         [strategyId]: current[strategyId] || toLocalDateTimeInputValue(new Date().toISOString()),
       }));
     }
+  };
+
+  const openLearningModal = (strategyId, actionTimestamp, pendingCloseLeg = null) => {
+    setLearningText('');
+    setLearningModal({ strategyId, actionTimestamp, pendingCloseLeg });
+  };
+
+  const submitLearningModal = (learning = null) => {
+    if (!learningModal) return;
+    if (learningModal.pendingCloseLeg) {
+      closeLeg(
+        learningModal.strategyId,
+        learningModal.pendingCloseLeg.legId,
+        learningModal.pendingCloseLeg.exitPrice,
+        learningModal.actionTimestamp,
+        learning,
+      );
+    } else {
+      updateStrategyStatus(learningModal.strategyId, 'closed', learningModal.actionTimestamp, learning);
+    }
+    setLearningModal(null);
   };
 
   const updateStrategyStatus = async (strategyId, newStatus, actionTimestamp = null, learning = null) => {
@@ -1867,7 +1935,7 @@ export default function NiftyStrategiesPage() {
     } catch (e) { alert(e.message); }
   };
 
-  const closeLeg = async (strategyId, legId, exitPrice, actionTimestamp = null) => {
+  const closeLeg = async (strategyId, legId, exitPrice, actionTimestamp = null, learning = null) => {
     const strategy = savedStrategies.find((s) => s.id === strategyId);
     if (!strategy) return;
     const leg = (strategy.legs || []).find((l) => l.id === legId);
@@ -1900,7 +1968,10 @@ export default function NiftyStrategiesPage() {
         closedLegs: [...(strategy.closedLegs || []), closedLeg],
         transactions: [...(strategy.transactions || []), transaction],
       };
-      if (!remainingLegs.length) payload.status = 'closed';
+      if (!remainingLegs.length) {
+        payload.status = 'closed';
+        if (learning) payload.learning = learning;
+      }
       const response = await fetch('/api/options-strategies', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -1913,6 +1984,16 @@ export default function NiftyStrategiesPage() {
       setClosingLegInfo(null);
       setClosePrice('');
     } catch (e) { alert(e.message); }
+  };
+
+  const requestLegClose = (strategy, leg, exitPrice) => {
+    const actionTimestamp = getActionTimestamp(strategy.id);
+    const remainingLegs = (strategy.legs || []).filter((entry) => entry.id !== leg.id);
+    if (!remainingLegs.length) {
+      openLearningModal(strategy.id, actionTimestamp, { legId: leg.id, exitPrice });
+      return;
+    }
+    closeLeg(strategy.id, leg.id, exitPrice, actionTimestamp);
   };
 
   const openLegEditor = (strategy, leg = null) => {
@@ -2027,6 +2108,20 @@ export default function NiftyStrategiesPage() {
     return { totalMtm, profitable, totalLots, activeCount, watchingCount, closedCount, activeMtm, totalRealizedPL };
   }, [savedStrategies]);
 
+  const primarySummaryCards = [
+    { key: 'active', label: 'Active', value: totals.activeCount, tone: theme.green },
+    { key: 'watching', label: 'Watchlist', value: totals.watchingCount, tone: theme.blue },
+    { key: 'liveMtm', label: 'Live MTM', value: formatCurrency(totals.totalMtm), tone: totals.totalMtm >= 0 ? theme.green : theme.red, numeric: false },
+    { key: 'realized', label: 'Realized', value: formatCurrency(totals.totalRealizedPL), tone: totals.totalRealizedPL >= 0 ? theme.green : theme.red, numeric: false },
+  ];
+
+  const secondarySummaryCards = [
+    { key: 'activeMtm', label: 'Active MTM', value: formatCurrency(totals.activeMtm), tone: totals.activeMtm >= 0 ? theme.green : theme.red },
+    { key: 'profitable', label: 'Profitable', value: totals.profitable, tone: theme.green },
+    { key: 'lots', label: 'Total Lots', value: totals.totalLots, tone: theme.purple },
+    { key: 'closed', label: 'Closed', value: totals.closedCount, tone: theme.textSecondary },
+  ];
+
   const strategyPerformanceSeries = useMemo(() => {
     if (!savedStrategies.length) return [];
 
@@ -2084,8 +2179,8 @@ export default function NiftyStrategiesPage() {
   return (
     <div style={styles.container} className="nifty-page-container">
       <style>{`
-        .mkt-pill { transition: transform 0.15s; }
-        .mkt-pill:hover { transform: scale(1.04); }
+        .mkt-pill { transition: border-color 0.15s ease, box-shadow 0.15s ease; }
+        .mkt-pill:hover { border-color: ${theme.cardBorderHover} !important; }
         details[open] > .nifty-strategy-summary { border-left-color: ${theme.blue} !important; }
         details[open] > .nifty-strategy-summary .expand-chevron { transform: rotate(90deg); }
         details > .nifty-strategy-summary:hover { border-left-color: ${theme.textMuted} !important; }
@@ -2108,12 +2203,12 @@ export default function NiftyStrategiesPage() {
         }
         @media (max-width: 640px) {
           .nifty-page-container { padding: 10px !important; }
-          .nifty-summary-grid { grid-template-columns: 1fr !important; gap: 8px !important; }
+          .nifty-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 8px !important; }
           .nifty-metrics-grid { grid-template-columns: 1fr !important; }
           .nifty-performance-kpis { grid-template-columns: 1fr !important; }
           .nifty-header { flex-direction: column !important; }
           .nifty-header-actions { width: 100% !important; }
-          .nifty-header-actions button { flex: 1 !important; min-height: 40px !important; font-size: 12px !important; }
+          .nifty-header-actions button { flex: 1 !important; min-height: 34px !important; font-size: 11px !important; }
           .nifty-header-actions button,
           .nifty-card-actions button,
           .nifty-leg-toolbar button,
@@ -2148,6 +2243,7 @@ export default function NiftyStrategiesPage() {
           .nifty-info-band { font-size: 11px !important; }
           .nifty-strategy-summary .expand-chevron { font-size: 14px !important; }
           .market-ticker { gap: 6px !important; }
+          .nifty-stats-more summary { padding: 8px 10px !important; }
         }
         @media (max-width: 560px) {
           .nifty-learnings-ticker { display: none !important; }
@@ -2163,23 +2259,27 @@ export default function NiftyStrategiesPage() {
           }
           .market-ticker::-webkit-scrollbar { display: none; }
           .market-ticker .mkt-pill {
-            flex: 0 0 172px !important;
-            min-width: 172px !important;
-            padding: 8px 10px !important;
+            flex: 0 0 156px !important;
+            min-width: 156px !important;
+            padding: 7px 8px !important;
             border-radius: 12px !important;
+          }
+          .market-ticker .mkt-pill span {
+            white-space: normal !important;
           }
           .nifty-header-actions {
             width: 100% !important;
             display: grid !important;
             grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-            gap: 8px !important;
+            gap: 6px !important;
           }
           .nifty-header-actions button {
             width: 100% !important;
-            min-height: 38px !important;
-            font-size: 12px !important;
-            padding: 9px 10px !important;
+            min-height: 32px !important;
+            font-size: 11px !important;
+            padding: 7px 8px !important;
           }
+          .nifty-header-actions .header-ghost-btn:last-child { display: none !important; }
           .nifty-page-title { font-size: 18px !important; }
           .nifty-section-header { font-size: 12px !important; gap: 6px !important; }
           .nifty-summary-value { font-size: 15px !important; }
@@ -2196,8 +2296,8 @@ export default function NiftyStrategiesPage() {
           }
           .nifty-valuation-bar {
             margin-bottom: 12px !important;
-            padding: 10px !important;
-            gap: 10px !important;
+            padding: 9px !important;
+            gap: 8px !important;
           }
           .nifty-refresh-wrap,
           .nifty-valuation-wrap {
@@ -2208,12 +2308,17 @@ export default function NiftyStrategiesPage() {
           }
           .nifty-refresh-row { grid-template-columns: 1fr !important; }
           .nifty-performance-panel { padding: 10px !important; margin-bottom: 12px !important; }
-          .nifty-performance-chart { height: 210px !important; }
+          .nifty-performance-chart { height: 190px !important; }
         }
         @media (max-width: 400px) {
           .nifty-page-container { padding: 8px !important; }
-          .nifty-summary-grid { grid-template-columns: 1fr !important; }
+          .market-ticker .mkt-pill {
+            flex-basis: 148px !important;
+            min-width: 148px !important;
+          }
+          .nifty-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
           .nifty-header-actions { grid-template-columns: 1fr !important; }
+          .nifty-header-actions .header-ghost-btn { display: none !important; }
           .nifty-header-actions button,
           .nifty-card-actions button,
           .nifty-leg-toolbar button,
@@ -2291,27 +2396,28 @@ export default function NiftyStrategiesPage() {
                   boxShadow: `inset 0 1px 0 rgba(255,255,255,0.04), 0 10px 24px ${palette.glow}`,
                 }}
               >
-                <div style={styles.tickerFlagWrap}>
-                  <span style={styles.tickerFlag}>{idx.flag}</span>
-                </div>
                 <div style={styles.tickerBody}>
                   <div style={styles.tickerTopRow}>
                     <span style={{ ...styles.tickerName, color: palette.accent }}>{idx.name}</span>
-                    <span style={{ ...styles.tickerWindow, color: palette.accent }}>{idx.changeWindow || '1D'}</span>
+                    <span style={{ ...styles.tickerWindow, color: up ? theme.green : theme.red }}>
+                      {up ? '+' : '-'}{Math.abs(Number(idx.change) || 0).toFixed(idx.key === 'INDIAVIX' ? 2 : 0)} pts
+                    </span>
                   </div>
                   <div style={styles.tickerBottomRow}>
-                    <span style={{ ...styles.tickerPrice, color: palette.price }}>
-                      {Number(idx.price).toLocaleString('en-IN', { maximumFractionDigits: idx.key === 'INDIAVIX' ? 2 : 0 })}
-                    </span>
+                    <div style={styles.tickerPriceBlock}>
+                      <span style={{ ...styles.tickerPrice, color: palette.price }}>
+                        {Number(idx.price).toLocaleString('en-IN', { maximumFractionDigits: idx.key === 'INDIAVIX' ? 2 : 0 })}
+                      </span>
+                      <span style={styles.tickerWindowSubtle}>
+                        {idx.changeWindow || '1D'} trend
+                      </span>
+                    </div>
                     <span style={{ ...styles.tickerDelta, color: up ? theme.green : theme.red }}>
                       {up ? '▲' : '▼'} {Math.abs(idx.changePercent).toFixed(2)}%
                     </span>
                   </div>
-                  <div style={{ ...styles.tickerChangeLine, color: up ? theme.green : theme.red }}>
-                    {up ? '+' : '-'}{Math.abs(Number(idx.change) || 0).toFixed(idx.key === 'INDIAVIX' ? 2 : 0)} today
-                  </div>
-                  <div style={{ ...styles.tickerMetaLine, color: idx.isStale ? theme.yellow : theme.textSecondary }}>
-                    {idx.sourceLabel || idx.source || 'Unknown source'}
+                  <div style={styles.tickerTrendRow}>
+                    <TinyTrendSparkline history={idx.history} color={up ? theme.green : theme.red} styles={styles} />
                   </div>
                   {idx.warning ? (
                     <div style={styles.tickerWarningLine} title={idx.warning}>
@@ -2344,12 +2450,12 @@ export default function NiftyStrategiesPage() {
             }}
             style={styles.primaryButton}
           >Create Strategy</button>
-          <button onClick={() => router.push('/strategy-history')} style={styles.secondaryButton}>📋 History</button>
-          <button onClick={() => router.push('/dashboard')} style={styles.secondaryButton}>Back to Dashboard</button>
+          <button className="header-ghost-btn" onClick={() => router.push('/strategy-history')} style={styles.ghostButton}>History</button>
+          <button className="header-ghost-btn" onClick={() => router.push('/dashboard')} style={styles.ghostButton}>Dashboard</button>
         </div>
       </div>
 
-      <div
+      <details
         style={{
           ...styles.valuationBar,
           borderColor: theme.cardBorder,
@@ -2359,58 +2465,68 @@ export default function NiftyStrategiesPage() {
         }}
         className="nifty-valuation-bar"
       >
-        <div style={styles.refreshControlWrap} className="nifty-refresh-wrap">
-          <div style={styles.valuationTitle}>Live refresh</div>
-          <div style={styles.refreshControlRow} className="nifty-refresh-row">
-            <label style={styles.refreshToggleLabel}>
-              <input
-                type="checkbox"
-                checked={autoRefreshEnabled}
-                onChange={(e) => setAutoRefreshEnabled(e.target.checked)}
-              />
-              Auto refresh
-            </label>
+        <summary style={styles.refreshSummaryRow}>
+          <div>
+            <div style={styles.valuationTitle}>Refresh & MTM</div>
+            <div style={styles.refreshSummaryText}>{autoRefreshEnabled ? `${refreshIntervalSeconds || 'Manual'}s · ${refreshSession}` : 'Manual refresh'} · {getPricingSourceLabel(currentValuationSource)}</div>
+          </div>
+          <div style={styles.refreshSummaryMeta}>
+            <span style={styles.refreshMetaBadge}>{lastRefreshAt ? `Last ${new Date(lastRefreshAt).toLocaleTimeString()}` : 'Not refreshed yet'}</span>
+            <span style={styles.refreshSummaryCaret}>▾</span>
+          </div>
+        </summary>
+        <div style={styles.refreshPanelBody}>
+          <div style={styles.refreshControlWrap} className="nifty-refresh-wrap">
+            <div style={styles.refreshControlRow} className="nifty-refresh-row">
+              <label style={styles.refreshToggleLabel}>
+                <input
+                  type="checkbox"
+                  checked={autoRefreshEnabled}
+                  onChange={(e) => setAutoRefreshEnabled(e.target.checked)}
+                />
+                Auto refresh
+              </label>
+              <select
+                value={refreshIntervalSeconds}
+                onChange={(e) => setRefreshIntervalSeconds(Number(e.target.value) || 0)}
+                style={styles.valuationSelect}
+              >
+                {REFRESH_INTERVAL_OPTIONS.map((option) => (
+                  <option key={`refresh-${option.value}`} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
             <select
-              value={refreshIntervalSeconds}
-              onChange={(e) => setRefreshIntervalSeconds(Number(e.target.value) || 0)}
+              value={refreshSession}
+              onChange={(e) => setRefreshSession(e.target.value)}
               style={styles.valuationSelect}
             >
-              {REFRESH_INTERVAL_OPTIONS.map((option) => (
-                <option key={`refresh-${option.value}`} value={option.value}>{option.label}</option>
+              {MARKET_SESSION_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+            <div style={styles.refreshStatusText}>{refreshStatusLabel}</div>
+          </div>
+          <div style={styles.valuationControlWrap} className="nifty-valuation-wrap">
+            <label htmlFor="current-valuation-source" style={{ ...styles.valuationLabel, color: theme.textHeading }}>MTM valuation method</label>
+            <select
+              id="current-valuation-source"
+              value={currentValuationSource}
+              onChange={(e) => setCurrentValuationSource(e.target.value)}
+              style={{
+                ...styles.valuationSelect,
+                borderColor: theme.inputBorder,
+                background: theme.inputBg,
+                color: theme.textPrimary,
+              }}
+            >
+              {CURRENT_VALUATION_OPTIONS.map((option) => (
+                <option key={option} value={option}>{getPricingSourceLabel(option)}</option>
               ))}
             </select>
           </div>
-          <select
-            value={refreshSession}
-            onChange={(e) => setRefreshSession(e.target.value)}
-            style={styles.valuationSelect}
-          >
-            {MARKET_SESSION_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-          </select>
-          <div style={styles.refreshStatusText}>{refreshStatusLabel}</div>
-          <div style={styles.refreshMetaText}>{lastRefreshAt ? `Last successful refresh: ${new Date(lastRefreshAt).toLocaleTimeString()}` : 'Waiting for first successful refresh'}</div>
         </div>
-        <div style={styles.valuationControlWrap} className="nifty-valuation-wrap">
-          <label htmlFor="current-valuation-source" style={{ ...styles.valuationLabel, color: theme.textHeading }}>MTM valuation method</label>
-          <select
-            id="current-valuation-source"
-            value={currentValuationSource}
-            onChange={(e) => setCurrentValuationSource(e.target.value)}
-            style={{
-              ...styles.valuationSelect,
-              borderColor: theme.inputBorder,
-              background: theme.inputBg,
-              color: theme.textPrimary,
-            }}
-          >
-            {CURRENT_VALUATION_OPTIONS.map((option) => (
-              <option key={option} value={option}>{getPricingSourceLabel(option)}</option>
-            ))}
-          </select>
-        </div>
-      </div>
+      </details>
 
       {strategyPerformanceSeries.length > 0 ? (
         <div
@@ -2515,42 +2631,28 @@ export default function NiftyStrategiesPage() {
       ) : null}
 
       <div style={styles.summaryGrid} className="nifty-summary-grid">
-        <div style={{ ...styles.summaryCard, borderTopColor: theme.green }}>
-          <div style={{ ...styles.summaryLabel, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-            Active (Bought)
-            {loadingStrategies ? <InlineLoaderChip text="Syncing" /> : null}
+        {primarySummaryCards.map((card) => (
+          <div key={card.key} style={{ ...styles.summaryCard, borderTopColor: card.tone }}>
+            <div style={{ ...styles.summaryLabel, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+              {card.label}
+              {card.key === 'active' && loadingStrategies ? <InlineLoaderChip text="Syncing" /> : null}
+            </div>
+            <div style={{ ...styles.summaryValue, color: card.tone }} className="nifty-summary-value">{card.value}</div>
           </div>
-          <div style={{ ...styles.summaryValue, color: theme.green }} className="nifty-summary-value">{totals.activeCount}</div>
-        </div>
-        <div style={{ ...styles.summaryCard, borderTopColor: theme.blue }}>
-          <div style={styles.summaryLabel}>Watchlist</div>
-          <div style={styles.summaryValue} className="nifty-summary-value">{totals.watchingCount}</div>
-        </div>
-        <div style={{ ...styles.summaryCard, borderTopColor: totals.activeMtm >= 0 ? theme.green : theme.red }}>
-          <div style={styles.summaryLabel}>Active MTM</div>
-          <div style={{ ...styles.summaryValue, color: totals.activeMtm >= 0 ? theme.green : theme.red }}>{formatCurrency(totals.activeMtm)}</div>
-        </div>
-        <div style={{ ...styles.summaryCard, borderTopColor: totals.totalRealizedPL >= 0 ? theme.green : theme.red }}>
-          <div style={styles.summaryLabel}>Realized P/L</div>
-          <div style={{ ...styles.summaryValue, color: totals.totalRealizedPL >= 0 ? theme.green : theme.red }}>{formatCurrency(totals.totalRealizedPL)}</div>
-        </div>
-        <div style={{ ...styles.summaryCard, borderTopColor: totals.totalMtm >= 0 ? theme.green : theme.red }}>
-          <div style={styles.summaryLabel}>Total Live MTM</div>
-          <div style={{ ...styles.summaryValue, color: totals.totalMtm >= 0 ? theme.green : theme.red }}>{formatCurrency(totals.totalMtm)}</div>
-        </div>
-        <div style={{ ...styles.summaryCard, borderTopColor: theme.green }}>
-          <div style={styles.summaryLabel}>Profitable</div>
-          <div style={{ ...styles.summaryValue, color: theme.green }}>{totals.profitable}</div>
-        </div>
-        <div style={{ ...styles.summaryCard, borderTopColor: theme.purple }}>
-          <div style={styles.summaryLabel}>Total Lots</div>
-          <div style={styles.summaryValue}>{totals.totalLots}</div>
-        </div>
-        <div style={{ ...styles.summaryCard, borderTopColor: theme.textSecondary }}>
-          <div style={styles.summaryLabel}>Closed</div>
-          <div style={styles.summaryValue}>{totals.closedCount}</div>
-        </div>
+        ))}
       </div>
+
+      <details style={styles.summaryDetails} className="nifty-stats-more">
+        <summary style={styles.summaryDetailsSummary}>More stats</summary>
+        <div style={styles.summaryGridSecondary}>
+          {secondarySummaryCards.map((card) => (
+            <div key={card.key} style={{ ...styles.summaryCard, borderTopColor: card.tone }}>
+              <div style={styles.summaryLabel}>{card.label}</div>
+              <div style={{ ...styles.summaryValue, color: card.tone }}>{card.value}</div>
+            </div>
+          ))}
+        </div>
+      </details>
 
       {loading ? <OrbitalLoader label="Loading saved strategies..." /> : null}
       {!loading && error ? <div style={styles.errorText}>{error}</div> : null}
@@ -2797,7 +2899,7 @@ export default function NiftyStrategiesPage() {
                                 );
                               })()}
                               <div style={styles.closeLegFormBtns}>
-                                <button onClick={() => closeLeg(strategy.id, leg.id, closePrice, getActionTimestamp(strategy.id))} style={styles.closeLegConfirm}>✅ Confirm Close</button>
+                                <button onClick={() => requestLegClose(strategy, leg, closePrice)} style={styles.closeLegConfirm}>✅ Confirm Close</button>
                                 <button onClick={() => { setClosingLegInfo(null); setClosePrice(''); }} style={styles.closeLegCancel}>Cancel</button>
                               </div>
                             </div>
@@ -2835,7 +2937,7 @@ export default function NiftyStrategiesPage() {
                     <button onClick={() => updateStrategyStatus(strategy.id, 'active', getActionTimestamp(strategy.id))} style={styles.buyButton}>✅ Mark as Bought</button>
                   )}
                   {isActive && (strategy.legs || []).length > 0 && (
-                    <button onClick={() => { setLearningModal({ strategyId: strategy.id, actionTimestamp: getActionTimestamp(strategy.id) }); setLearningText(''); }} style={styles.closeStratBtn}>🔒 Close Strategy</button>
+                    <button onClick={() => openLearningModal(strategy.id, getActionTimestamp(strategy.id))} style={styles.closeStratBtn}>🔒 Close Strategy</button>
                   )}
                   {isClosed && (
                     <button onClick={() => updateStrategyStatus(strategy.id, 'watching')} style={styles.secondaryButton}>↩ Move to Watchlist</button>
@@ -2912,17 +3014,11 @@ export default function NiftyStrategiesPage() {
             <div style={styles.learningModalBtns}>
               <button
                 style={styles.learningModalClose}
-                onClick={() => {
-                  updateStrategyStatus(learningModal.strategyId, 'closed', learningModal.actionTimestamp, learningText.trim() || null);
-                  setLearningModal(null);
-                }}
+                onClick={() => submitLearningModal(learningText.trim() || null)}
               >🔒 Close Strategy</button>
               <button
                 style={styles.learningModalSkip}
-                onClick={() => {
-                  updateStrategyStatus(learningModal.strategyId, 'closed', learningModal.actionTimestamp, null);
-                  setLearningModal(null);
-                }}
+                onClick={() => submitLearningModal(null)}
               >Skip</button>
               <button style={styles.learningModalCancel} onClick={() => setLearningModal(null)}>Cancel</button>
             </div>
@@ -2958,33 +3054,20 @@ const darkStyles = {
   },
   tickerPill: {
     display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
+    alignItems: 'flex-start',
+    gap: '8px',
     background: '#0f172a',
     border: '1px solid #1e293b',
-    borderRadius: '14px',
-    padding: '10px 12px',
+    borderRadius: '12px',
+    padding: '8px 10px',
     whiteSpace: 'nowrap',
-    flex: '1 1 180px',
-    minWidth: '180px',
-  },
-  tickerFlagWrap: {
-    width: '34px',
-    height: '34px',
-    borderRadius: '10px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    background: 'rgba(255,255,255,0.08)',
-    flexShrink: 0,
-  },
-  tickerFlag: {
-    fontSize: '16px',
+    flex: '1 1 196px',
+    minWidth: '196px',
   },
   tickerBody: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '2px',
+    gap: '1px',
     minWidth: 0,
     flex: 1,
   },
@@ -2995,36 +3078,65 @@ const darkStyles = {
     gap: '8px',
   },
   tickerName: {
-    fontSize: '11px',
+    fontSize: '10px',
     color: '#94a3b8',
-    fontWeight: '600',
+    fontWeight: '700',
     letterSpacing: '0.3px',
   },
   tickerWindow: {
-    fontSize: '10px',
+    fontSize: '9px',
     fontWeight: '800',
-    letterSpacing: '0.08em',
+    letterSpacing: '0.02em',
+    textTransform: 'none',
+  },
+  tickerWindowSubtle: {
+    fontSize: '8px',
+    fontWeight: '700',
+    color: '#94a3b8',
+    letterSpacing: '0.04em',
     textTransform: 'uppercase',
   },
   tickerBottomRow: {
     display: 'flex',
-    alignItems: 'baseline',
+    alignItems: 'center',
     justifyContent: 'space-between',
     gap: '10px',
   },
+  tickerTrendRow: {
+    marginTop: '3px',
+    width: '100%',
+    display: 'flex',
+    justifyContent: 'stretch',
+  },
+  tickerPriceBlock: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '2px',
+    minWidth: 0,
+  },
   tickerPrice: {
-    fontSize: '13px',
+    fontSize: '12px',
     fontWeight: '700',
     color: '#f8fafc',
   },
   tickerDelta: {
-    fontSize: '11px',
-    fontWeight: '700',
-  },
-  tickerChangeLine: {
     fontSize: '10px',
     fontWeight: '700',
-    letterSpacing: '0.02em',
+  },
+  tickerSparkline: {
+    width: '100%',
+    height: '30px',
+    display: 'block',
+    overflow: 'visible',
+  },
+  tickerSparklineEmpty: {
+    width: '100%',
+    height: '30px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '9px',
+    color: '#94a3b8',
   },
   tickerMetaLine: {
     fontSize: '10px',
@@ -3082,24 +3194,24 @@ const darkStyles = {
   header: {
     display: 'flex',
     justifyContent: 'space-between',
-    gap: '16px',
+    gap: '12px',
     flexWrap: 'wrap',
-    marginBottom: '18px',
+    marginBottom: '12px',
   },
   title: {
     margin: 0,
-    fontSize: '28px',
+    fontSize: '24px',
   },
   subtitle: {
     color: '#94a3b8',
-    fontSize: '13px',
-    marginTop: '8px',
-    lineHeight: '1.6',
-    maxWidth: '760px',
+    fontSize: '12px',
+    marginTop: '6px',
+    lineHeight: '1.45',
+    maxWidth: '640px',
   },
   headerActions: {
     display: 'flex',
-    gap: '10px',
+    gap: '6px',
     flexWrap: 'wrap',
     alignItems: 'flex-start',
   },
@@ -3107,21 +3219,65 @@ const darkStyles = {
     display: 'flex',
     justifyContent: 'flex-start',
     alignItems: 'flex-end',
-    gap: '16px',
+    gap: '12px',
     flexWrap: 'wrap',
-    marginBottom: '18px',
-    padding: '16px 18px',
+    marginBottom: '10px',
+    padding: '0',
     border: '1px solid #334155',
     borderLeft: '4px solid #0ea5e9',
-    borderRadius: '14px',
+    borderRadius: '12px',
     background: 'linear-gradient(135deg, rgba(15,23,42,0.98), rgba(2,6,23,0.94))',
     boxShadow: '0 10px 28px rgba(2, 6, 23, 0.35)',
   },
+  refreshSummaryRow: {
+    listStyle: 'none',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '10px',
+    padding: '10px 12px',
+  },
+  refreshSummaryText: {
+    marginTop: '2px',
+    fontSize: '11px',
+    color: '#94a3b8',
+    lineHeight: '1.35',
+  },
+  refreshSummaryMeta: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    flexShrink: 0,
+  },
+  refreshMetaBadge: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    minHeight: '24px',
+    padding: '0 8px',
+    borderRadius: '999px',
+    background: 'rgba(148,163,184,0.12)',
+    color: '#e2e8f0',
+    fontSize: '10px',
+    fontWeight: '700',
+  },
+  refreshSummaryCaret: {
+    fontSize: '13px',
+    color: '#94a3b8',
+  },
+  refreshPanelBody: {
+    display: 'flex',
+    justifyContent: 'flex-start',
+    alignItems: 'flex-end',
+    gap: '12px',
+    flexWrap: 'wrap',
+    padding: '0 12px 12px',
+  },
   valuationTitle: {
-    fontSize: '14px',
+    fontSize: '12px',
     fontWeight: '700',
     color: '#f8fafc',
-    marginBottom: '4px',
+    marginBottom: '2px',
   },
   valuationHint: {
     fontSize: '12px',
@@ -3132,40 +3288,40 @@ const darkStyles = {
   valuationControlWrap: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '8px',
-    minWidth: '260px',
-    maxWidth: '360px',
+    gap: '6px',
+    minWidth: '220px',
+    maxWidth: '320px',
   },
   refreshControlWrap: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '10px',
-    minWidth: '300px',
-    maxWidth: '420px',
-    flex: '1 1 320px',
+    gap: '8px',
+    minWidth: '260px',
+    maxWidth: '380px',
+    flex: '1 1 280px',
   },
   refreshControlRow: {
     display: 'grid',
     gridTemplateColumns: 'minmax(0, 1fr) minmax(140px, 180px)',
-    gap: '10px',
+    gap: '8px',
     alignItems: 'center',
   },
   refreshToggleLabel: {
     display: 'inline-flex',
     alignItems: 'center',
-    gap: '10px',
-    minHeight: '44px',
+    gap: '8px',
+    minHeight: '36px',
     color: '#e2e8f0',
-    fontSize: '13px',
+    fontSize: '12px',
     fontWeight: '600',
   },
   refreshStatusText: {
-    fontSize: '12px',
+    fontSize: '11px',
     color: '#cbd5e1',
-    lineHeight: '1.5',
+    lineHeight: '1.4',
   },
   refreshMetaText: {
-    fontSize: '11px',
+    fontSize: '10px',
     color: '#94a3b8',
   },
   valuationLabel: {
@@ -3176,36 +3332,46 @@ const darkStyles = {
     color: '#e2e8f0',
   },
   valuationSelect: {
-    minHeight: '44px',
+    minHeight: '38px',
     borderRadius: '10px',
     border: '1px solid #475569',
     background: '#020617',
     color: '#f8fafc',
-    padding: '10px 12px',
-    fontSize: '13px',
+    padding: '8px 10px',
+    fontSize: '12px',
     fontWeight: '600',
     outline: 'none',
   },
   primaryButton: {
-    background: '#1e293b',
+    background: '#172554',
     border: '1px solid #334155',
     color: '#f8fafc',
-    borderRadius: '10px',
-    padding: '10px 14px',
+    borderRadius: '8px',
+    padding: '8px 12px',
     cursor: 'pointer',
     fontWeight: '600',
-    minHeight: '44px',
-    fontSize: '13px',
+    minHeight: '34px',
+    fontSize: '12px',
   },
   secondaryButton: {
-    background: '#111827',
+    background: '#172033',
     border: '1px solid #334155',
     color: '#e2e8f0',
     borderRadius: '8px',
-    padding: '10px 14px',
+    padding: '8px 12px',
     cursor: 'pointer',
-    minHeight: '44px',
-    fontSize: '13px',
+    minHeight: '34px',
+    fontSize: '12px',
+  },
+  ghostButton: {
+    background: 'transparent',
+    border: '1px solid rgba(148,163,184,0.18)',
+    color: '#cbd5e1',
+    borderRadius: '8px',
+    padding: '8px 10px',
+    cursor: 'pointer',
+    minHeight: '34px',
+    fontSize: '12px',
   },
   deleteButton: {
     background: '#450a0a',
@@ -3220,8 +3386,31 @@ const darkStyles = {
   summaryGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-    gap: '10px',
-    marginBottom: '16px',
+    gap: '8px',
+    marginBottom: '8px',
+  },
+  summaryGridSecondary: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+    gap: '8px',
+    marginTop: '8px',
+  },
+  summaryDetails: {
+    marginBottom: '14px',
+  },
+  summaryDetailsSummary: {
+    cursor: 'pointer',
+    listStyle: 'none',
+    display: 'inline-flex',
+    alignItems: 'center',
+    minHeight: '32px',
+    padding: '6px 10px',
+    borderRadius: '999px',
+    border: '1px solid #334155',
+    background: 'rgba(15, 23, 42, 0.72)',
+    color: '#cbd5e1',
+    fontSize: '11px',
+    fontWeight: '700',
   },
   performancePanel: {
     border: '1px solid #1e293b',
@@ -3280,18 +3469,18 @@ const darkStyles = {
   summaryCard: {
     background: 'linear-gradient(135deg, #0f172a, #1e293b40)',
     border: '1px solid #1e293b',
-    borderRadius: '14px',
-    padding: '14px',
+    borderRadius: '12px',
+    padding: '10px 11px',
     borderTop: '3px solid #334155',
   },
   summaryLabel: {
     color: '#94a3b8',
-    fontSize: '12px',
-    marginBottom: '8px',
+    fontSize: '10px',
+    marginBottom: '5px',
   },
   summaryValue: {
     color: '#f8fafc',
-    fontSize: '24px',
+    fontSize: '18px',
     fontWeight: 'bold',
   },
   emptyState: {

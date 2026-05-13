@@ -36,7 +36,12 @@ function buildActivityFieldValues(activityId, entry = {}) {
   const actCfg = ACTIVITY_OPTIONS.find((activity) => activity.id === activityId);
   if (!actCfg) return {};
   return actCfg.fields.reduce((values, field) => {
-    values[field.key] = entry?.[field.key] != null && entry?.[field.key] !== 0 ? String(entry[field.key]) : '';
+    const rawValue = entry?.[field.key];
+    if (field.input === 'textarea' || field.input === 'select') {
+      values[field.key] = rawValue != null ? String(rawValue) : '';
+    } else {
+      values[field.key] = rawValue != null && rawValue !== 0 ? String(rawValue) : '';
+    }
     return values;
   }, {});
 }
@@ -56,6 +61,7 @@ function inferActivityNamesFromUpdates(updates) {
     if (update.key === 'whiskyPegs') return 'Whisky';
     if (update.key === 'fastFoodServings') return 'Fast food';
     if (update.key === 'sugarServings') return 'Sugar';
+    if (update.key === 'headacheLevel' || update.key === 'headacheType' || update.key === 'headacheNotes') return 'Headache';
     if (update.key === 'sleepHours') return 'Sleep';
     return update.label;
   })));
@@ -89,10 +95,17 @@ function clearActivityFields(entry, activityConfig) {
   if (!entry || !activityConfig) return entry;
   const next = { ...entry };
   (activityConfig.fields || []).forEach((field) => {
-    next[field.key] = 0;
+    next[field.key] = field.input === 'textarea' || field.input === 'select' ? '' : 0;
   });
+  if (activityConfig.id === 'headache') next.headacheLevel = 0;
   return next;
 }
+
+const HEADACHE_LEVEL_MAP = {
+  low: 3,
+  mild: 6,
+  severe: 9,
+};
 
 const ZERO_SCORES = {
   physicalScore: 0,
@@ -120,6 +133,14 @@ const ACTIVITY_OPTIONS = [
   { id: 'whisky', label: 'Whisky', icon: '🥃', fields: [{ key: 'whiskyPegs', label: 'Pegs', unit: 'pegs', step: 1 }] },
   { id: 'fastfood', label: 'Fast food', icon: '🍔', fields: [{ key: 'fastFoodServings', label: 'Count', unit: 'count', step: 1 }] },
   { id: 'sugar', label: 'Sugar', icon: '🍬', fields: [{ key: 'sugarServings', label: 'Count', unit: 'count', step: 1 }] },
+  { id: 'headache', label: 'Headache', icon: '🤕', fields: [
+    { key: 'headacheType', label: 'Type', unit: '', input: 'select', options: [
+      { value: 'low', label: 'Low' },
+      { value: 'mild', label: 'Mild' },
+      { value: 'severe', label: 'Severe' },
+    ] },
+    { key: 'headacheNotes', label: 'Notes', unit: '', input: 'textarea', placeholder: 'Optional notes' },
+  ] },
   { id: 'sleep', label: 'Sleep', icon: '😴', fields: [{ key: 'sleepHours', label: 'Hours', unit: 'hrs', step: 0.5 }] },
 ];
 
@@ -752,12 +773,31 @@ export default function WellnessPage() {
     const next = { ...form, date: selectedDate };
     const updates = [];
     actCfg.fields.forEach((f) => {
-      const val = Number(fieldValues[f.key] || 0);
+      const rawValue = fieldValues[f.key];
+      if (f.input === 'textarea' || f.input === 'select') {
+        const val = String(rawValue || '').trim();
+        if (val) {
+          next[f.key] = val;
+          updates.push({ key: f.key, label: f.label, unit: f.unit, value: next[f.key] });
+        }
+        return;
+      }
+      const val = Number(rawValue || 0);
       if (val > 0) {
         next[f.key] = val;
         updates.push({ key: f.key, label: f.label, unit: f.unit, value: next[f.key] });
       }
     });
+    if (actCfg.id === 'headache') {
+      const headacheType = String(fieldValues.headacheType || '').trim().toLowerCase();
+      const headacheLevel = HEADACHE_LEVEL_MAP[headacheType] || 0;
+      if (headacheLevel > 0) {
+        next.headacheLevel = headacheLevel;
+        if (!updates.some((update) => update.key === 'headacheType')) {
+          updates.push({ key: 'headacheType', label: 'Type', unit: '', value: headacheType });
+        }
+      }
+    }
     if (!updates.length) { setAssistantReply('Enter at least one value.'); return; }
     saveEntry(next);
     setAssistantReply(`${selectedDateEntry ? 'Updated' : 'Added'}: ${formatUpdateList(updates)}`);
@@ -940,6 +980,12 @@ export default function WellnessPage() {
     if (Number(form.whiskyPegs || 0) > 0) list.push({ id: 'whisky', icon: '🥃', label: 'Whisky', detail: `${formatMetric(form.whiskyPegs)} pegs` });
     if (Number(form.fastFoodServings || 0) > 0) list.push({ id: 'fastfood', icon: '🍔', label: 'Fast food', detail: `${formatMetric(form.fastFoodServings)} count` });
     if (Number(form.sugarServings || 0) > 0) list.push({ id: 'sugar', icon: '🍬', label: 'Sugar', detail: `${formatMetric(form.sugarServings)} count` });
+    if (Number(form.headacheLevel || 0) > 0 || String(form.headacheType || '').trim() || String(form.headacheNotes || '').trim()) {
+      const headacheParts = [];
+      if (String(form.headacheType || '').trim()) headacheParts.push(String(form.headacheType).trim());
+      if (String(form.headacheNotes || '').trim()) headacheParts.push(String(form.headacheNotes).trim());
+      list.push({ id: 'headache', icon: '🤕', label: 'Headache', detail: headacheParts.join(' · ') || `${formatMetric(form.headacheLevel)} /10` });
+    }
     if (Number(form.sleepHours || 0) > 0) list.push({ id: 'sleep', icon: '😴', label: 'Sleep', detail: `${formatMetric(form.sleepHours)} hrs` });
     return list;
   }, [form]);
@@ -1132,16 +1178,36 @@ export default function WellnessPage() {
                   <div style={s.fieldRow} className="field-row">
                     {selectedActivityConfig.fields.map((f) => (
                       <div key={f.key} style={s.fieldGroup}>
-                        <label style={s.fieldLabel}>{f.label} ({f.unit})</label>
-                        <input
-                          type="number"
-                          min="0"
-                          step={f.step}
-                          value={fieldValues[f.key] || ''}
-                          onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))}
-                          placeholder="0"
-                          style={s.fieldInput}
-                        />
+                        <label style={s.fieldLabel}>{f.unit ? `${f.label} (${f.unit})` : f.label}</label>
+                        {f.input === 'select' ? (
+                          <select
+                            value={fieldValues[f.key] || ''}
+                            onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))}
+                            style={s.fieldInput}
+                          >
+                            <option value="">Select</option>
+                            {(f.options || []).map((option) => (
+                              <option key={`${f.key}-${option.value}`} value={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                        ) : f.input === 'textarea' ? (
+                          <textarea
+                            value={fieldValues[f.key] || ''}
+                            onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))}
+                            placeholder={f.placeholder || ''}
+                            style={{ ...s.fieldInput, minHeight: 86, resize: 'vertical' }}
+                          />
+                        ) : (
+                          <input
+                            type="number"
+                            min="0"
+                            step={f.step}
+                            value={fieldValues[f.key] || ''}
+                            onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))}
+                            placeholder="0"
+                            style={s.fieldInput}
+                          />
+                        )}
                       </div>
                     ))}
                     <button onClick={handleDropdownSave} style={s.addBtn}>+ Add</button>

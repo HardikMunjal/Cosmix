@@ -1,7 +1,7 @@
 export const DEFAULT_SCORING_RULES = {
   activities: [
     { key: 'runningDistanceKm', label: 'Running', icon: '🏃', unit: 'km', physicalMultiplier: 0.9, physicalDivisor: 1, mentalMultiplier: 0.4, mentalDivisor: 1 },
-    { key: 'cyclingDistanceKm', label: 'Cycling', icon: '🚴', unit: 'km', physicalMultiplier: 0.8, physicalDivisor: 1, mentalMultiplier: 0.3, mentalDivisor: 1 },
+    { key: 'cyclingMinutes', label: 'Cycling', icon: '🚴', unit: 'mins', physicalMultiplier: 0.8, physicalDivisor: 30, mentalMultiplier: 0.3, mentalDivisor: 30 },
     { key: 'walkingDistanceKm', label: 'Walking distance', icon: '🚶', unit: 'km', physicalMultiplier: 0.3, physicalDivisor: 1, mentalMultiplier: 0, mentalDivisor: 1 },
     { key: 'walkingMinutes', label: 'Walking time', icon: '🚶', unit: 'mins', physicalMultiplier: 0, physicalDivisor: 1, mentalMultiplier: 0.25, mentalDivisor: 30 },
     { key: 'exerciseMinutes', label: 'Workout', icon: '💪', unit: 'mins', physicalMultiplier: 0.8, physicalDivisor: 30, mentalMultiplier: 0.5, mentalDivisor: 30 },

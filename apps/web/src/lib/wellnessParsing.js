@@ -7,7 +7,6 @@ export const ACTIVITY_FIELDS = [
   { key: 'runningMinutes', label: 'Running time', unit: 'mins', color: '#ff7a59', step: 1 },
   { key: 'runningDistanceKm', label: 'Running distance', unit: 'km', color: '#fb7185', step: 0.1 },
   { key: 'cyclingMinutes', label: 'Cycling time', unit: 'mins', color: '#60a5fa', step: 1 },
-  { key: 'cyclingDistanceKm', label: 'Cycling distance', unit: 'km', color: '#38bdf8', step: 0.1 },
   { key: 'walkingMinutes', label: 'Walking time', unit: 'mins', color: '#a3e635', step: 1 },
   { key: 'walkingDistanceKm', label: 'Walking distance', unit: 'km', color: '#84cc16', step: 0.1 },
   { key: 'exerciseMinutes', label: 'Workout', unit: 'mins', color: '#f59e0b', step: 1 },
@@ -29,7 +28,6 @@ export const DEFAULT_FORM = {
   runningMinutes: 0,
   runningDistanceKm: 0,
   cyclingMinutes: 0,
-  cyclingDistanceKm: 0,
   walkingMinutes: 0,
   walkingDistanceKm: 0,
   exerciseMinutes: 0,
@@ -43,6 +41,8 @@ export const DEFAULT_FORM = {
   fastFoodServings: 0,
   sugarServings: 0,
   headacheLevel: 0,
+  headacheType: '',
+  headacheNotes: '',
   sleepHours: 0,
   moodScore: 7,
   notes: '',
@@ -132,7 +132,14 @@ export function formatMetric(amount) {
 }
 
 export function formatUpdateList(updates) {
-  return updates.map((update) => `${update.label} ${formatMetric(update.value)} ${update.unit}`.trim()).join(', ');
+  return updates.map((update) => {
+    const value = update?.value;
+    const numericValue = Number(value);
+    if (value !== '' && value != null && Number.isFinite(numericValue) && String(value).trim() !== '' && `${value}` !== 'NaN') {
+      return `${update.label} ${formatMetric(numericValue)} ${update.unit || ''}`.trim();
+    }
+    return `${update.label} ${String(value || '').trim()}`.trim();
+  }).filter(Boolean).join(', ');
 }
 
 export function todayDate() {
@@ -150,14 +157,12 @@ export function parseActivityCommand(form, message) {
   const runningMinutes = runningMentioned ? extractDurationMinutes(text) : null;
   const runningDistance = runningMentioned ? readMetricNearTerms(text, ['km', 'kilometer', 'kilometers', 'kilometre', 'kilometres', 'किलोमीटर']) : null;
   const cyclingMinutes = cyclingMentioned ? extractDurationMinutes(text) : null;
-  const cyclingDistance = cyclingMentioned ? readMetricNearTerms(text, ['km', 'kilometer', 'kilometers', 'kilometre', 'kilometres', 'किलोमीटर']) : null;
   const walkingMinutes = walkingMentioned ? extractDurationMinutes(text) : null;
   const walkingDistance = walkingMentioned ? readMetricNearTerms(text, ['km', 'kilometer', 'kilometers', 'kilometre', 'kilometres', 'किलोमीटर']) : null;
 
   if (runningMentioned && runningMinutes != null) next.runningMinutes = runningMinutes;
   if (runningMentioned && runningDistance != null) next.runningDistanceKm = runningDistance;
   if (cyclingMentioned && cyclingMinutes != null) next.cyclingMinutes = cyclingMinutes;
-  if (cyclingMentioned && cyclingDistance != null) next.cyclingDistanceKm = cyclingDistance;
   if (walkingMentioned && walkingMinutes != null) next.walkingMinutes = walkingMinutes;
   if (walkingMentioned && walkingDistance != null) next.walkingDistanceKm = walkingDistance;
 
@@ -192,7 +197,6 @@ export function parseActivityCommand(form, message) {
     ['runningMinutes', 'Running time', 'mins'],
     ['runningDistanceKm', 'Running distance', 'km'],
     ['cyclingMinutes', 'Cycling time', 'mins'],
-    ['cyclingDistanceKm', 'Cycling distance', 'km'],
     ['walkingMinutes', 'Walking time', 'mins'],
     ['walkingDistanceKm', 'Walking distance', 'km'],
     ['exerciseMinutes', 'Workout', 'mins'],
