@@ -17,6 +17,7 @@ import {
   DEFAULT_SCORING_RULES,
   normalizeScoringRules,
 } from '../lib/wellnessScoring';
+import { resolveAvatarPresentation } from '../lib/avatarProfile';
 
 const STORAGE_LANG_KEY = 'cosmix-henna-language';
 function storageKey(userId, suffix) { return `cosmix-wellness-${userId}-${suffix}`; }
@@ -77,6 +78,51 @@ function formatFormula(multiplier, divisor, unit) {
   if (!multiplier) return '0';
   if (divisor === 1) return `${unit} x ${formatMetric(multiplier)}`;
   return `(${unit} / ${formatMetric(divisor)}) x ${formatMetric(multiplier)}`;
+}
+
+function AvatarChip({ user, size = 44 }) {
+  const avatar = resolveAvatarPresentation(user?.avatar || '');
+  const fallback = String(user?.name || user?.username || 'U').slice(0, 1).toUpperCase();
+  const frame = avatar.activeFrame || { x: 0, y: 0, scale: 1 };
+
+  if (avatar.displaySrc) {
+    if (avatar.isCutout) {
+      const cutoutWidth = avatar.mode === 'body' ? size * 0.96 : size * 0.8;
+      const cutoutHeight = avatar.mode === 'body' ? size * 1.32 : size * 0.98;
+      return (
+        <div style={{ width: size, height: size, position: 'relative', borderRadius: Math.round(size * 0.34), overflow: 'hidden', background: 'linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,255,255,0.05))', border: '1px solid rgba(255,255,255,0.14)', flexShrink: 0 }}>
+          <div style={{ position: 'absolute', inset: '18% 18% auto', height: '58%', borderRadius: '999px', background: 'rgba(96,165,250,0.16)', filter: 'blur(10px)' }} />
+          <div style={{ position: 'absolute', left: '50%', bottom: '12%', width: '54%', height: '10%', borderRadius: '999px', background: 'rgba(15,23,42,0.36)', filter: 'blur(8px)', transform: 'translateX(-50%)' }} />
+          <img
+            src={avatar.displaySrc}
+            alt={user?.name || user?.username || 'Profile'}
+            style={{
+              position: 'absolute',
+              left: '50%',
+              top: avatar.mode === 'body' ? '10%' : '8%',
+              width: cutoutWidth,
+              height: cutoutHeight,
+              objectFit: 'contain',
+              objectPosition: 'center top',
+              transform: `translateX(calc(-50% + ${frame.x * 0.22}%)) translateY(${frame.y * 0.22}%) scale(${Math.min(frame.scale, 1.28)})`,
+              transformOrigin: 'center top',
+              filter: 'drop-shadow(0 10px 16px rgba(15,23,42,0.38))',
+              pointerEvents: 'none',
+              userSelect: 'none',
+            }}
+          />
+        </div>
+      );
+    }
+
+    return <img src={avatar.displaySrc} alt={user?.name || user?.username || 'Profile'} style={{ width: size, height: size, borderRadius: Math.round(size * 0.34), objectFit: 'cover', border: '1px solid rgba(255,255,255,0.14)', flexShrink: 0 }} />;
+  }
+
+  return (
+    <div style={{ width: size, height: size, borderRadius: Math.round(size * 0.34), display: 'grid', placeItems: 'center', background: 'linear-gradient(135deg,#fb7185,#38bdf8)', color: '#fff', fontWeight: 800, fontSize: Math.max(13, size * 0.32), border: '1px solid rgba(255,255,255,0.14)', flexShrink: 0 }}>
+      {fallback}
+    </div>
+  );
 }
 
 const SCORE_FIELDS = [
@@ -392,17 +438,18 @@ export default function WellnessPage() {
             const match = (Array.isArray(searchData?.results) ? searchData.results : [])
               .find((entry) => String(entry?.username || '').toLowerCase() === normalized.toLowerCase());
             const buddyUserId = String(match?.id || match?.email || match?.username || normalized).trim();
-            return { username: normalized, displayName: String(match?.name || match?.username || normalized).trim(), userId: buddyUserId };
+            return { username: normalized, displayName: String(match?.name || match?.username || normalized).trim(), userId: buddyUserId, avatar: String(match?.avatar || '') };
           } catch (_) {
-            return { username: normalized, displayName: normalized, userId: normalized };
+            return { username: normalized, displayName: normalized, userId: normalized, avatar: '' };
           }
         }));
 
         const participants = [
           {
             username: selfUsername,
-            displayName: 'You',
+            displayName: String(user?.name || user?.username || 'You'),
             userId: selfUserId,
+            avatar: String(user?.avatar || ''),
             isSelf: true,
           },
           ...buddyLookups.filter(Boolean).map((entry) => ({ ...entry, isSelf: false })),
@@ -433,6 +480,7 @@ export default function WellnessPage() {
               id: participant.userId,
               name: participant.displayName,
               username: participant.username,
+              avatar: participant.avatar || '',
               isSelf: participant.isSelf,
               planName,
               planStartDate,
@@ -450,6 +498,7 @@ export default function WellnessPage() {
               id: participant.userId,
               name: participant.displayName,
               username: participant.username,
+              avatar: participant.avatar || '',
               isSelf: participant.isSelf,
               planName: 'No active plan',
               planStartDate: '',
@@ -1012,9 +1061,12 @@ export default function WellnessPage() {
       <div style={s.page} className="henna-page">
         {/* header */}
         <div style={s.header}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={s.eyebrow}>Wellness Tracker</div>
-            <h1 style={s.title}>Henna</h1>
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 12 }}>
+            <AvatarChip user={user} size={52} />
+            <div style={{ minWidth: 0 }}>
+              <div style={s.eyebrow}>Wellness Tracker</div>
+              <h1 style={s.title}>Henna</h1>
+            </div>
           </div>
           <div style={s.headerRight}>
             {weather && (
@@ -1570,12 +1622,17 @@ export default function WellnessPage() {
                   <div key={row.id} style={s.buddyLeaderboardRow}>
                     <span style={{ ...s.buddyRank, color: rankColor }}>{rank}</span>
                     <div style={s.buddyIdentityCol}>
-                      <div style={s.buddyNameLine}>
-                        <span style={s.buddyName}>{row.name}</span>
-                        {row.isSelf && <span style={s.buddySelfBadge}>You</span>}
-                      </div>
-                      <div style={s.buddyMetaLine}>
-                        {row.planName} · {row.days}d · Last {formatMetric(row.lastDayScore)}
+                      <div style={{ ...s.buddyNameLine, gap: 10 }}>
+                        <AvatarChip user={row} size={36} />
+                        <div style={{ minWidth: 0 }}>
+                          <div style={s.buddyNameLine}>
+                            <span style={s.buddyName}>{row.name}</span>
+                            {row.isSelf && <span style={s.buddySelfBadge}>You</span>}
+                          </div>
+                          <div style={s.buddyMetaLine}>
+                            {row.planName} · {row.days}d · Last {formatMetric(row.lastDayScore)}
+                          </div>
+                        </div>
                       </div>
                     </div>
                     <span style={s.buddyScore}>{formatMetric(row.cumulativeTotal)}</span>

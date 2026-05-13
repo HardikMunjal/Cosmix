@@ -1,5 +1,6 @@
 import { useRouter } from 'next/router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { resolveAvatarPresentation } from '../lib/avatarProfile';
 import { restoreUserSession } from '../lib/auth-client';
 import { useTheme } from '../lib/ThemePicker';
 import { buildStrategySummary, formatCurrency } from '../lib/userInsights';
@@ -31,26 +32,42 @@ function SettingsIcon({ color }) {
 }
 
 function Avatar({ user, size, theme, square = false }) {
+  const avatar = resolveAvatarPresentation(user?.avatar || '');
   const fallback = String(user?.username || 'U').slice(0, 1).toUpperCase();
   const radius = square ? Math.max(18, Math.round(size * 0.14)) : size / 2;
+  const frame = avatar.activeFrame || { x: 0, y: 0, scale: 1 };
 
-  return user?.avatar ? (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={user.avatar}
-      alt={user.username || 'Profile'}
-      style={{
-        width: size,
-        height: size,
-        borderRadius: radius,
-        objectFit: 'cover',
-        border: 'none',
-        background: 'transparent',
-        filter: 'drop-shadow(0 24px 30px rgba(15, 23, 42, 0.5)) drop-shadow(0 6px 8px rgba(56, 189, 248, 0.22))',
-        mixBlendMode: 'screen',
-      }}
-    />
-  ) : (
+  if (avatar.isCutout && avatar.displaySrc) {
+    const cutoutW = avatar.mode === 'body' ? size * 0.86 : size * 0.72;
+    const cutoutH = avatar.mode === 'body' ? size * 1.22 : size * 0.84;
+    return (
+      <div style={{ width: size, height: size, position: 'relative', overflow: 'visible', background: 'transparent', flexShrink: 0 }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={avatar.displaySrc}
+          alt={user.username || 'Profile'}
+          style={{
+            position: 'absolute',
+            left: '50%',
+            top: avatar.mode === 'body' ? '10%' : '4%',
+            width: cutoutW,
+            height: cutoutH,
+            objectFit: 'contain',
+            objectPosition: 'center top',
+            background: 'transparent',
+            border: 'none',
+            transform: `translateX(calc(-50% + ${frame.x * 0.4}%)) translateY(${frame.y * 0.4}%) scale(${frame.scale})`,
+            transformOrigin: 'center top',
+            filter: `drop-shadow(0 28px 36px ${theme.shadow}) drop-shadow(0 10px 16px ${theme.cyan}28)`,
+            pointerEvents: 'none',
+            userSelect: 'none',
+          }}
+        />
+      </div>
+    );
+  }
+
+  return (
     <div style={{ width: size, height: size, borderRadius: radius, display: 'grid', placeItems: 'center', fontSize: size * 0.38, fontWeight: 800, color: '#fff', background: `linear-gradient(135deg, ${theme.orange}, ${theme.blue})`, border: 'none', boxShadow: `0 26px 40px ${theme.shadow}` }}>{fallback}</div>
   );
 }
@@ -393,8 +410,9 @@ export default function Dashboard() {
           .dashboard-title { font-size: 24px !important; }
           .dashboard-panel { border-radius: 18px !important; padding: 12px !important; gap: 10px !important; }
           .dashboard-profile-shell { gap: 8px !important; }
-          .dashboard-avatar-wrap { padding: 6px !important; }
+          .dashboard-avatar-wrap { padding: 6px !important; min-height: 180px !important; }
           .dashboard-avatar-glow { width: 120px !important; height: 120px !important; }
+          .dashboard-avatar-stage { inset: 18px 12px 0 !important; }
           .dashboard-module-grid button,
           .dashboard-market-modules button {
             padding: 8px 9px !important;
@@ -439,14 +457,21 @@ export default function Dashboard() {
         </header>
 
         <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.12fr) minmax(320px, 0.88fr)', gap: '16px' }} className="dashboard-top-grid">
-          <div style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: `linear-gradient(135deg, ${theme.cardBg}, ${theme.cyan}10, ${theme.orange}10)`, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '14px' }} className="dashboard-panel">
+          <div style={{ borderRadius: '30px', border: `1px solid ${theme.cardBorder}`, background: `radial-gradient(circle at top left, ${theme.orange}20, transparent 24%), radial-gradient(circle at 78% 16%, ${theme.cyan}16, transparent 22%), linear-gradient(135deg, ${theme.cardBg}, ${theme.cyan}08, ${theme.orange}08)`, padding: '18px', boxShadow: `0 24px 64px ${theme.shadow}`, display: 'grid', gap: '16px' }} className="dashboard-panel">
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) minmax(0, 1fr)', gap: '14px', alignItems: 'stretch' }} className="dashboard-profile-shell">
-              <div style={{ borderRadius: '22px', padding: '12px', background: 'transparent', border: 'none', display: 'grid', placeItems: 'center', position: 'relative', overflow: 'hidden' }} className="dashboard-avatar-wrap">
-                <div style={{ position: 'absolute', width: '180px', height: '180px', borderRadius: '50%', filter: 'blur(34px)', background: `${theme.blue}44` }} className="dashboard-avatar-glow" />
+              <div style={{ borderRadius: '24px', padding: '12px', background: 'transparent', border: 'none', display: 'grid', placeItems: 'center', position: 'relative', overflow: 'hidden', minHeight: '260px' }} className="dashboard-avatar-wrap">
+                <div style={{ position: 'absolute', inset: '26px 18px 0', borderRadius: '28px 28px 0 0', background: `linear-gradient(180deg, ${theme.panelBg}, transparent)`, border: `1px solid ${theme.cardBorder}`, borderBottom: 'none', opacity: 0.75 }} className="dashboard-avatar-stage" />
+                <div style={{ position: 'absolute', width: '220px', height: '220px', borderRadius: '50%', filter: 'blur(38px)', background: `${theme.blue}44` }} className="dashboard-avatar-glow" />
+                <div style={{ position: 'absolute', bottom: '18px', width: '68%', height: '26px', borderRadius: '999px', background: 'rgba(15,23,42,0.26)', filter: 'blur(12px)' }} />
                 <Avatar user={user} size={236} theme={theme} />
               </div>
 
               <div style={{ display: 'grid', alignContent: 'stretch' }} className="dashboard-profile-meta">
+                <div style={{ display: 'grid', gap: '6px', marginBottom: '10px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 800, letterSpacing: '0.14em', textTransform: 'uppercase', color: theme.textMuted }}>Personal cockpit</div>
+                  <div style={{ fontSize: '28px', fontWeight: 900, color: theme.textHeading, lineHeight: 1.02 }}>{user.name || user.username}</div>
+                  <div style={{ fontSize: '14px', lineHeight: 1.6, color: theme.textSecondary }}>{user.quote || 'Building better decisions, one signal at a time.'}</div>
+                </div>
                 <MetricList items={primaryStats} theme={theme} compact />
               </div>
             </div>

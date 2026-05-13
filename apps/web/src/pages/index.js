@@ -151,33 +151,79 @@ export default function Home() {
     <div style={styles.page}>
       <style>{`
         @media (max-width: 560px) {
-          .login-page { padding: 14px !important; }
-          .login-panel { padding: 22px !important; }
-          .login-tab-row { grid-template-columns: 1fr !important; }
-          .login-panel h1 { font-size: 24px !important; }
-          .login-panel p { font-size: 13px !important; line-height: 1.45 !important; }
+          .login-page {
+            padding: 10px !important;
+            align-items: flex-start !important;
+          }
+          .login-panel {
+            padding: 16px !important;
+            border-radius: 20px !important;
+          }
+          .login-tab-row {
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            gap: 8px !important;
+            margin-top: 14px !important;
+            margin-bottom: 16px !important;
+          }
+          .login-panel h1 { font-size: 22px !important; }
+          .login-panel p { font-size: 12px !important; line-height: 1.4 !important; }
           .login-panel input,
           .login-panel button {
-            min-height: 44px !important;
+            min-height: 42px !important;
             font-size: 14px !important;
             border-radius: 12px !important;
           }
           .login-panel label {
-            margin-top: 12px !important;
-            margin-bottom: 6px !important;
-            font-size: 12px !important;
+            margin-top: 10px !important;
+            margin-bottom: 5px !important;
+            font-size: 11px !important;
+          }
+          .login-meta-chip {
+            font-size: 10px !important;
+            padding: 5px 10px !important;
+          }
+          .login-form-header {
+            margin-bottom: 12px !important;
+          }
+          .login-form-divider {
+            margin-top: 14px !important;
+            gap: 8px !important;
+          }
+          .login-footer-note {
+            margin-top: 14px !important;
+            font-size: 11px !important;
+            line-height: 1.5 !important;
+          }
+          .login-banner {
+            margin-top: 14px !important;
+            padding: 10px 12px !important;
+            font-size: 13px !important;
           }
         }
         @media (max-width: 420px) {
-          .login-page { padding: 10px !important; }
-          .login-panel { padding: 16px !important; border-radius: 18px !important; }
-          .login-panel h1 { font-size: 20px !important; }
+          .login-page { padding: 8px !important; }
+          .login-panel {
+            padding: 14px !important;
+            border-radius: 16px !important;
+          }
+          .login-panel h1 { font-size: 19px !important; }
+          .login-panel p { font-size: 11px !important; }
+          .login-tab-row {
+            gap: 6px !important;
+            margin-top: 12px !important;
+            margin-bottom: 14px !important;
+          }
+          .login-panel input,
+          .login-panel button {
+            min-height: 40px !important;
+            font-size: 13px !important;
+          }
         }
       `}</style>
 
       <div style={styles.shell} className="login-page">
         <section style={styles.formPanel} className="login-panel">
-          <div style={styles.topMeta}>Free signup and login</div>
+          <div style={styles.topMeta} className="login-meta-chip">Free signup and login</div>
 
           <div style={styles.tabRow} className="login-tab-row">
             <button
@@ -196,7 +242,7 @@ export default function Home() {
             </button>
           </div>
 
-          <div style={styles.formHeader}>
+          <div style={styles.formHeader} className="login-form-header">
             <h1 style={styles.formTitle}>{formTitle}</h1>
             <p style={styles.formSubtitle}>{formSubtitle}</p>
           </div>
@@ -282,7 +328,7 @@ export default function Home() {
                 </button>
               </form>
 
-              <div style={styles.dividerRow}>
+              <div style={styles.dividerRow} className="login-form-divider">
                 <span style={styles.dividerLine} />
                 <span style={styles.dividerText}>or</span>
                 <span style={styles.dividerLine} />
@@ -309,10 +355,10 @@ export default function Home() {
             </div>
           ) : null}
 
-          {error ? <div style={styles.errorBanner}>{error}</div> : null}
-          {info ? <div style={styles.infoBanner}>{info}</div> : null}
+          {error ? <div style={styles.errorBanner} className="login-banner">{error}</div> : null}
+          {info ? <div style={styles.infoBanner} className="login-banner">{info}</div> : null}
 
-          <div style={styles.helperText}>
+          <div style={styles.helperText} className="login-footer-note">
             Sessions stay active for 30 days and extend automatically while you keep using the app.
           </div>
         </section>
@@ -327,30 +373,30 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: '24px',
+    padding: '16px',
     background: 'radial-gradient(circle at top left, #ffe0b8, transparent 28%), linear-gradient(180deg, #fff8ef, #fff1e6)',
     fontFamily: "'Inter', system-ui, -apple-system, sans-serif",
   },
   shell: {
     width: '100%',
-    maxWidth: '560px',
+    maxWidth: '480px',
     margin: '0 auto',
   },
   formPanel: {
-    padding: '30px',
-    borderRadius: '28px',
+    padding: '24px',
+    borderRadius: '24px',
     background: 'rgba(255,253,248,0.98)',
     border: '1px solid #f3d2b1',
-    boxShadow: '0 24px 70px rgba(217, 119, 6, 0.12)',
+    boxShadow: '0 18px 42px rgba(217, 119, 6, 0.10)',
   },
   topMeta: {
     display: 'inline-flex',
-    padding: '6px 12px',
+    padding: '5px 10px',
     borderRadius: '999px',
     background: '#fff1e6',
     border: '1px solid #fdba74',
     color: '#9a3412',
-    fontSize: '12px',
+    fontSize: '11px',
     fontWeight: '700',
     letterSpacing: '0.08em',
     textTransform: 'uppercase',
@@ -358,91 +404,91 @@ const styles = {
   tabRow: {
     display: 'grid',
     gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-    gap: '10px',
-    marginTop: '20px',
-    marginBottom: '24px',
+    gap: '8px',
+    marginTop: '16px',
+    marginBottom: '18px',
   },
   tabButton: {
-    minHeight: '48px',
-    borderRadius: '14px',
+    minHeight: '44px',
+    borderRadius: '12px',
     border: '1px solid #f3d2b1',
     background: '#fff7ed',
     color: '#7c5b3b',
     cursor: 'pointer',
     fontWeight: '700',
-    fontSize: '13px',
+    fontSize: '12px',
     padding: '0 12px',
   },
   activeTabButton: {
     background: '#f97316',
     color: '#fff',
-    borderColor: '#f97316',
+    border: '1px solid #f97316',
     boxShadow: '0 16px 30px rgba(249, 115, 22, 0.18)',
   },
   formHeader: {
-    marginBottom: '18px',
+    marginBottom: '14px',
   },
   formTitle: {
     margin: 0,
-    fontSize: '30px',
+    fontSize: '28px',
     color: '#111827',
   },
   formSubtitle: {
-    margin: '8px 0 0',
+    margin: '6px 0 0',
     color: '#5b6472',
-    fontSize: '14px',
-    lineHeight: '1.6',
+    fontSize: '13px',
+    lineHeight: '1.5',
   },
   label: {
     display: 'block',
-    marginBottom: '8px',
-    marginTop: '16px',
+    marginBottom: '6px',
+    marginTop: '12px',
     color: '#374151',
-    fontSize: '13px',
+    fontSize: '12px',
     fontWeight: '700',
   },
   input: {
     width: '100%',
-    minHeight: '50px',
-    borderRadius: '14px',
+    minHeight: '46px',
+    borderRadius: '12px',
     border: '1px solid #fdba74',
     background: '#fffdf8',
-    padding: '12px 14px',
-    fontSize: '15px',
+    padding: '11px 13px',
+    fontSize: '14px',
     color: '#111827',
     outline: 'none',
     boxSizing: 'border-box',
   },
   primaryButton: {
     width: '100%',
-    minHeight: '50px',
-    marginTop: '22px',
-    borderRadius: '14px',
+    minHeight: '46px',
+    marginTop: '16px',
+    borderRadius: '12px',
     border: 'none',
     background: 'linear-gradient(135deg, #f97316, #ea580c)',
     color: '#fff',
-    fontSize: '15px',
+    fontSize: '14px',
     fontWeight: '800',
     cursor: 'pointer',
   },
   googleButton: {
     width: '100%',
-    minHeight: '52px',
-    marginTop: '18px',
-    borderRadius: '14px',
+    minHeight: '46px',
+    marginTop: '14px',
+    borderRadius: '12px',
     border: '1px solid #f3d2b1',
     background: '#fff',
     color: '#111827',
-    fontSize: '15px',
+    fontSize: '14px',
     fontWeight: '800',
     cursor: 'pointer',
-    boxShadow: '0 14px 24px rgba(15, 23, 42, 0.05)',
+    boxShadow: '0 10px 18px rgba(15, 23, 42, 0.04)',
   },
   dividerRow: {
     display: 'flex',
     alignItems: 'center',
-    gap: '12px',
-    marginTop: '20px',
+    gap: '10px',
+    marginTop: '16px',
   },
   dividerLine: {
     flex: 1,
@@ -457,29 +503,29 @@ const styles = {
     letterSpacing: '0.08em',
   },
   errorBanner: {
-    marginTop: '18px',
-    padding: '12px 14px',
-    borderRadius: '14px',
+    marginTop: '16px',
+    padding: '10px 12px',
+    borderRadius: '12px',
     background: '#fff1f2',
     border: '1px solid #fecdd3',
     color: '#be123c',
-    fontSize: '14px',
+    fontSize: '13px',
     fontWeight: '600',
   },
   infoBanner: {
-    marginTop: '18px',
-    padding: '12px 14px',
-    borderRadius: '14px',
+    marginTop: '16px',
+    padding: '10px 12px',
+    borderRadius: '12px',
     background: '#eff6ff',
     border: '1px solid #bfdbfe',
     color: '#1d4ed8',
-    fontSize: '14px',
+    fontSize: '13px',
     fontWeight: '600',
   },
   helperText: {
-    marginTop: '18px',
+    marginTop: '14px',
     color: '#8b98ab',
-    fontSize: '12px',
-    lineHeight: '1.7',
+    fontSize: '11px',
+    lineHeight: '1.6',
   },
 };

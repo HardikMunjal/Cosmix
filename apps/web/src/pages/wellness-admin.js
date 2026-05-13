@@ -157,13 +157,33 @@ export default function WellnessAdminPage() {
   }
 
   return (
-    <div style={styles.page}>
-      <div style={styles.header}>
+    <div style={styles.page} className="well-admin-page">
+      <style>{`
+        * { box-sizing: border-box; }
+        @media (max-width: 820px) {
+          .well-admin-grid-4,
+          .well-admin-grid-3,
+          .well-admin-grid-2 { grid-template-columns: 1fr 1fr !important; }
+          .well-admin-actions { width: 100%; }
+          .well-admin-actions button { flex: 1 1 auto; }
+        }
+        @media (max-width: 560px) {
+          .well-admin-page { padding: 12px !important; }
+          .well-admin-grid-4,
+          .well-admin-grid-3,
+          .well-admin-grid-2 { grid-template-columns: 1fr !important; }
+          .well-admin-header { align-items: flex-start !important; }
+          .well-admin-actions { display: grid !important; width: 100%; }
+          .well-admin-card { padding: 14px !important; border-radius: 16px !important; }
+          .well-admin-table input { min-width: 92px; }
+        }
+      `}</style>
+      <div style={styles.header} className="well-admin-header">
         <div>
           <div style={styles.eyebrow}>Admin</div>
           <h1 style={styles.title}>Wellness Scoring Rules</h1>
         </div>
-        <div style={styles.actions}>
+        <div style={styles.actions} className="well-admin-actions">
           <button onClick={() => router.push('/wellness')} style={styles.secondaryBtn}>Back to Wellness</button>
           <button onClick={handleSave} disabled={saving} style={styles.primaryBtn}>{saving ? 'Saving...' : 'Save Rules'}</button>
         </div>
@@ -171,17 +191,17 @@ export default function WellnessAdminPage() {
 
       {message && <div style={styles.message}>{message}</div>}
 
-      <div style={styles.card}>
+      <div style={styles.card} className="well-admin-card">
         <div style={styles.cardTitle}>Daily drain</div>
-        <div style={styles.grid2}>
+        <div style={styles.grid2} className="well-admin-grid-2">
           <label style={styles.field}><span>Physical</span><input type="number" step="0.1" value={rules.dailyPenalty.physical} onChange={(event) => updateSection('dailyPenalty', 'physical', event.target.value)} style={styles.input} /></label>
           <label style={styles.field}><span>Mental</span><input type="number" step="0.1" value={rules.dailyPenalty.mental} onChange={(event) => updateSection('dailyPenalty', 'mental', event.target.value)} style={styles.input} /></label>
         </div>
       </div>
 
-      <div style={styles.card}>
+      <div style={styles.card} className="well-admin-card">
         <div style={styles.cardTitle}>Sleep rule</div>
-        <div style={styles.grid4}>
+        <div style={styles.grid4} className="well-admin-grid-4">
           <label style={styles.field}><span>Baseline hours</span><input type="number" step="0.1" value={rules.sleep.baselineHours} onChange={(event) => updateSection('sleep', 'baselineHours', event.target.value)} style={styles.input} /></label>
           <label style={styles.field}><span>Step hours</span><input type="number" step="0.1" value={rules.sleep.stepHours} onChange={(event) => updateSection('sleep', 'stepHours', event.target.value)} style={styles.input} /></label>
           <label style={styles.field}><span>Score per step</span><input type="number" step="0.1" value={rules.sleep.scorePerStep} onChange={(event) => updateSection('sleep', 'scorePerStep', event.target.value)} style={styles.input} /></label>
@@ -189,18 +209,18 @@ export default function WellnessAdminPage() {
         </div>
       </div>
 
-      <div style={styles.card}>
+      <div style={styles.card} className="well-admin-card">
         <div style={styles.cardTitle}>Readiness targets</div>
-        <div style={styles.grid3}>
+        <div style={styles.grid3} className="well-admin-grid-3">
           <label style={styles.field}><span>Hampta Pass</span><input type="number" step="1" value={rules.targets.hamptaPass} onChange={(event) => updateSection('targets', 'hamptaPass', event.target.value)} style={styles.input} /></label>
           <label style={styles.field}><span>Skiing 2027</span><input type="number" step="1" value={rules.targets.skiing2027} onChange={(event) => updateSection('targets', 'skiing2027', event.target.value)} style={styles.input} /></label>
           <label style={styles.field}><span>Marathon 10k</span><input type="number" step="1" value={rules.targets.marathon10k} onChange={(event) => updateSection('targets', 'marathon10k', event.target.value)} style={styles.input} /></label>
         </div>
       </div>
 
-      <div style={styles.card}>
+      <div style={styles.card} className="well-admin-card">
         <div style={styles.cardTitle}>Activity rules</div>
-        <div style={styles.grid4}>
+        <div style={styles.grid4} className="well-admin-grid-4">
           <label style={styles.field}><span>Key</span><input type="text" value={newActivity.key} onChange={(event) => setNewActivity((current) => ({ ...current, key: event.target.value }))} placeholder="example: dance_minutes" style={styles.input} /></label>
           <label style={styles.field}><span>Label</span><input type="text" value={newActivity.label} onChange={(event) => setNewActivity((current) => ({ ...current, label: event.target.value }))} placeholder="Dance" style={styles.input} /></label>
           <label style={styles.field}><span>Icon</span><input type="text" value={newActivity.icon} onChange={(event) => setNewActivity((current) => ({ ...current, icon: event.target.value }))} placeholder="✨" style={styles.input} /></label>
@@ -218,7 +238,7 @@ export default function WellnessAdminPage() {
           </label>
         </div>
         <div style={styles.tableWrap}>
-          <table style={styles.table}>
+          <table style={styles.table} className="well-admin-table">
             <thead>
               <tr>
                 <th style={styles.th}>Activity</th>
