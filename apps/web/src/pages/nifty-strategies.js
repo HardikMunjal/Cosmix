@@ -2684,8 +2684,26 @@ export default function NiftyStrategiesPage() {
         ))}
       </div>
 
-      <details style={styles.summaryDetails} className="nifty-stats-more">
-        <summary style={styles.summaryDetailsSummary}>More stats</summary>
+      <details
+        style={{
+          ...styles.summaryDetails,
+          background: theme.panelBg,
+          border: `1px solid ${theme.cardBorder}`,
+          borderRadius: '14px',
+          padding: '8px',
+        }}
+        className="nifty-stats-more"
+      >
+        <summary
+          style={{
+            ...styles.summaryDetailsSummary,
+            background: theme.cardBgGradient,
+            borderColor: theme.cardBorder,
+            color: theme.textPrimary,
+          }}
+        >
+          More stats
+        </summary>
         <div style={styles.summaryGridSecondary}>
           {secondarySummaryCards.map((card) => (
             <div key={card.key} style={{ ...styles.summaryCard, borderTopColor: card.tone }}>
@@ -2696,11 +2714,25 @@ export default function NiftyStrategiesPage() {
         </div>
       </details>
 
-      <section style={styles.builderSection}>
-        <div style={styles.builderSectionHeader} className="nifty-builder-header">
+      <section
+        style={{
+          ...styles.builderSection,
+          borderColor: theme.cardBorder,
+          background: theme.panelBg,
+          boxShadow: `0 10px 24px ${theme.shadow}`,
+        }}
+      >
+        <div
+          style={{
+            ...styles.builderSectionHeader,
+            borderBottomColor: theme.cardBorder,
+            background: theme.cardBgGradient,
+          }}
+          className="nifty-builder-header"
+        >
           <div>
-            <div style={styles.builderSectionTitle}>Strategy Builder + Optimizer</div>
-            <div style={styles.builderSectionHint}>Create, edit, graph, and optimize strategies on this page. The builder loads only when you open it.</div>
+            <div style={{ ...styles.builderSectionTitle, color: theme.textHeading }}>Strategy Builder + Optimizer</div>
+            <div style={{ ...styles.builderSectionHint, color: theme.textSecondary }}>Create, edit, graph, and optimize strategies on this page. The builder loads only when you open it.</div>
           </div>
           <div style={styles.builderSectionActions} className="nifty-builder-actions">
             <button type="button" onClick={() => openEmbeddedBuilder(null)} style={styles.primaryButton}>New draft</button>
@@ -2712,7 +2744,13 @@ export default function NiftyStrategiesPage() {
           </div>
         </div>
         {embeddedBuilderLoaded && showEmbeddedBuilder ? (
-          <div style={styles.builderSectionBody} className="nifty-builder-body">
+          <div
+            style={{
+              ...styles.builderSectionBody,
+              background: theme.pageBgSolid,
+            }}
+            className="nifty-builder-body"
+          >
             <EmbeddedOptionsStrategyPage
               key={`${embeddedBuilderStrategyId || 'new'}-${embeddedBuilderVersion}`}
               embedded
@@ -2780,11 +2818,11 @@ export default function NiftyStrategiesPage() {
                     return (
                       <>
                         <span className="nifty-badge" style={{ ...styles.badge, color: closedSummary.realizedPL >= 0 ? theme.green : theme.red, borderColor: closedSummary.realizedPL >= 0 ? theme.greenDim : theme.redDim }}>
-                          Net P/L {formatCurrency(closedSummary.realizedPL)}
+                          P/L {formatCurrency(closedSummary.realizedPL)}
                         </span>
                         {closedSummary.transactionCost > 0 && (
                           <span className="nifty-badge" style={{ ...styles.badge, color: theme.textMuted, borderColor: theme.cardBorder }}>
-                            Costs -{formatCurrency(closedSummary.transactionCost)}
+                            Tax {formatCurrency(closedSummary.transactionCost)}
                           </span>
                         )}
                       </>
@@ -2850,7 +2888,7 @@ export default function NiftyStrategiesPage() {
                   <div><strong>Break-even:</strong> {metrics.breakEvens.length ? metrics.breakEvens.join(', ') : '—'}</div>
                 </div>
 
-                <details style={styles.innerExpand}>
+                <details style={styles.innerExpand} open>
                   <summary style={styles.expandTitle}>Expand graphs</summary>
                   <div style={styles.graphGrid} className="nifty-graph-grid">
                     <div style={styles.graphCard}>

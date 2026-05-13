@@ -235,7 +235,7 @@ export default function Dashboard() {
   }, []);
 
   const loadWellnessData = useCallback(async () => {
-    if (!user) return;
+    if (!user || !API_BASE) return;
     const uid = String(user.id || user.email || user.username || '').trim();
     if (!uid) return;
     try {
@@ -259,7 +259,10 @@ export default function Dashboard() {
     loadWellnessData();
     const interval = setInterval(loadStrategies, 30000);
     const wellnessInterval = setInterval(loadWellnessData, 30000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      clearInterval(wellnessInterval);
+    };
   }, [user, loadStrategies, loadWellnessData]);
 
   const strategySummary = useMemo(() => buildStrategySummary(strategies), [strategies]);
