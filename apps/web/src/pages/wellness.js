@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
-import { restoreUserSession } from '../lib/auth-client';
+import { logoutClientSession, restoreUserSession } from '../lib/auth-client';
 
 import {
   DEFAULT_FORM,
@@ -21,6 +21,11 @@ import { resolveAvatarPresentation } from '../lib/avatarProfile';
 
 const STORAGE_LANG_KEY = 'cosmix-henna-language';
 function storageKey(userId, suffix) { return `cosmix-wellness-${userId}-${suffix}`; }
+
+function resolveWellnessUserId(user) {
+  const id = String(user?.id || '').trim();
+  return id || String(user?.email || user?.username || 'default').trim();
+}
 
 function formatDisplayDate(value) {
   const date = new Date(`${String(value).slice(0, 10)}T00:00:00`);
@@ -62,7 +67,16 @@ function inferActivityNamesFromUpdates(updates) {
     if (update.key === 'whiskyPegs') return 'Whisky';
     if (update.key === 'fastFoodServings') return 'Fast food';
     if (update.key === 'sugarServings') return 'Sugar';
-    if (update.key === 'headacheLevel' || update.key === 'headacheType' || update.key === 'headacheNotes') return 'Headache';
+    if (
+      update.key === 'headacheLevel'
+      || update.key === 'headacheType'
+      || update.key === 'headacheSeverity'
+      || update.key === 'headacheSide'
+      || update.key === 'headacheDurationHours'
+      || update.key === 'headacheMedicineCount'
+      || update.key === 'headacheMedicines'
+      || update.key === 'headacheNotes'
+    ) return 'Headache';
     if (update.key === 'sleepHours') return 'Sleep';
     return update.label;
   })));
@@ -180,11 +194,27 @@ const ACTIVITY_OPTIONS = [
   { id: 'fastfood', label: 'Fast food', icon: '🍔', fields: [{ key: 'fastFoodServings', label: 'Count', unit: 'count', step: 1 }] },
   { id: 'sugar', label: 'Sugar', icon: '🍬', fields: [{ key: 'sugarServings', label: 'Count', unit: 'count', step: 1 }] },
   { id: 'headache', label: 'Headache', icon: '🤕', fields: [
-    { key: 'headacheType', label: 'Type', unit: '', input: 'select', options: [
+    { key: 'headacheSeverity', label: 'Severity', unit: '', input: 'select', options: [
       { value: 'low', label: 'Low' },
       { value: 'mild', label: 'Mild' },
       { value: 'severe', label: 'Severe' },
     ] },
+    { key: 'headacheType', label: 'Type', unit: '', input: 'select', options: [
+      { value: 'tension', label: 'Tension' },
+      { value: 'migraine', label: 'Migraine' },
+      { value: 'sinus', label: 'Sinus' },
+      { value: 'cluster', label: 'Cluster' },
+      { value: 'other', label: 'Other' },
+    ] },
+    { key: 'headacheSide', label: 'Side', unit: '', input: 'select', options: [
+      { value: 'left', label: 'Left' },
+      { value: 'right', label: 'Right' },
+      { value: 'center', label: 'Center' },
+      { value: 'full-head-face', label: 'Full head/face' },
+    ] },
+    { key: 'headacheDurationHours', label: 'Duration', unit: 'hrs', step: 0.5 },
+    { key: 'headacheMedicineCount', label: 'Medicine count', unit: 'count', step: 1 },
+    { key: 'headacheMedicines', label: 'Medicines', unit: '', input: 'textarea', placeholder: 'e.g. Crocin, Dispirin, Saridon' },
     { key: 'headacheNotes', label: 'Notes', unit: '', input: 'textarea', placeholder: 'Optional notes' },
   ] },
   { id: 'sleep', label: 'Sleep', icon: '😴', fields: [{ key: 'sleepHours', label: 'Hours', unit: 'hrs', step: 0.5 }] },
@@ -209,6 +239,20 @@ function computeLatestCumulativeScore(dailyScores = []) {
   const direct = Number(latest.cumulativeTotalScore || 0);
   if (Number.isFinite(direct) && direct !== 0) return direct;
   return ordered.reduce((sum, score) => sum + Number(score.totalScore || 0), 0);
+}
+
+function buildCumulativeSeries(dailyScores = []) {
+  const ordered = sortDailyScoresByDate(dailyScores);
+  let runningTotal = 0;
+  return ordered.map((score) => {
+    const dayScore = Number(score.totalScore || 0);
+    runningTotal += Number.isFinite(dayScore) ? dayScore : 0;
+    const direct = Number(score.cumulativeTotalScore || 0);
+    return {
+      ...score,
+      cumulative: Number.isFinite(direct) && direct !== 0 ? direct : Number(runningTotal.toFixed(2)),
+    };
+  });
 }
 
 function weatherIcon(code) {
@@ -289,6 +333,7 @@ export default function WellnessPage() {
   const [showPlanHistory, setShowPlanHistory] = useState(false);
   const [buddyPlanRows, setBuddyPlanRows] = useState([]);
   const [buddyPlanLoading, setBuddyPlanLoading] = useState(false);
+  const [serverHydrated, setServerHydrated] = useState(false);
 
   const showMicSecurityWarning = typeof window !== 'undefined' && !window.isSecureContext && window.location.hostname !== 'localhost';
 
@@ -321,7 +366,12 @@ export default function WellnessPage() {
       setScoringRules(normalizeScoringRules(serverData.scoringRules));
     }
     if (syncLocal && typeof window !== 'undefined' && userIdRef.current) {
-      localStorage.setItem(storageKey(userIdRef.current, 'entries'), JSON.stringify(nextEntries));
+      // Only overwrite local entries if the server returned real data.
+      // If the server has empty entries but local has data, trust local — server may have lost data.
+      const localEntries = parseStoredJson(storageKey(userIdRef.current, 'entries'), []);
+      if (nextEntries.length > 0 || localEntries.length === 0) {
+        localStorage.setItem(storageKey(userIdRef.current, 'entries'), JSON.stringify(nextEntries));
+      }
       localStorage.setItem(storageKey(userIdRef.current, 'form'), JSON.stringify(nextForm));
     }
   }
@@ -331,7 +381,7 @@ export default function WellnessPage() {
     if (typeof window === 'undefined' || initDoneRef.current) return;
     restoreUserSession(router, setUser).then((parsed) => {
       if (!parsed) return;
-      const uid = parsed.id || parsed.email || parsed.username || 'default';
+      const uid = resolveWellnessUserId(parsed);
       userIdRef.current = uid;
 
       const localEntries = parseStoredJson(storageKey(uid, 'entries'), []);
@@ -339,6 +389,9 @@ export default function WellnessPage() {
       const today = todayDate();
       const todayEntry = localEntries.find((e) => e.date === today);
       const resolvedForm = todayEntry || { ...DEFAULT_FORM, ...localForm, date: today };
+      // Skip the first local hydration writes so stale browser cache cannot overwrite server data on refresh.
+      suppressSyncCountRef.current += 2;
+      setServerHydrated(false);
       setEntries(localEntries);
       setForm(resolvedForm);
       setSelectedDate(today);
@@ -354,7 +407,10 @@ export default function WellnessPage() {
           if (!serverData) return;
           applyServerState(serverData, { syncLocal: true });
         })
-        .catch(() => {});
+        .catch(() => {})
+        .finally(() => {
+          setServerHydrated(true);
+        });
 
       const urlParams = new URLSearchParams(window.location.search);
       const stravaResult = urlParams.get('strava');
@@ -412,6 +468,14 @@ export default function WellnessPage() {
     let cancelled = false;
 
     async function loadBuddyLeaderboard() {
+      if (!serverHydrated) {
+        if (!cancelled) {
+          setBuddyPlanLoading(false);
+          setBuddyPlanRows([]);
+        }
+        return;
+      }
+
       const selfUserId = String(userIdRef.current || user?.id || user?.email || user?.username || '').trim();
       const selfUsername = String(user?.username || '').trim();
       if (!selfUserId || !selfUsername) {
@@ -444,20 +508,32 @@ export default function WellnessPage() {
           }
         }));
 
-        const participants = [
-          {
-            username: selfUsername,
-            displayName: String(user?.name || user?.username || 'You'),
-            userId: selfUserId,
-            avatar: String(user?.avatar || ''),
-            isSelf: true,
-          },
-          ...buddyLookups.filter(Boolean).map((entry) => ({ ...entry, isSelf: false })),
-        ];
+        const selfSortedScores = sortDailyScoresByDate(dailyScores || []);
+        const selfSeries = selfSortedScores.length ? buildCumulativeSeries(selfSortedScores) : [{ date: todayDate(), cumulative: 0 }];
+        const selfLatest = selfSortedScores[selfSortedScores.length - 1] || { totalScore: 0 };
+        const selfPlanName = planInfo?.status === 'active' ? String(planInfo?.name || 'Active plan') : 'No active plan';
+        const selfRow = {
+          id: selfUserId,
+          name: String(user?.name || user?.username || 'You'),
+          username: selfUsername,
+          avatar: String(user?.avatar || ''),
+          isSelf: true,
+          planName: selfPlanName,
+          planStartDate: String(planInfo?.startDate || ''),
+          cumulativeTotal: computeLatestCumulativeScore(selfSortedScores),
+          lastDayScore: Number(selfLatest?.totalScore || 0),
+          days: selfSortedScores.length || 1,
+          series: selfSeries.map((score) => ({ date: score.date, cumulative: Number(score.cumulative || 0) })),
+        };
 
-        const uniqueParticipants = Array.from(new Map(participants.map((entry) => [String(entry.userId).toLowerCase(), entry])).values());
+        const buddyParticipants = Array.from(new Map(
+          buddyLookups
+            .filter(Boolean)
+            .filter((entry) => String(entry.userId || '').trim().toLowerCase() !== selfUserId.toLowerCase())
+            .map((entry) => [String(entry.userId).toLowerCase(), { ...entry, isSelf: false }]),
+        ).values());
 
-        const leaderboardRows = await Promise.all(uniqueParticipants.map(async (participant) => {
+        const buddyRows = await Promise.all(buddyParticipants.map(async (participant) => {
           try {
             const response = await fetch(`${API_BASE}/wellness/data/${encodeURIComponent(participant.userId)}`);
             const data = await response.json();
@@ -474,6 +550,7 @@ export default function WellnessPage() {
             if (sortedScores.length === 0) {
               sortedScores = [{ date: todayDate(), cumulativeTotalScore: 0, totalScore: 0 }];
             }
+            const normalizedSeries = buildCumulativeSeries(sortedScores);
             const latestScore = sortedScores[sortedScores.length - 1] || { totalScore: 0 };
             const cumulativeTotal = computeLatestCumulativeScore(sortedScores);
             return {
@@ -481,15 +558,15 @@ export default function WellnessPage() {
               name: participant.displayName,
               username: participant.username,
               avatar: participant.avatar || '',
-              isSelf: participant.isSelf,
+              isSelf: false,
               planName,
               planStartDate,
               cumulativeTotal,
               lastDayScore: Number(latestScore?.totalScore || 0),
               days: sortedScores.length,
-              series: sortedScores.map((score) => ({
+              series: normalizedSeries.map((score) => ({
                 date: score.date,
-                cumulative: Number(score.cumulativeTotalScore || 0),
+                cumulative: Number(score.cumulative || 0),
               })),
             };
           } catch (_) {
@@ -499,7 +576,7 @@ export default function WellnessPage() {
               name: participant.displayName,
               username: participant.username,
               avatar: participant.avatar || '',
-              isSelf: participant.isSelf,
+              isSelf: false,
               planName: 'No active plan',
               planStartDate: '',
               cumulativeTotal: 0,
@@ -510,7 +587,7 @@ export default function WellnessPage() {
           }
         }));
 
-        const ranked = leaderboardRows
+        const ranked = [selfRow, ...buddyRows]
           .filter(Boolean)
           .sort((left, right) => Number(right.cumulativeTotal || 0) - Number(left.cumulativeTotal || 0));
 
@@ -524,7 +601,7 @@ export default function WellnessPage() {
 
     loadBuddyLeaderboard();
     return () => { cancelled = true; };
-  }, [API_BASE, user?.id, user?.email, user?.username, planInfo?.id, dailyScores.length]);
+  }, [API_BASE, user?.id, user?.email, user?.username, planInfo?.id, planInfo?.status, planInfo?.name, planInfo?.startDate, dailyScores, serverHydrated]);
 
   /* ---- sync to server (debounced) ---- */
   function syncToServer(newEntries, newForm) {
@@ -838,12 +915,13 @@ export default function WellnessPage() {
       }
     });
     if (actCfg.id === 'headache') {
-      const headacheType = String(fieldValues.headacheType || '').trim().toLowerCase();
-      const headacheLevel = HEADACHE_LEVEL_MAP[headacheType] || 0;
+      const headacheSeverity = String(fieldValues.headacheSeverity || '').trim().toLowerCase();
+      const fallbackLegacyType = String(fieldValues.headacheType || '').trim().toLowerCase();
+      const headacheLevel = HEADACHE_LEVEL_MAP[headacheSeverity] || HEADACHE_LEVEL_MAP[fallbackLegacyType] || 0;
       if (headacheLevel > 0) {
         next.headacheLevel = headacheLevel;
-        if (!updates.some((update) => update.key === 'headacheType')) {
-          updates.push({ key: 'headacheType', label: 'Type', unit: '', value: headacheType });
+        if (headacheSeverity && !updates.some((update) => update.key === 'headacheSeverity')) {
+          updates.push({ key: 'headacheSeverity', label: 'Severity', unit: '', value: headacheSeverity });
         }
       }
     }
@@ -851,6 +929,14 @@ export default function WellnessPage() {
     saveEntry(next);
     setAssistantReply(`${selectedDateEntry ? 'Updated' : 'Added'}: ${formatUpdateList(updates)}`);
     setFieldValues({});
+    // Optimistically update daily scores so plan totals reflect the new activity immediately
+    const newDayScores = computeEntryScores(next, scoringRules);
+    setDailyScores((prev) => {
+      const updated = { date: next.date, physicalScore: newDayScores.physicalScore, mentalScore: newDayScores.mentalScore, totalScore: newDayScores.totalScore, source: 'entry', cumulativeTotalScore: 0 };
+      const found = prev.some((ds) => ds.date === next.date);
+      if (found) return prev.map((ds) => ds.date === next.date ? { ...ds, ...updated } : ds);
+      return [...prev, updated];
+    });
   }
 
   /* ---- text parse ---- */
@@ -863,10 +949,18 @@ export default function WellnessPage() {
       if (source === 'voice') setTranscript(trimmed);
       return;
     }
-    saveEntry({ ...nextForm, date: selectedDate });
+    const savedEntry = saveEntry({ ...nextForm, date: selectedDate });
     setAssistantReply(summarizeAddedActivities(selectedDate, inferActivityNamesFromUpdates(updates), updates));
     setCommandInput('');
     if (source === 'voice') setTranscript(trimmed);
+    // Optimistically update daily scores so plan totals reflect the new activity immediately
+    const parsedDayScores = computeEntryScores(savedEntry, scoringRules);
+    setDailyScores((prev) => {
+      const updated = { date: savedEntry.date, physicalScore: parsedDayScores.physicalScore, mentalScore: parsedDayScores.mentalScore, totalScore: parsedDayScores.totalScore, source: 'entry', cumulativeTotalScore: 0 };
+      const found = prev.some((ds) => ds.date === savedEntry.date);
+      if (found) return prev.map((ds) => ds.date === savedEntry.date ? { ...ds, ...updated } : ds);
+      return [...prev, updated];
+    });
   }
 
   function toggleTracking() {
@@ -934,6 +1028,11 @@ export default function WellnessPage() {
 
   const selectedActivityConfig = activityOptions.find((a) => a.id === selectedActivity);
   const selectedDateEntry = entries.find((entry) => entry.date === selectedDate) || null;
+  const selectedDateForm = useMemo(() => {
+    if (selectedDateEntry) return selectedDateEntry;
+    if (String(form?.date || '') === selectedDate) return form;
+    return { ...DEFAULT_FORM, date: selectedDate };
+  }, [form, selectedDate, selectedDateEntry]);
   const autoScoredDays = dailyScores.filter((score) => score.source === 'auto').length;
   const loggedPlanDays = dailyScores.filter((score) => score.source === 'entry').length;
   const latestPlanScore = dailyScores[0] || null;
@@ -1015,29 +1114,35 @@ export default function WellnessPage() {
   }, [entries, form]);
 
   const todayActivities = useMemo(() => {
+    const entry = selectedDateForm;
     const list = [];
-    if (Number(form.runningDistanceKm || 0) > 0 || Number(form.runningMinutes || 0) > 0) list.push({ id: 'running', icon: '🏃', label: 'Running', detail: `${formatMetric(form.runningDistanceKm)} km · ${formatMetric(form.runningMinutes)} mins` });
-    if (Number(form.cyclingMinutes || 0) > 0) list.push({ id: 'cycling', icon: '🚴', label: 'Cycling', detail: `${formatMetric(form.cyclingMinutes)} mins` });
-    if (Number(form.walkingDistanceKm || 0) > 0 || Number(form.walkingMinutes || 0) > 0) list.push({ id: 'walking', icon: '🚶', label: 'Walking', detail: `${formatMetric(form.walkingDistanceKm)} km · ${formatMetric(form.walkingMinutes)} mins` });
-    if (Number(form.exerciseMinutes || 0) > 0) list.push({ id: 'exercise', icon: '💪', label: 'Workout', detail: `${formatMetric(form.exerciseMinutes)} mins` });
-      if (Number(form.yogaMinutes || 0) > 0) list.push({ id: 'yoga', icon: '🧘', label: 'Yoga', detail: `${formatMetric(form.yogaMinutes)} mins` });
-    if (Number(form.badmintonMinutes || 0) > 0) list.push({ id: 'badminton', icon: '🏸', label: 'Badminton', detail: `${formatMetric(form.badmintonMinutes)} mins` });
-    if (Number(form.footballMinutes || 0) > 0) list.push({ id: 'football', icon: '⚽', label: 'Football', detail: `${formatMetric(form.footballMinutes)} mins` });
-    if (Number(form.cricketMinutes || 0) > 0) list.push({ id: 'cricket', icon: '🏏', label: 'Cricket', detail: `${formatMetric(form.cricketMinutes)} mins` });
-    if (Number(form.swimmingMinutes || 0) > 0) list.push({ id: 'swimming', icon: '🏊', label: 'Swimming', detail: `${formatMetric(form.swimmingMinutes)} mins` });
-    if (Number(form.meditationMinutes || 0) > 0) list.push({ id: 'meditation', icon: '🧘', label: 'Meditation', detail: `${formatMetric(form.meditationMinutes)} mins` });
-    if (Number(form.whiskyPegs || 0) > 0) list.push({ id: 'whisky', icon: '🥃', label: 'Whisky', detail: `${formatMetric(form.whiskyPegs)} pegs` });
-    if (Number(form.fastFoodServings || 0) > 0) list.push({ id: 'fastfood', icon: '🍔', label: 'Fast food', detail: `${formatMetric(form.fastFoodServings)} count` });
-    if (Number(form.sugarServings || 0) > 0) list.push({ id: 'sugar', icon: '🍬', label: 'Sugar', detail: `${formatMetric(form.sugarServings)} count` });
-    if (Number(form.headacheLevel || 0) > 0 || String(form.headacheType || '').trim() || String(form.headacheNotes || '').trim()) {
+    if (Number(entry.runningDistanceKm || 0) > 0 || Number(entry.runningMinutes || 0) > 0) list.push({ id: 'running', icon: '🏃', label: 'Running', detail: `${formatMetric(entry.runningDistanceKm)} km · ${formatMetric(entry.runningMinutes)} mins` });
+    if (Number(entry.cyclingMinutes || 0) > 0) list.push({ id: 'cycling', icon: '🚴', label: 'Cycling', detail: `${formatMetric(entry.cyclingMinutes)} mins` });
+    if (Number(entry.walkingDistanceKm || 0) > 0 || Number(entry.walkingMinutes || 0) > 0) list.push({ id: 'walking', icon: '🚶', label: 'Walking', detail: `${formatMetric(entry.walkingDistanceKm)} km · ${formatMetric(entry.walkingMinutes)} mins` });
+    if (Number(entry.exerciseMinutes || 0) > 0) list.push({ id: 'exercise', icon: '💪', label: 'Workout', detail: `${formatMetric(entry.exerciseMinutes)} mins` });
+      if (Number(entry.yogaMinutes || 0) > 0) list.push({ id: 'yoga', icon: '🧘', label: 'Yoga', detail: `${formatMetric(entry.yogaMinutes)} mins` });
+    if (Number(entry.badmintonMinutes || 0) > 0) list.push({ id: 'badminton', icon: '🏸', label: 'Badminton', detail: `${formatMetric(entry.badmintonMinutes)} mins` });
+    if (Number(entry.footballMinutes || 0) > 0) list.push({ id: 'football', icon: '⚽', label: 'Football', detail: `${formatMetric(entry.footballMinutes)} mins` });
+    if (Number(entry.cricketMinutes || 0) > 0) list.push({ id: 'cricket', icon: '🏏', label: 'Cricket', detail: `${formatMetric(entry.cricketMinutes)} mins` });
+    if (Number(entry.swimmingMinutes || 0) > 0) list.push({ id: 'swimming', icon: '🏊', label: 'Swimming', detail: `${formatMetric(entry.swimmingMinutes)} mins` });
+    if (Number(entry.meditationMinutes || 0) > 0) list.push({ id: 'meditation', icon: '🧘', label: 'Meditation', detail: `${formatMetric(entry.meditationMinutes)} mins` });
+    if (Number(entry.whiskyPegs || 0) > 0) list.push({ id: 'whisky', icon: '🥃', label: 'Whisky', detail: `${formatMetric(entry.whiskyPegs)} pegs` });
+    if (Number(entry.fastFoodServings || 0) > 0) list.push({ id: 'fastfood', icon: '🍔', label: 'Fast food', detail: `${formatMetric(entry.fastFoodServings)} count` });
+    if (Number(entry.sugarServings || 0) > 0) list.push({ id: 'sugar', icon: '🍬', label: 'Sugar', detail: `${formatMetric(entry.sugarServings)} count` });
+    if (Number(entry.headacheLevel || 0) > 0 || String(entry.headacheType || '').trim() || String(entry.headacheNotes || '').trim()) {
       const headacheParts = [];
-      if (String(form.headacheType || '').trim()) headacheParts.push(String(form.headacheType).trim());
-      if (String(form.headacheNotes || '').trim()) headacheParts.push(String(form.headacheNotes).trim());
-      list.push({ id: 'headache', icon: '🤕', label: 'Headache', detail: headacheParts.join(' · ') || `${formatMetric(form.headacheLevel)} /10` });
+      if (String(entry.headacheSeverity || '').trim()) headacheParts.push(`Severity ${String(entry.headacheSeverity).trim()}`);
+      if (String(entry.headacheType || '').trim()) headacheParts.push(`Type ${String(entry.headacheType).trim()}`);
+      if (String(entry.headacheSide || '').trim()) headacheParts.push(`Side ${String(entry.headacheSide).trim()}`);
+      if (Number(entry.headacheDurationHours || 0) > 0) headacheParts.push(`${formatMetric(entry.headacheDurationHours)} hrs`);
+      if (Number(entry.headacheMedicineCount || 0) > 0) headacheParts.push(`Medicines ${formatMetric(entry.headacheMedicineCount)}`);
+      if (String(entry.headacheMedicines || '').trim()) headacheParts.push(String(entry.headacheMedicines).trim());
+      if (String(entry.headacheNotes || '').trim()) headacheParts.push(String(entry.headacheNotes).trim());
+      list.push({ id: 'headache', icon: '🤕', label: 'Headache', detail: headacheParts.join(' · ') || `${formatMetric(entry.headacheLevel)} /10` });
     }
-    if (Number(form.sleepHours || 0) > 0) list.push({ id: 'sleep', icon: '😴', label: 'Sleep', detail: `${formatMetric(form.sleepHours)} hrs` });
+    if (Number(entry.sleepHours || 0) > 0) list.push({ id: 'sleep', icon: '😴', label: 'Sleep', detail: `${formatMetric(entry.sleepHours)} hrs` });
     return list;
-  }, [form]);
+  }, [selectedDateForm]);
 
   /* ---- loading ---- */
   if (!user || loading) {
@@ -1077,7 +1182,10 @@ export default function WellnessPage() {
               </div>
             )}
             {canManageScoringRules && <button onClick={() => router.push('/wellness-admin')} style={s.chipBtn}>Scoring Admin</button>}
+            <button onClick={() => router.push('/leaderboard')} style={s.chipBtn}>🏆 Leaderboard</button>
+            <button onClick={() => router.push('/running-analytics')} style={s.chipBtn}>📊 Analytics</button>
             <button onClick={() => router.push('/dashboard')} style={s.chipBtn}>Dashboard</button>
+            <button onClick={() => logoutClientSession(router)} style={s.chipBtn}>Logout</button>
           </div>
         </div>
 
@@ -1143,7 +1251,6 @@ export default function WellnessPage() {
           <div style={s.card}>
             <div style={s.cardHead}>
               <span style={s.cardTitle}>Add Activity</span>
-              <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} style={s.dateInput} max={todayDate()} />
             </div>
 
             <div style={s.planCard}>
@@ -1207,6 +1314,13 @@ export default function WellnessPage() {
             </div>
 
             {planInfo ? (<>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, padding: '10px 14px', borderRadius: 14, background: 'rgba(251,113,133,0.10)', border: '1px solid rgba(251,113,133,0.22)', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 18 }}>📅</span>
+              <span style={{ fontWeight: 800, fontSize: 13, opacity: 0.9 }}>Logging for:</span>
+              <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} style={{ ...s.dateInput, flex: '0 0 auto' }} max={todayDate()} />
+              <span style={{ fontSize: 14, fontWeight: 700, color: '#fde68a' }}>{formatDisplayDate(selectedDate)}</span>
+              {!selectedDateIsToday && <span style={{ fontSize: 11, padding: '3px 9px', borderRadius: 999, background: 'rgba(251,191,36,0.18)', color: '#fbbf24', fontWeight: 700, border: '1px solid rgba(251,191,36,0.3)' }}>Past date</span>}
+            </div>
             <div style={s.toggleRow}>
               <button onClick={() => setInputMode('dropdown')} style={inputMode === 'dropdown' ? s.toggleActive : s.toggleBtn}>Dropdown</button>
               <button onClick={() => setInputMode('text')} style={inputMode === 'text' ? s.toggleActive : s.toggleBtn}>Text / Voice</button>
@@ -1227,43 +1341,47 @@ export default function WellnessPage() {
                 </div>
 
                 {selectedActivityConfig && (
-                  <div style={s.fieldRow} className="field-row">
-                    {selectedActivityConfig.fields.map((f) => (
-                      <div key={f.key} style={s.fieldGroup}>
-                        <label style={s.fieldLabel}>{f.unit ? `${f.label} (${f.unit})` : f.label}</label>
-                        {f.input === 'select' ? (
-                          <select
-                            value={fieldValues[f.key] || ''}
-                            onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))}
-                            style={s.fieldInput}
-                          >
-                            <option value="">Select</option>
-                            {(f.options || []).map((option) => (
-                              <option key={`${f.key}-${option.value}`} value={option.value}>{option.label}</option>
-                            ))}
-                          </select>
-                        ) : f.input === 'textarea' ? (
-                          <textarea
-                            value={fieldValues[f.key] || ''}
-                            onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))}
-                            placeholder={f.placeholder || ''}
-                            style={{ ...s.fieldInput, minHeight: 86, resize: 'vertical' }}
-                          />
-                        ) : (
-                          <input
-                            type="number"
-                            min="0"
-                            step={f.step}
-                            value={fieldValues[f.key] || ''}
-                            onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))}
-                            placeholder="0"
-                            style={s.fieldInput}
-                          />
-                        )}
+                  selectedActivity === 'headache' ? (
+                    <div style={{ marginTop: 14, animation: 'fadeIn .2s ease-out' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 14px', marginBottom: 12 }}>
+                        {selectedActivityConfig.fields.map((f) => (
+                          <div key={f.key} style={f.input === 'textarea' ? { gridColumn: '1 / -1' } : {}}>
+                            <label style={s.fieldLabel}>{f.unit ? `${f.label} (${f.unit})` : f.label}</label>
+                            {f.input === 'select' ? (
+                              <select value={fieldValues[f.key] || ''} onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))} style={s.fieldInput}>
+                                <option value="">Select</option>
+                                {(f.options || []).map((option) => <option key={`${f.key}-${option.value}`} value={option.value}>{option.label}</option>)}
+                              </select>
+                            ) : f.input === 'textarea' ? (
+                              <textarea value={fieldValues[f.key] || ''} onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))} placeholder={f.placeholder || ''} style={{ ...s.fieldInput, minHeight: 72, resize: 'vertical' }} />
+                            ) : (
+                              <input type="number" min="0" step={f.step} value={fieldValues[f.key] || ''} onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))} placeholder="0" style={s.fieldInput} />
+                            )}
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                    <button onClick={handleDropdownSave} style={s.addBtn}>+ Add</button>
-                  </div>
+                      <button onClick={handleDropdownSave} style={s.addBtn}>+ Add Headache</button>
+                    </div>
+                  ) : (
+                    <div style={s.fieldRow} className="field-row">
+                      {selectedActivityConfig.fields.map((f) => (
+                        <div key={f.key} style={s.fieldGroup}>
+                          <label style={s.fieldLabel}>{f.unit ? `${f.label} (${f.unit})` : f.label}</label>
+                          {f.input === 'select' ? (
+                            <select value={fieldValues[f.key] || ''} onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))} style={s.fieldInput}>
+                              <option value="">Select</option>
+                              {(f.options || []).map((option) => <option key={`${f.key}-${option.value}`} value={option.value}>{option.label}</option>)}
+                            </select>
+                          ) : f.input === 'textarea' ? (
+                            <textarea value={fieldValues[f.key] || ''} onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))} placeholder={f.placeholder || ''} style={{ ...s.fieldInput, minHeight: 86, resize: 'vertical' }} />
+                          ) : (
+                            <input type="number" min="0" step={f.step} value={fieldValues[f.key] || ''} onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))} placeholder="0" style={s.fieldInput} />
+                          )}
+                        </div>
+                      ))}
+                      <button onClick={handleDropdownSave} style={s.addBtn}>+ Add</button>
+                    </div>
+                  )
                 )}
               </>
             ) : (
@@ -1322,7 +1440,7 @@ export default function WellnessPage() {
 
             {todayActivities.length > 0 && (
               <div style={s.loggedSection}>
-                <div style={s.loggedTitle}>Logged on {selectedDate}</div>
+                <div style={s.loggedTitle}>Activities for {formatDisplayDate(selectedDate)}</div>
                 <div style={s.loggedList}>
                   {todayActivities.map((a) => (
                     <div key={a.label} style={s.loggedItem}>
@@ -1614,7 +1732,8 @@ export default function WellnessPage() {
                   const x = (row.series.length <= 1)
                     ? graphWidth / 2
                     : (pointIndex / (row.series.length - 1)) * graphWidth;
-                  const y = graphHeight - ((Number(point.cumulative || 0) / buddyLeaderboardMaxScore) * (graphHeight - 6)) - 3;
+                  const rawY = graphHeight - ((Number(point.cumulative || 0) / buddyLeaderboardMaxScore) * (graphHeight - 6)) - 3;
+                  const y = Math.max(3, Math.min(graphHeight - 3, rawY));
                   return `${x},${y}`;
                 }).join(' ');
                 const rankColor = rank === 1 ? '#fbbf24' : rank === 2 ? '#cbd5e1' : rank === 3 ? '#fda4af' : '#bfdbfe';
@@ -1638,7 +1757,7 @@ export default function WellnessPage() {
                     <span style={s.buddyScore}>{formatMetric(row.cumulativeTotal)}</span>
                     <div style={s.buddyTrendWrap}>
                       {row.series.length > 0 ? (
-                        <svg viewBox={`0 0 ${graphWidth} ${graphHeight}`} style={{ width: graphWidth, height: graphHeight }}>
+                        <svg viewBox={`0 0 ${graphWidth} ${graphHeight}`} style={{ width: '100%', maxWidth: graphWidth, height: graphHeight }}>
                           <polyline fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth="1" points={`0,${graphHeight - 3} ${graphWidth},${graphHeight - 3}`} />
                           <polyline fill="none" stroke={row.isSelf ? '#22c55e' : '#60a5fa'} strokeWidth="2.2" points={points} />
                         </svg>
@@ -2000,9 +2119,9 @@ const s = {
   statLabel: { fontSize: 11, textTransform: 'uppercase', opacity: 0.7, fontWeight: 700 },
   statVal: { fontSize: 18, fontWeight: 900, marginTop: 2 },
   logRow: { display: 'grid', gridTemplateColumns: '1fr 80px 80px', gap: 8, padding: '8px 10px', borderRadius: 10, background: 'rgba(255,255,255,0.06)', fontSize: 13, marginTop: 4 },
-  buddyLeaderboardWrap: { display: 'grid', gap: 8, marginTop: 8 },
-  buddyLeaderboardHead: { display: 'grid', gridTemplateColumns: '38px minmax(0,1fr) 110px 170px', gap: 8, padding: '0 8px', fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', opacity: 0.68 },
-  buddyLeaderboardRow: { display: 'grid', gridTemplateColumns: '38px minmax(0,1fr) 110px 170px', gap: 8, alignItems: 'center', padding: '10px 8px', borderRadius: 12, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)' },
+  buddyLeaderboardWrap: { display: 'grid', gap: 8, marginTop: 8, overflowX: 'auto' },
+  buddyLeaderboardHead: { display: 'grid', gridTemplateColumns: '38px minmax(0,1fr) 110px 170px', gap: 8, padding: '0 8px', fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', opacity: 0.68, minWidth: 520 },
+  buddyLeaderboardRow: { display: 'grid', gridTemplateColumns: '38px minmax(0,1fr) 110px 170px', gap: 8, alignItems: 'center', padding: '10px 8px', borderRadius: 12, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)', minWidth: 520 },
   buddyRank: { fontSize: 18, fontWeight: 900, textAlign: 'center' },
   buddyIdentityCol: { minWidth: 0 },
   buddyNameLine: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 },
