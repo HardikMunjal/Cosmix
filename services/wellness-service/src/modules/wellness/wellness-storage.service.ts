@@ -1210,4 +1210,50 @@ export class WellnessStorageService {
     const planTransactions = this.buildPlanTransactions(planEntries, plan, scoringRules, descending);
     return { plan, dailyScores: ascending, planTransactions };
   }
+
+  async loadAnalytics(userId: string, days = 90): Promise<any> {
+    const [store, scoringRules] = await Promise.all([this.loadStore(userId), this.loadScoringRules()]);
+    const normalizedStore = this.normalizeStore(store);
+    const lookbackDays = Math.max(1, Math.min(3650, Number(days) || 90));
+    const perPlan = normalizedStore.plans.map((plan) => {
+      const entries = this.sortEntries(normalizedStore.entries.filter((entry) => entry.planId === plan.id));
+      // buildDailyScores returns descending; reverse for ascending
+      const descending = this.buildDailyScores(entries, plan, scoringRules);
+      const ascending = [...descending].sort((left, right) => left.date.localeCompare(right.date));
+      return { plan, dailyScoresAsc: ascending };
+    });
+    const selectedPlan = perPlan.find((item) => item.plan.status === 'active') || perPlan[0] || null;
+    const selectedTrendRows = (selectedPlan?.dailyScoresAsc || []).slice(-lookbackDays);
+    const allDailyScores = perPlan.flatMap((item) =>
+      item.dailyScoresAsc.map((score) => ({ planId: item.plan.id, planName: item.plan.name, ...score })),
+    );
+    const highest = allDailyScores.reduce((best, current) => {
+      if (!best) return current;
+      if (current.totalScore > best.totalScore) return current;
+      if (current.totalScore === best.totalScore && current.date > best.date) return current;
+      return best;
+    }, null as any);
+    return {
+      userId,
+      totalDays: allDailyScores.length,
+      totalPlans: normalizedStore.plans.length,
+      selectedPlanId: selectedPlan?.plan.id || null,
+      selectedPlanName: selectedPlan?.plan.name || null,
+      highestWellnessScore: highest
+        ? {
+            planId: highest.planId,
+            planName: highest.planName,
+            date: highest.date,
+            totalScore: highest.totalScore,
+            physicalScore: highest.physicalScore,
+            mentalScore: highest.mentalScore,
+          }
+        : null,
+      scoreTrend: selectedTrendRows.map((row) => ({
+        date: row.date,
+        dailyTotalScore: row.totalScore,
+        cumulativeTotalScore: row.cumulativeTotalScore,
+      })),
+    };
+  }
 }
