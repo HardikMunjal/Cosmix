@@ -1,9 +1,10 @@
 import { useRouter } from 'next/router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { resolveAvatarPresentation } from '../lib/avatarProfile';
-import { restoreUserSession } from '../lib/auth-client';
+import { logoutClientSession, restoreUserSession } from '../lib/auth-client';
 import { useTheme } from '../lib/ThemePicker';
 import { buildStrategySummary, formatCurrency } from '../lib/userInsights';
+import NotificationModule from '../modules/dashboard/NotificationModule';
 
 const tradingDeskModules = [
   { icon: 'NT', title: 'Nifty Tracker', desc: 'Track saved strategies, live payoff movement, and execution snapshots.', path: '/nifty-strategies', accent: '#22c55e' },
@@ -22,11 +23,98 @@ const workspaceModules = [
   { icon: 'MD', title: 'Media', desc: 'Manage your saved screenshots, images, and visual references.', path: '/media', accent: '#fb923c' },
 ];
 
+function resolveWellnessUserId(user) {
+  const id = String(user?.id || '').trim();
+  return id || String(user?.email || user?.username || 'default').trim();
+}
+
+function sortScoresByDate(scores = []) {
+  return [...scores].sort((left, right) => String(left.date || '').localeCompare(String(right.date || '')));
+}
+
+function buildCumulativeSeries(scores = []) {
+  const ordered = sortScoresByDate(scores);
+  let runningCumulative = 0;
+  return ordered.map((score) => {
+    const dayScore = Number(score.totalScore || 0);
+    if (Number.isFinite(dayScore)) {
+      runningCumulative += dayScore;
+    }
+    const directCumulative = Number(score.cumulativeTotalScore);
+    const cumulative = Number.isFinite(directCumulative) ? directCumulative : runningCumulative;
+    return {
+      date: String(score.date || ''),
+      cumulative: Number(cumulative.toFixed(2)),
+    };
+  });
+}
+
+function isGenericMonthlyPlanName(value) {
+  const label = String(value || '').trim().toLowerCase();
+  if (!label) return true;
+  if (label === 'active plan') return true;
+  if (/^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*\d{4}$/.test(label)) return true;
+  return false;
+}
+
+const comparisonLineColors = ['#38bdf8', '#14b8a6', '#f97316', '#a855f7', '#ec4899', '#22c55e', '#ef4444'];
+const activityMetricDefs = [
+  { key: 'badmintonMinutes', label: 'Badminton' },
+  { key: 'runningMinutes', label: 'Running' },
+  { key: 'cyclingMinutes', label: 'Cycling' },
+  { key: 'swimmingMinutes', label: 'Swimming' },
+  { key: 'yogaMinutes', label: 'Yoga' },
+];
+
+function aggregateActivityTotals(entries = []) {
+  const totals = Object.fromEntries(activityMetricDefs.map((metric) => [metric.key, 0]));
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    for (const metric of activityMetricDefs) {
+      const value = Number(entry?.[metric.key] || 0);
+      if (Number.isFinite(value) && value > 0) {
+        totals[metric.key] += value;
+      }
+    }
+  }
+
+  return Object.fromEntries(
+    Object.entries(totals).map(([key, value]) => [key, Number(value.toFixed(1))]),
+  );
+}
+
 function SettingsIcon({ color }) {
   return (
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <circle cx="12" cy="12" r="3.2" />
       <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a2 2 0 1 1-4 0v-.2a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H4a2 2 0 1 1 0-4h.2a1 1 0 0 0 .9-.6 1 1 0 0 0-.2-1.1l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1 1 0 0 0 1.1.2 1 1 0 0 0 .6-.9V4a2 2 0 1 1 4 0v.2a1 1 0 0 0 .6.9 1 1 0 0 0 1.1-.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1 1 0 0 0-.2 1.1 1 1 0 0 0 .9.6h.2a2 2 0 1 1 0 4h-.2a1 1 0 0 0-.9.6Z" />
+    </svg>
+  );
+}
+
+function BellIcon({ color }) {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M15 17h5l-1.4-1.6a2 2 0 0 1-.5-1.3V10a6 6 0 1 0-12 0v4.1a2 2 0 0 1-.5 1.3L4 17h5" />
+      <path d="M9.5 17a2.5 2.5 0 0 0 5 0" />
+    </svg>
+  );
+}
+
+function ProfileIcon({ color }) {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="8" r="3.2" />
+      <path d="M5 19c1.4-3 3.8-4.6 7-4.6s5.6 1.6 7 4.6" />
+    </svg>
+  );
+}
+
+function LogoutIcon({ color }) {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M10 6V4a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2h-6a2 2 0 0 1-2-2v-2" />
+      <path d="M15 12H3" />
+      <path d="m8 8-4 4 4 4" />
     </svg>
   );
 }
@@ -219,12 +307,165 @@ function LineChart({ points, theme, height = 220, emptyLabel = 'No data yet', va
   );
 }
 
+function ComparisonTrendChart({ rows, theme, height = 210, emptyLabel = 'No active wellness comparison data yet' }) {
+  if (!rows.length) {
+    return <div style={{ minHeight: `${height}px`, display: 'grid', placeItems: 'center', color: theme.textSecondary, fontSize: '14px' }}>{emptyLabel}</div>;
+  }
+
+  const width = 640;
+  const pad = { left: 16, right: 30, top: 18, bottom: 30 };
+  const plotWidth = width - pad.left - pad.right;
+  const plotHeight = height - pad.top - pad.bottom;
+  const allValues = rows.flatMap((row) => (row.series || []).map((point) => Number(point.cumulative || 0))).filter((value) => Number.isFinite(value));
+  const min = Math.min(0, ...allValues);
+  const max = Math.max(1, ...allValues);
+  const range = max - min || 1;
+  const maxSeriesLength = Math.max(2, ...rows.map((row) => Math.max(0, row.series?.length || 0)));
+  const referenceRow = [...rows].sort((left, right) => (right.series?.length || 0) - (left.series?.length || 0))[0] || rows[0];
+  const xFor = (position) => pad.left + ((position / Math.max(1, maxSeriesLength - 1)) * plotWidth);
+  const yFor = (value) => pad.top + plotHeight - ((((Number(value) || 0) - min) / range) * plotHeight);
+  const zeroY = yFor(0);
+  const labelStep = Math.max(1, Math.ceil(((referenceRow?.series?.length || 1) / 5)));
+  const finishX = width - pad.right;
+
+  return (
+    <div style={{ display: 'grid', gap: '12px' }}>
+      <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={{ width: '100%', height: `${height}px`, display: 'block' }}>
+        <defs>
+          <linearGradient id="buddy-race-grid-glow" x1="0" x2="1" y1="0" y2="1">
+            <stop offset="0%" stopColor="rgba(34,197,94,0.18)" />
+            <stop offset="50%" stopColor="rgba(6,182,212,0.08)" />
+            <stop offset="100%" stopColor="rgba(245,158,11,0.02)" />
+          </linearGradient>
+          <filter id="buddy-race-line-glow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="4" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+        <rect x={pad.left} y={pad.top} width={plotWidth} height={plotHeight} rx="18" fill="url(#buddy-race-grid-glow)" opacity="0.55" />
+        <line x1={pad.left} y1={zeroY} x2={width - pad.right} y2={zeroY} stroke={theme.graphGridLine} strokeDasharray="5 4" />
+        <line x1={finishX} y1={pad.top} x2={finishX} y2={height - pad.bottom} stroke={theme.textHeading} strokeOpacity="0.22" strokeDasharray="6 6" />
+        {(referenceRow?.series || []).map((point, index) => {
+          if (index !== 0 && index !== referenceRow.series.length - 1 && index % labelStep !== 0) return null;
+          const alignedIndex = (maxSeriesLength - referenceRow.series.length) + index;
+          const x = xFor(alignedIndex);
+          return (
+            <g key={`${point.date}-${index}`}>
+              <line x1={x} y1={pad.top} x2={x} y2={height - pad.bottom} stroke={theme.graphGridLine} strokeOpacity="0.22" />
+              <text x={x} y={height - 8} textAnchor="middle" fill={theme.textMuted} fontSize="10">{String(point.date || '').slice(5)}</text>
+            </g>
+          );
+        })}
+        {rows.map((row) => {
+          const startOffset = maxSeriesLength - row.series.length;
+          const points = row.series.map((point, index) => `${xFor(startOffset + index)},${yFor(point.cumulative)}`).join(' ');
+          const lastPoint = row.series[row.series.length - 1] || null;
+          if (!points || !lastPoint) return null;
+          const lastX = xFor(startOffset + row.series.length - 1);
+          const lastY = yFor(lastPoint.cumulative);
+          const badgeLabel = String(row.rank || '');
+          return (
+            <g key={row.id}>
+              <polyline fill="none" stroke={row.color} strokeWidth={row.isSelf ? '4.2' : '2.8'} strokeLinecap="round" strokeLinejoin="round" points={points} opacity={row.isSelf ? 1 : 0.94} filter="url(#buddy-race-line-glow)" />
+              <circle cx={lastX} cy={lastY} r={row.isSelf ? '8' : '7'} fill={row.color} stroke="#fff" strokeOpacity="0.9" strokeWidth="1.4" />
+              <text x={lastX} y={lastY + 3} textAnchor="middle" fill="#fff" fontSize="9" fontWeight="900">{badgeLabel}</text>
+              <g>
+                <line x1={lastX} y1={lastY - 10} x2={lastX} y2={Math.max(pad.top, lastY - 18)} stroke={row.color} strokeOpacity="0.8" />
+              </g>
+            </g>
+          );
+        })}
+        <text x={finishX - 2} y={pad.top - 4} textAnchor="end" fill={theme.textMuted} fontSize="10" fontWeight="800">Finish</text>
+      </svg>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 12px' }}>
+        {rows.map((row) => (
+          <div key={`${row.id}-legend`} style={{ display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '11px', color: theme.textSecondary, fontWeight: 700, padding: '6px 10px', borderRadius: '999px', background: `${row.color}10`, border: `1px solid ${row.color}33` }}>
+            <span style={{ minWidth: '18px', height: '18px', borderRadius: '999px', background: row.color, color: '#fff', display: 'inline-grid', placeItems: 'center', fontSize: '10px', fontWeight: 900 }}>{row.rank}</span>
+            <span style={{ width: '10px', height: '10px', borderRadius: '999px', background: row.color, boxShadow: `0 0 0 3px ${row.color}22` }} />
+            <span style={{ color: theme.textHeading }}>{row.displayPlanName || row.planName || row.label || row.name}</span>
+            <span style={{ color: theme.textMuted }}>{row.isSelf ? '(you)' : `(${row.name})`}</span>
+            <span>{`${Number(row.current || 0).toFixed(1)}`}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ActivityFaceoffChart({ rows, theme, height = 320, emptyLabel = 'No activity comparison data yet' }) {
+  if (!rows.length) {
+    return <div style={{ minHeight: `${height}px`, display: 'grid', placeItems: 'center', color: theme.textSecondary, fontSize: '14px' }}>{emptyLabel}</div>;
+  }
+
+  const metrics = activityMetricDefs.map((metric) => ({
+    ...metric,
+    values: rows.map((row) => ({
+      id: row.id,
+      label: row.displayPlanName || row.label || row.name,
+      color: row.color,
+      value: Number(row.activityTotals?.[metric.key] || 0),
+    })),
+  }));
+
+  const maxValue = Math.max(1, ...metrics.flatMap((metric) => metric.values.map((point) => point.value)));
+  const width = 760;
+  const leftLabelWidth = 128;
+  const rightPad = 54;
+  const groupGap = 16;
+  const barHeight = 9;
+  const barGap = 4;
+  const groupHeights = metrics.map((metric) => (metric.values.length * barHeight) + ((metric.values.length - 1) * barGap) + 18);
+  const totalHeight = Math.max(height, 34 + groupHeights.reduce((sum, value) => sum + value + groupGap, 0));
+  const chartRight = width - rightPad;
+  const barAreaWidth = chartRight - leftLabelWidth;
+  let yCursor = 28;
+
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <svg viewBox={`0 0 ${width} ${totalHeight}`} preserveAspectRatio="xMinYMin meet" style={{ width: '100%', minWidth: `${width}px`, height: `${totalHeight}px`, display: 'block' }}>
+        <rect x="0" y="0" width={width} height={totalHeight} rx="18" fill="rgba(15,23,42,0.25)" />
+        {metrics.map((metric, metricIndex) => {
+          const groupStartY = yCursor;
+          const groupHeight = groupHeights[metricIndex];
+          const baselineY = groupStartY + 14;
+          yCursor += groupHeight + groupGap;
+          return (
+            <g key={metric.key}>
+              <text x="10" y={baselineY} fill={theme.textHeading} fontSize="12" fontWeight="800">{metric.label}</text>
+              <line x1={leftLabelWidth} y1={groupStartY + groupHeight} x2={chartRight} y2={groupStartY + groupHeight} stroke={theme.graphGridLine} strokeOpacity="0.35" />
+              {metric.values.map((point, pointIndex) => {
+                const y = baselineY + 6 + pointIndex * (barHeight + barGap);
+                const barWidth = (point.value / maxValue) * barAreaWidth;
+                const textX = Math.min(chartRight + 4, leftLabelWidth + barWidth + 4);
+                return (
+                  <g key={`${metric.key}-${point.id}`}>
+                    <rect x={leftLabelWidth} y={y} width={Math.max(2, barWidth)} height={barHeight} rx="5" fill={point.color} opacity="0.92" />
+                    <text x={textX} y={y + barHeight - 1} fill={theme.textSecondary} fontSize="10" fontWeight="700">{`${point.value.toFixed(0)}m`}</text>
+                  </g>
+                );
+              })}
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const router = useRouter();
   const { theme } = useTheme();
   const [user, setUser] = useState(null);
   const [strategies, setStrategies] = useState([]);
   const [wellnessData, setWellnessData] = useState({ entries: [], dailyScores: [], plans: [], plan: null });
+  const [buddyTrendRows, setBuddyTrendRows] = useState([]);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [showSettingsMenu, setShowSettingsMenu] = useState(false);
+  const [chatBootstrap, setChatBootstrap] = useState({ incomingRequests: [], groups: [] });
 
   const configuredWellnessApiBase = process.env.NEXT_PUBLIC_WELLNESS_API_BASE || '';
   const API_BASE = configuredWellnessApiBase || (typeof window !== 'undefined'
@@ -252,21 +493,183 @@ export default function Dashboard() {
   }, []);
 
   const loadWellnessData = useCallback(async () => {
-    if (!user || !API_BASE) return;
-    const uid = String(user.id || user.email || user.username || '').trim();
-    if (!uid) return;
+    if (!user) return;
+    const baseUid = resolveWellnessUserId(user);
+    if (!baseUid) return;
     try {
-      const response = await fetch(`${API_BASE}/wellness/data/${encodeURIComponent(uid)}`);
-      const data = await response.json();
-      if (!response.ok) throw new Error(data?.message || 'Unable to load wellness data');
+      const normalizedUsername = String(user?.username || '').trim();
+      const legacyUsernameId = normalizedUsername ? `usr-${normalizedUsername.toLowerCase()}` : '';
+
+      const primaryCandidateIds = Array.from(new Set([
+        String(baseUid || '').trim(),
+        String(user?.id || '').trim(),
+        String(user?.email || '').trim(),
+        normalizedUsername,
+        legacyUsernameId,
+      ].filter(Boolean)));
+      const storageCandidateIds = [];
+
+      if (typeof window !== 'undefined' && window.localStorage) {
+        try {
+          for (let index = 0; index < window.localStorage.length; index += 1) {
+            const key = String(window.localStorage.key(index) || '');
+            if (!key.startsWith('cosmix-wellness-') || !key.endsWith('-entries')) continue;
+            const maybeId = key.slice('cosmix-wellness-'.length, key.length - '-entries'.length).trim();
+            if (maybeId) storageCandidateIds.push(maybeId);
+          }
+        } catch (_) {
+          // Ignore localStorage scan failures.
+        }
+      }
+
+      if (user?.username) {
+        try {
+          const lookupResponse = await fetch(`/api/chat/buddy-search?q=${encodeURIComponent(String(user.username).trim())}`);
+          const lookupData = await lookupResponse.json().catch(() => ({}));
+          const match = (Array.isArray(lookupData?.results) ? lookupData.results : [])
+            .find((entry) => String(entry?.username || '').toLowerCase() === String(user.username || '').toLowerCase());
+          const resolvedId = String(match?.id || '').trim();
+          if (resolvedId) primaryCandidateIds.unshift(resolvedId);
+        } catch (_) {
+          // Ignore lookup failures and continue with available IDs.
+        }
+      }
+
+      let selectedData = null;
+      let selectedScore = -1;
+      let lastError = null;
+      const tryCandidates = async (ids) => {
+        const uniqueCandidates = Array.from(new Set(ids.filter(Boolean)));
+
+        for (const uid of uniqueCandidates) {
+          try {
+            const response = await fetch(`${API_BASE}/wellness/data/${encodeURIComponent(uid)}`);
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+              lastError = new Error(data?.message || `Unable to load wellness data for ${uid}`);
+              continue;
+            }
+
+            const score =
+              (Array.isArray(data?.dailyScores) ? data.dailyScores.length * 10 : 0)
+              + (Array.isArray(data?.entries) ? data.entries.length : 0)
+              + (data?.plan ? 5 : 0)
+              + (Array.isArray(data?.plans) ? Math.min(data.plans.length, 5) : 0);
+
+            if (score > selectedScore) {
+              selectedData = data;
+              selectedScore = score;
+            }
+          } catch (error) {
+            lastError = error;
+          }
+        }
+      };
+
+      await tryCandidates(primaryCandidateIds);
+      if (selectedScore <= 0) {
+        await tryCandidates(storageCandidateIds);
+      }
+
+      if (!selectedData && lastError) throw lastError;
+      if (!selectedData) {
+        setWellnessData({ entries: [], dailyScores: [], plans: [], plan: null });
+        return;
+      }
+
       setWellnessData({
-        entries: Array.isArray(data.entries) ? data.entries : [],
-        dailyScores: Array.isArray(data.dailyScores) ? data.dailyScores : [],
-        plans: Array.isArray(data.plans) ? data.plans : [],
-        plan: data.plan || null,
+        entries: Array.isArray(selectedData.entries) ? selectedData.entries : [],
+        dailyScores: Array.isArray(selectedData.dailyScores) ? selectedData.dailyScores : [],
+        plans: Array.isArray(selectedData.plans) ? selectedData.plans : [],
+        plan: selectedData.plan || null,
       });
     } catch (_) {
       setWellnessData({ entries: [], dailyScores: [], plans: [], plan: null });
+    }
+  }, [API_BASE, user]);
+
+  const loadBuddyTrendRows = useCallback(async () => {
+    const selfUserId = resolveWellnessUserId(user);
+    const selfUsername = String(user?.username || '').trim();
+    if (!selfUserId || !selfUsername) {
+      setBuddyTrendRows([]);
+      return;
+    }
+
+    try {
+      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      const isLocalHost = host === 'localhost' || host === '127.0.0.1';
+      const chatBase = isLocalHost ? `http://${host}:3002/chat` : '/chat-api/chat';
+
+      const bootstrapResponse = await fetch(`${chatBase}/bootstrap?username=${encodeURIComponent(selfUsername)}`);
+      const bootstrapData = await bootstrapResponse.json().catch(() => ({}));
+      const friends = Array.isArray(bootstrapData?.friends) ? bootstrapData.friends : [];
+      setChatBootstrap({
+        incomingRequests: Array.isArray(bootstrapData?.incomingRequests) ? bootstrapData.incomingRequests : [],
+        groups: Array.isArray(bootstrapData?.groups) ? bootstrapData.groups : [],
+      });
+
+      const buddyLookups = await Promise.all(friends.map(async (username) => {
+        const normalized = String(username || '').trim();
+        if (!normalized) return null;
+        try {
+          const searchResponse = await fetch(`/api/chat/buddy-search?q=${encodeURIComponent(normalized)}`);
+          const searchData = await searchResponse.json();
+          const match = (Array.isArray(searchData?.results) ? searchData.results : [])
+            .find((entry) => String(entry?.username || '').toLowerCase() === normalized.toLowerCase());
+          return {
+            username: normalized,
+            displayName: String(match?.name || match?.username || normalized).trim(),
+            userId: String(match?.id || match?.email || match?.username || normalized).trim(),
+          };
+        } catch (_) {
+          return {
+            username: normalized,
+            displayName: normalized,
+            userId: normalized,
+          };
+        }
+      }));
+
+      const participants = Array.from(new Map(
+        buddyLookups
+          .filter(Boolean)
+          .filter((entry) => String(entry.userId || '').trim().toLowerCase() !== selfUserId.toLowerCase())
+          .map((entry) => [String(entry.userId).toLowerCase(), entry]),
+      ).values());
+
+      const nextRows = await Promise.all(participants.map(async (participant) => {
+        try {
+          const [summaryResponse, fullResponse] = await Promise.all([
+            fetch(`${API_BASE}/wellness/plan-summary/${encodeURIComponent(participant.userId)}`),
+            fetch(`${API_BASE}/wellness/data/${encodeURIComponent(participant.userId)}`),
+          ]);
+          const data = await summaryResponse.json().catch(() => ({}));
+          const fullData = await fullResponse.json().catch(() => ({}));
+          if (!summaryResponse.ok || !data?.hasActivePlan || !Array.isArray(data.series) || !data.series.length) return null;
+          const series = [...data.series]
+            .sort((left, right) => String(left.date || '').localeCompare(String(right.date || '')))
+            .slice(-14)
+            .map((point) => ({ date: String(point.date || ''), cumulative: Number(point.cumulative || 0) }));
+          if (!series.length) return null;
+          const entries = Array.isArray(fullData?.entries) ? fullData.entries : [];
+          return {
+            id: participant.userId,
+            name: participant.displayName,
+            planName: String(data?.plan?.name || ''),
+            current: Number(data.cumulativeTotal || series[series.length - 1]?.cumulative || 0),
+            activityTotals: entries.length ? aggregateActivityTotals(entries) : null,
+            series,
+            isSelf: false,
+          };
+        } catch (_) {
+          return null;
+        }
+      }));
+
+      setBuddyTrendRows(nextRows.filter(Boolean));
+    } catch (_) {
+      setBuddyTrendRows([]);
     }
   }, [API_BASE, user]);
 
@@ -274,27 +677,21 @@ export default function Dashboard() {
     if (!user) return undefined;
     loadStrategies();
     loadWellnessData();
+    loadBuddyTrendRows();
     const interval = setInterval(loadStrategies, 30000);
     const wellnessInterval = setInterval(loadWellnessData, 30000);
+    const buddyInterval = setInterval(loadBuddyTrendRows, 30000);
     return () => {
       clearInterval(interval);
       clearInterval(wellnessInterval);
+      clearInterval(buddyInterval);
     };
-  }, [user, loadStrategies, loadWellnessData]);
+  }, [user, loadStrategies, loadWellnessData, loadBuddyTrendRows]);
 
   const strategySummary = useMemo(() => buildStrategySummary(strategies), [strategies]);
   const wellnessSummary = useMemo(() => {
     const entries = Array.isArray(wellnessData.entries) ? wellnessData.entries : [];
-    const dailyScoresAsc = [...(wellnessData.dailyScores || [])].sort((left, right) => String(left.date || '').localeCompare(String(right.date || '')));
-    let runningCumulative = 0;
-    const cumulativeSeries = dailyScoresAsc.map((score) => {
-      const dayScore = Number(score.totalScore || 0);
-      runningCumulative += Number.isFinite(dayScore) ? dayScore : 0;
-      return {
-        date: String(score.date || ''),
-        cumulative: Number(runningCumulative.toFixed(2)),
-      };
-    });
+    const cumulativeSeries = buildCumulativeSeries(wellnessData.dailyScores || []);
 
     const trendPoints = cumulativeSeries.slice(-14).map((point) => ({
       label: point.date.slice(5),
@@ -384,8 +781,94 @@ export default function Dashboard() {
     accent: item.value >= 0 ? theme.green : theme.red,
   }))), [strategySummary.profitWindows, theme]);
 
+  const comparisonTrendRows = useMemo(() => {
+    const selfSeries = buildCumulativeSeries(wellnessData.dailyScores || []).slice(-14);
+    const selfRows = selfSeries.length ? [{
+      id: resolveWellnessUserId(user),
+      name: String(user?.name || user?.username || 'You'),
+      planName: String(wellnessData?.plan?.name || ''),
+      activityTotals: aggregateActivityTotals(wellnessData.entries || []),
+      current: Number(selfSeries[selfSeries.length - 1]?.cumulative || 0),
+      series: selfSeries,
+      isSelf: true,
+    }] : [];
+
+    const withColors = [...selfRows, ...buddyTrendRows].map((row, index) => ({
+      ...row,
+      label: row.isSelf ? 'You' : row.name,
+      displayPlanName: isGenericMonthlyPlanName(row.planName)
+        ? (row.isSelf ? String(user?.name || user?.username || 'You') : String(row.name || 'Rival'))
+        : String(row.planName || row.name || row.label || 'Rival'),
+      color: row.isSelf ? theme.orange : comparisonLineColors[(index - selfRows.length + comparisonLineColors.length) % comparisonLineColors.length],
+    }));
+
+    return [...withColors]
+      .sort((left, right) => Number(right.current || 0) - Number(left.current || 0))
+      .map((row, index) => ({ ...row, rank: index + 1 }));
+  }, [buddyTrendRows, theme.orange, user, wellnessData.dailyScores, wellnessData?.plan?.name]);
+
+  const showdownTitle = useMemo(() => {
+    const selfRow = comparisonTrendRows.find((row) => row.isSelf) || null;
+    const rivalRow = comparisonTrendRows.find((row) => !row.isSelf) || null;
+    const selfLabel = String(selfRow?.displayPlanName || selfRow?.planName || selfRow?.name || 'You');
+    if (!rivalRow) return `${selfLabel} Arena`;
+    const rivalLabel = String(rivalRow?.displayPlanName || rivalRow?.planName || rivalRow?.name || 'Rival');
+    return `${rivalLabel} vs ${selfLabel}`;
+  }, [comparisonTrendRows]);
+
+  const activityShowdownRows = useMemo(() => (
+    comparisonTrendRows
+      .filter((row) => row.activityTotals && Object.values(row.activityTotals).some((value) => Number(value || 0) > 0))
+      .slice(0, 4)
+  ), [comparisonTrendRows]);
+
+  const notifications = useMemo(() => {
+    const items = [];
+
+    // Real incoming friend requests
+    chatBootstrap.incomingRequests.forEach((req) => {
+      const fromUser = typeof req === 'string' ? req : (req?.from || req?.username || String(req));
+      items.push({
+        id: `friend-req-${fromUser}`,
+        type: 'friend_request',
+        title: `${fromUser} sent you a buddy request`,
+        description: 'Accept to compare daily wellness streaks and leaderboard ranks.',
+        timeLabel: 'recently',
+        actionLabel: 'Open Chat',
+      });
+    });
+
+    // Group notifications — show first few active groups
+    chatBootstrap.groups.slice(0, 2).forEach((group) => {
+      const groupName = typeof group === 'string' ? group : (group?.name || group?.label || 'a group');
+      items.push({
+        id: `group-${typeof group === 'string' ? group : group?.id}`,
+        type: 'chat_message',
+        title: `Activity in ${groupName}`,
+        description: 'Open chat to see the latest messages.',
+        timeLabel: 'recently',
+        actionLabel: 'Open Chat',
+      });
+    });
+
+    // Fallback if no real data yet
+    if (items.length === 0 && buddyTrendRows.length > 0) {
+      items.push({
+        id: 'chat-fallback',
+        type: 'chat_message',
+        title: 'New chat message in your buddy group',
+        description: 'Open chat to reply and keep your training circle active.',
+        timeLabel: 'just now',
+      });
+    }
+
+    return items.slice(0, 5);
+  }, [chatBootstrap, buddyTrendRows]);
+
+  const notificationCount = notifications.length;
+
   if (!user) {
-    return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: theme.pageBgSolid, color: theme.textPrimary, fontFamily: theme.font }}>Loading...</div>;
+    return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: theme.pageBgSolid, color: theme.textPrimary, fontFamily: theme.font }}><div style={{ display: 'grid', gap: '10px', justifyItems: 'center' }}><div style={{ width: '76px', height: '76px', borderRadius: '999px', border: `3px solid ${theme.cardBorder}`, borderTopColor: theme.orange, borderRightColor: theme.cyan, animation: 'cosmixDashPulse 1s linear infinite' }} /><div style={{ fontSize: '13px', fontWeight: 700, color: theme.textMuted }}>Loading dashboard...</div></div></div>;
   }
 
   return (
@@ -404,6 +887,7 @@ export default function Dashboard() {
           .dashboard-header { flex-direction: column !important; }
           .dashboard-header-actions { width: 100%; justify-content: space-between; }
           .dashboard-module-grid, .dashboard-scorecard-grid, .dashboard-market-modules { grid-template-columns: 1fr !important; }
+          .dashboard-club-grid { grid-template-columns: 1fr !important; }
         }
         @media (max-width: 560px) {
           .dashboard-page { padding: 10px !important; }
@@ -448,13 +932,94 @@ export default function Dashboard() {
             <h1 style={{ margin: 0, fontSize: '34px', color: theme.textHeading }} className="dashboard-title">Welcome back, {user.username}</h1>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }} className="dashboard-header-actions">
-            <button type="button" onClick={() => router.push('/profile')} style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', borderRadius: '999px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, color: theme.textHeading, padding: '12px 16px', cursor: 'pointer', boxShadow: `0 14px 32px ${theme.shadow}`, fontSize: '13px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.12em' }}>
-              <SettingsIcon color={theme.textHeading} />
-              Settings
-            </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }} className="dashboard-header-actions">
+            {/* Notifications — standalone pill */}
+            <div style={{ position: 'relative' }}>
+              <button
+                type="button"
+                onClick={() => { setShowNotifications((v) => !v); setShowSettingsMenu(false); }}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', borderRadius: '999px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, color: theme.textHeading, padding: '10px 16px', cursor: 'pointer', fontSize: '12px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.09em', boxShadow: `0 4px 14px ${theme.shadow}` }}
+              >
+                <BellIcon color={theme.textHeading} />
+                Notifications
+                <span style={{ minWidth: '22px', height: '22px', borderRadius: '999px', display: 'inline-grid', placeItems: 'center', background: notificationCount > 0 ? theme.orange : theme.cardBorder, color: notificationCount > 0 ? '#fff' : theme.textMuted, fontSize: '11px', fontWeight: 900 }}>{notificationCount}</span>
+              </button>
+            </div>
+
+            {/* Settings — separate standalone pill */}
+            <div style={{ position: 'relative' }}>
+              <button
+                type="button"
+                onClick={() => { setShowSettingsMenu((v) => !v); setShowNotifications(false); }}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', borderRadius: '999px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, color: theme.textHeading, padding: '10px 16px', cursor: 'pointer', fontSize: '12px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.09em', boxShadow: `0 4px 14px ${theme.shadow}` }}
+              >
+                <SettingsIcon color={theme.textHeading} />
+                Settings
+              </button>
+              {showSettingsMenu ? (
+                <div style={{ position: 'absolute', right: 0, top: '52px', width: '220px', borderRadius: '14px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, boxShadow: `0 18px 36px ${theme.shadow}`, padding: '8px', display: 'grid', gap: '6px', zIndex: 10 }}>
+                  <button type="button" onClick={() => { setShowSettingsMenu(false); router.push('/profile'); }} style={{ borderRadius: '10px', border: 'none', background: `${theme.blue}12`, color: theme.textHeading, padding: '10px 12px', textAlign: 'left', fontSize: '12px', fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                    <ProfileIcon color={theme.textHeading} />
+                    Open Profile
+                  </button>
+                  <button type="button" onClick={() => { setShowSettingsMenu(false); logoutClientSession(router); }} style={{ borderRadius: '10px', border: 'none', background: 'rgba(239,68,68,0.12)', color: '#b91c1c', padding: '10px 12px', textAlign: 'left', fontSize: '12px', fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                    <LogoutIcon color="#b91c1c" />
+                    Logout
+                  </button>
+                </div>
+              ) : null}
+            </div>
           </div>
         </header>
+
+        {showNotifications ? (
+          <NotificationModule
+            theme={theme}
+            notifications={notifications}
+            onOpenChat={() => router.push('/chat')}
+            onOpenProfile={() => router.push('/profile')}
+          />
+        ) : null}
+
+        <section style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '16px' }} className="dashboard-club-grid">
+          <div
+            style={{ borderRadius: '24px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '14px', display: 'grid', gap: '10px', boxShadow: `0 18px 40px ${theme.shadow}` }}
+            role="button"
+            tabIndex={0}
+            onClick={() => router.push('/wellness')}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') router.push('/wellness');
+            }}
+          >
+            <div style={{ fontSize: '11px', letterSpacing: '0.12em', textTransform: 'uppercase', color: theme.textMuted, fontWeight: 800 }}>Wellness Club</div>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="https://images.unsplash.com/photo-1517836357463-d25dfeac3438?auto=format&fit=crop&w=1200&q=80"
+              alt="Live fitness training"
+              style={{ width: '100%', height: '160px', borderRadius: '16px', objectFit: 'cover', border: `1px solid ${theme.cardBorder}` }}
+            />
+            <div style={{ fontSize: '13px', color: theme.textSecondary, lineHeight: 1.45 }}>All wellness modules, buddy trends, activity duels and running consistency in one training command center.</div>
+          </div>
+
+          <div
+            style={{ borderRadius: '24px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '14px', display: 'grid', gap: '10px', boxShadow: `0 18px 40px ${theme.shadow}` }}
+            role="button"
+            tabIndex={0}
+            onClick={() => router.push('/nifty-strategies')}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') router.push('/nifty-strategies');
+            }}
+          >
+            <div style={{ fontSize: '11px', letterSpacing: '0.12em', textTransform: 'uppercase', color: theme.textMuted, fontWeight: 800 }}>Nifty Club</div>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?auto=format&fit=crop&w=1200&q=80"
+              alt="Live market screen"
+              style={{ width: '100%', height: '160px', borderRadius: '16px', objectFit: 'cover', border: `1px solid ${theme.cardBorder}` }}
+            />
+            <div style={{ fontSize: '13px', color: theme.textSecondary, lineHeight: 1.45 }}>All Nifty strategy modules, option pricing and market analytics grouped in one active trading workspace.</div>
+          </div>
+        </section>
 
         <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.12fr) minmax(320px, 0.88fr)', gap: '16px' }} className="dashboard-top-grid">
           <div style={{ borderRadius: '30px', border: `1px solid ${theme.cardBorder}`, background: `radial-gradient(circle at top left, ${theme.orange}20, transparent 24%), radial-gradient(circle at 78% 16%, ${theme.cyan}16, transparent 22%), linear-gradient(135deg, ${theme.cardBg}, ${theme.cyan}08, ${theme.orange}08)`, padding: '18px', boxShadow: `0 24px 64px ${theme.shadow}`, display: 'grid', gap: '16px' }} className="dashboard-panel">
@@ -506,6 +1071,60 @@ export default function Dashboard() {
 
             <MetricGrid items={wellnessCards} theme={theme} />
           </div>
+        </section>
+
+        <section
+          style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '12px', cursor: 'pointer' }}
+          className="dashboard-panel"
+          role="button"
+          tabIndex={0}
+          onClick={() => router.push('/leaderboard')}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') router.push('/leaderboard');
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Wellness showdown</div>
+              <div style={{ fontSize: '24px', fontWeight: 800, color: theme.textHeading, marginTop: '6px' }}>{showdownTitle}</div>
+            </div>
+            <div style={{ fontSize: '11px', color: theme.textMuted, fontWeight: 700 }}>{`${Math.max(0, comparisonTrendRows.length - 1)} rivals • open leaderboard`}</div>
+          </div>
+
+          <div style={{ fontSize: '12px', color: theme.textSecondary, lineHeight: 1.55 }}>Fight mode: each line keeps a fixed color, rank badges (1,2,3...) are stamped at the finish, and legend chips map rank to plan and player.</div>
+
+          <ComparisonTrendChart rows={comparisonTrendRows} theme={theme} emptyLabel="Add wellness activity and active buddies to start the score sprint" />
+        </section>
+
+        <section
+          style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '12px', cursor: 'pointer' }}
+          className="dashboard-panel"
+          role="button"
+          tabIndex={0}
+          onClick={() => router.push('/leaderboard')}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') router.push('/leaderboard');
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Activity duel board</div>
+              <div style={{ fontSize: '24px', fontWeight: 800, color: theme.textHeading, marginTop: '6px' }}>Who Trained More?</div>
+            </div>
+            <div style={{ fontSize: '11px', color: theme.textMuted, fontWeight: 700 }}>{`${Math.max(0, activityShowdownRows.length - 1)} rivals • open leaderboard`}</div>
+          </div>
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 12px' }}>
+            {activityShowdownRows.map((row) => (
+              <div key={`${row.id}-activity-legend`} style={{ display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '11px', color: theme.textSecondary, fontWeight: 700, padding: '6px 10px', borderRadius: '999px', background: `${row.color}10`, border: `1px solid ${row.color}33` }}>
+                <span style={{ minWidth: '18px', height: '18px', borderRadius: '999px', background: row.color, color: '#fff', display: 'inline-grid', placeItems: 'center', fontSize: '10px', fontWeight: 900 }}>{row.rank}</span>
+                <span style={{ width: '10px', height: '10px', borderRadius: '999px', background: row.color }} />
+                <span style={{ color: theme.textHeading }}>{row.displayPlanName || row.name}</span>
+              </div>
+            ))}
+          </div>
+
+          <ActivityFaceoffChart rows={activityShowdownRows} theme={theme} emptyLabel="Add activity minutes for you and your buddies to unlock the duel board" />
         </section>
 
         <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.18fr) minmax(300px, 0.82fr)', gap: '16px' }} className="dashboard-market-grid">

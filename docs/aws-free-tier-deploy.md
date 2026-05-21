@@ -98,6 +98,35 @@ docker compose -f docker-compose.ec2.yml up -d --build
 
 Chat websocket and wellness requests are routed through the same public host on port `80`.
 
+## Enable HTTPS (Free Tier Friendly)
+
+Use a domain + Let's Encrypt on the same EC2 host. This keeps costs in free-tier range and avoids ALB/ACM charges.
+
+Prerequisites:
+
+1. A domain record pointing to your EC2 public IP (A record).
+2. Security Group allows inbound `80` and `443`.
+3. Repo present at `/opt/cosmix` on EC2.
+
+Steps on EC2:
+
+```bash
+cd /opt/cosmix
+chmod +x scripts/setup-https-ec2.sh
+scripts/setup-https-ec2.sh <your-domain> <your-email>
+```
+
+What this script does:
+
+1. Requests Let's Encrypt cert via certbot container.
+2. Starts nginx with `infra/nginx.ec2.https.conf` and `infra/docker-compose.ec2.https.yml`.
+3. Configures nightly renewal + nginx restart.
+
+After success:
+
+- Web: `https://<your-domain>/`
+- HTTP automatically redirects to HTTPS.
+
 ## Important Limitations
 
 - First Docker build on `t3.micro` will be slow.
@@ -130,3 +159,21 @@ Once you send the values from the checklist above, the remaining work is straigh
 2. Provision the EC2 host
 3. Start the stack
 4. Verify the public endpoints
+
+## Push + Scheduler Env Vars (Chat Service)
+
+Add these in `infra/.env` (used by `chat-service`):
+
+```env
+WEB_PUSH_VAPID_PUBLIC_KEY=<base64url-public-key>
+WEB_PUSH_VAPID_PRIVATE_KEY=<base64url-private-key>
+WEB_PUSH_CONTACT_EMAIL=mailto:alerts@yourdomain.com
+WELLNESS_REMINDER_LOCAL_TIME=20:00
+WELLNESS_REMINDER_TIMEZONE=Asia/Kolkata
+```
+
+Generate VAPID keys once:
+
+```bash
+npx web-push generate-vapid-keys
+```

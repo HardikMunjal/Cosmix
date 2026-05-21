@@ -1,6 +1,7 @@
 import { useRouter } from 'next/router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import io from 'socket.io-client';
+import { logoutClientSession } from '../lib/auth-client';
 import { useTheme } from '../lib/ThemePicker';
 
 let socket = null;
@@ -102,6 +103,13 @@ function parseReplyEnvelope(text) {
 
 function normalizeUsername(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+function base64UrlToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = window.atob(base64);
+  return Uint8Array.from(raw, (char) => char.charCodeAt(0));
 }
 
 function createStyles(theme) {
@@ -785,6 +793,7 @@ export default function ChatPage() {
   });
   const [folderForm, setFolderForm] = useState({ name: '', description: '' });
   const [folderSelections, setFolderSelections] = useState({});
+  const [selectedUploadFolderId, setSelectedUploadFolderId] = useState('');
   const [showBookmarkedOnly, setShowBookmarkedOnly] = useState(false);
   const [memberSecurityForm, setMemberSecurityForm] = useState({ username: '', role: 'member', canView: true, canPost: true, canComment: true, canInvite: false });
   const [activeReplyMessageId, setActiveReplyMessageId] = useState('');
@@ -793,6 +802,15 @@ export default function ChatPage() {
   const [activePanelTab, setActivePanelTab] = useState('');
   const [sidebarPanel, setSidebarPanel] = useState('');
   const [sidebarFilter, setSidebarFilter] = useState('');
+  const [callParticipants, setCallParticipants] = useState([]);
+  const [joinedCallRoom, setJoinedCallRoom] = useState('');
+  const [callStatusByGroup, setCallStatusByGroup] = useState({});
+  const [pushPreferences, setPushPreferences] = useState({
+    muteAll: false,
+    mutedGroupIds: [],
+    mutedUsernames: [],
+    wellnessReminderEnabled: true,
+  });
 
   const messagesContainerRef = useRef(null);
   const messagesEndRef = useRef(null);
@@ -804,6 +822,8 @@ export default function ChatPage() {
   const previousMessageCountRef = useRef(0);
   const incomingRequestsRef = useRef([]);
   const permissionAskedRef = useRef(false);
+  const pushSubscribedRef = useRef(false);
+  const callRoomRef = useRef('');
 
   const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
   const isLocalHost = host === 'localhost' || host === '127.0.0.1';
@@ -835,6 +855,24 @@ export default function ChatPage() {
     () => bootstrap.groups.filter((group) => group.parentGroupId === selectedGroup?.id),
     [bootstrap.groups, selectedGroup?.id],
   );
+  const callPresenceRoom = useMemo(
+    () => (selectedGroup?.id ? `group:${selectedGroup.id}` : ''),
+    [selectedGroup?.id],
+  );
+
+  useEffect(() => {
+    if (!selectedGroup?.id) {
+      setSelectedUploadFolderId('');
+      return;
+    }
+    const firstFolderId = selectedGroup.folders?.[0]?.id || '';
+    setSelectedUploadFolderId((previous) => {
+      if (previous && (selectedGroup.folders || []).some((folder) => folder.id === previous)) {
+        return previous;
+      }
+      return firstFolderId;
+    });
+  }, [selectedGroup?.id, selectedGroup?.folders]);
 
   const filteredFriends = useMemo(() => {
     if (!sidebarFilter.trim()) return bootstrap.friends;
@@ -870,6 +908,55 @@ export default function ChatPage() {
     window.Notification.requestPermission().catch(() => {});
   }, [user?.username]);
 
+  useEffect(() => {
+    callRoomRef.current = callPresenceRoom;
+  }, [callPresenceRoom]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !user?.username || pushSubscribedRef.current) return;
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const permission = window.Notification.permission === 'default'
+          ? await window.Notification.requestPermission()
+          : window.Notification.permission;
+        if (permission !== 'granted') return;
+
+        const registration = await navigator.serviceWorker.register('/push-sw.js');
+        const readyRegistration = await navigator.serviceWorker.ready;
+        const keyResponse = await fetch(`${chatApiBase}/push/public-key`);
+        const keyPayload = await readJsonResponse(keyResponse);
+        const publicKey = String(keyPayload?.publicKey || '').trim();
+        if (!publicKey) return;
+
+        const existingSubscription = await readyRegistration.pushManager.getSubscription();
+        const subscription = existingSubscription || await readyRegistration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: base64UrlToUint8Array(publicKey),
+        });
+
+        await fetch(`${chatApiBase}/push/subscribe`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ actorUsername: user.username, subscription }),
+        }).then(readJsonResponse);
+
+        if (!cancelled) {
+          pushSubscribedRef.current = true;
+          reportStatus('Web push notifications enabled.');
+        }
+      } catch (_) {
+        // Push setup is best-effort and should not break chat.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [chatApiBase, user?.username]);
+
   function pushToast(title, body = '') {
     const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setToasts((previous) => [...previous.slice(-3), { id, title, body }]);
@@ -893,6 +980,14 @@ export default function ChatPage() {
 
   function applyBootstrap(nextBootstrap, nextChat = null) {
     setBootstrap(nextBootstrap);
+    if (nextBootstrap?.pushPreferences) {
+      setPushPreferences({
+        muteAll: Boolean(nextBootstrap.pushPreferences.muteAll),
+        mutedGroupIds: Array.isArray(nextBootstrap.pushPreferences.mutedGroupIds) ? nextBootstrap.pushPreferences.mutedGroupIds : [],
+        mutedUsernames: Array.isArray(nextBootstrap.pushPreferences.mutedUsernames) ? nextBootstrap.pushPreferences.mutedUsernames : [],
+        wellnessReminderEnabled: nextBootstrap.pushPreferences.wellnessReminderEnabled !== false,
+      });
+    }
     const fallbackChat = getDefaultChat(nextBootstrap, user?.username);
     const activeChatCandidate = nextChat || activeChatRef.current;
 
@@ -930,6 +1025,18 @@ export default function ChatPage() {
   function reportError(message) {
     setStatusMessage(message);
     pushToast('Action failed', message);
+  }
+
+  async function handleLogout() {
+    try {
+      if (socket) {
+        socket.disconnect();
+        socket = null;
+      }
+    } catch (_) {
+      // Ignore socket teardown failures.
+    }
+    await logoutClientSession(router);
   }
 
   function describeChat(chat) {
@@ -1054,7 +1161,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     let active = true;
-    fetch('/api/auth/session')
+    fetch('/api/auth/session', { cache: 'no-store' })
       .then(async (response) => {
         const payload = await response.json().catch(() => ({}));
         if (!active) return;
@@ -1102,6 +1209,7 @@ export default function ChatPage() {
     socket.on('connect', () => {
       setConnectionState('connected');
       socket.emit('join', { username: user.username, userId: user.id || null, avatar: user.avatar || null });
+      socket.emit('call_status_snapshot');
     });
 
     socket.on('disconnect', () => {
@@ -1144,6 +1252,34 @@ export default function ChatPage() {
       }, 1500);
     });
 
+    socket.on('call_presence', (payload) => {
+      if (!payload?.room || payload.room !== callRoomRef.current) return;
+      setCallParticipants(Array.isArray(payload.participants) ? payload.participants : []);
+    });
+
+    socket.on('call_status', (payload) => {
+      const room = String(payload?.room || '').trim();
+      if (!room.startsWith('group:')) return;
+      const groupId = room.slice('group:'.length);
+      const count = Math.max(0, Number(payload?.count || 0));
+      setCallStatusByGroup((previous) => ({
+        ...previous,
+        [groupId]: count,
+      }));
+    });
+
+    socket.on('call_status_snapshot', (list) => {
+      const next = {};
+      (Array.isArray(list) ? list : []).forEach((entry) => {
+        const room = String(entry?.room || '').trim();
+        if (!room.startsWith('group:')) return;
+        const groupId = room.slice('group:'.length);
+        const count = Math.max(0, Number(entry?.count || 0));
+        next[groupId] = count;
+      });
+      setCallStatusByGroup(next);
+    });
+
     socket.on('chat_error', (payload) => {
       reportError(payload?.message || 'Chat request failed.');
     });
@@ -1165,6 +1301,27 @@ export default function ChatPage() {
     if (!socket || connectionState !== 'connected' || !user?.username || !activeChat) return;
     socket.emit('open_chat', { chat: { type: activeChat.type, id: activeChat.id, name: activeChat.name } });
   }, [activeChat, connectionState, user?.username]);
+
+  useEffect(() => {
+    if (!socket || connectionState !== 'connected') return undefined;
+    if (!callPresenceRoom) {
+      setCallParticipants([]);
+      return undefined;
+    }
+    socket.emit('call_presence_watch', { room: callPresenceRoom });
+    return () => {
+      socket?.emit('call_presence_unwatch', { room: callPresenceRoom });
+    };
+  }, [callPresenceRoom, connectionState]);
+
+  useEffect(() => {
+    if (!joinedCallRoom) return;
+    if (joinedCallRoom === callPresenceRoom) return;
+    if (socket && connectionState === 'connected') {
+      socket.emit('call_leave', { room: joinedCallRoom });
+    }
+    setJoinedCallRoom('');
+  }, [callPresenceRoom, connectionState, joinedCallRoom]);
 
   useEffect(() => {
     const chatKey = getChatKey(activeChat);
@@ -1379,32 +1536,79 @@ export default function ChatPage() {
   }
 
   async function handleGroupImageUpload(event) {
-    const file = event.target.files?.[0];
-    if (!file || !selectedGroup || !user?.username) return;
+    const files = Array.from(event.target.files || []);
+    if (!files.length || !selectedGroup || !user?.username) return;
+
+    const folderId = selectedUploadFolderId || '';
 
     try {
       const formData = new FormData();
-      formData.append('file', file);
+      files.forEach((file) => {
+        formData.append('files', file);
+      });
       formData.append('username', user.username);
       formData.append('groupId', selectedGroup.id);
+      if (folderId) {
+        const folderName = (selectedGroup.folders || []).find((entry) => entry.id === folderId)?.name || '';
+        if (folderName) formData.append('folderName', folderName);
+      }
       const uploadResponse = await fetch('/api/chat/group-image-upload', { method: 'POST', body: formData });
       const uploadPayload = await readJsonResponse(uploadResponse);
 
-      await submitJson(`/groups/${selectedGroup.id}/images`, 'POST', {
-        actorUsername: user.username,
-        imageUrl: uploadPayload.url,
-        s3Key: uploadPayload.key,
-        caption: imageCaption.trim(),
-      }, (payload) => {
-        const refreshed = payload.groups.find((group) => group.id === selectedGroup.id);
-        return refreshed ? { type: 'group', id: refreshed.id, name: refreshed.name, label: refreshed.name } : getDefaultChat(payload, user?.username);
-      });
+      const uploads = Array.isArray(uploadPayload?.uploads)
+        ? uploadPayload.uploads
+        : (uploadPayload?.url && uploadPayload?.key ? [{ url: uploadPayload.url, key: uploadPayload.key }] : []);
+      if (!uploads.length) {
+        throw new Error('No files were uploaded.');
+      }
+
+      for (const uploaded of uploads) {
+        const payload = await submitJson(`/groups/${selectedGroup.id}/images`, 'POST', {
+          actorUsername: user.username,
+          imageUrl: uploaded.url,
+          s3Key: uploaded.key,
+          caption: imageCaption.trim(),
+        }, (nextPayload) => {
+          const refreshed = nextPayload.groups.find((group) => group.id === selectedGroup.id);
+          return refreshed ? { type: 'group', id: refreshed.id, name: refreshed.name, label: refreshed.name } : getDefaultChat(nextPayload, user?.username);
+        });
+
+        if (folderId) {
+          const refreshed = payload.groups.find((group) => group.id === selectedGroup.id);
+          const image = (refreshed?.images || []).find((entry) => entry.s3Key === uploaded.key);
+          if (image?.id) {
+            await submitJson(`/groups/${selectedGroup.id}/folders/${folderId}/items`, 'POST', {
+              actorUsername: user.username,
+              imageId: image.id,
+            }, (nextPayload) => {
+              const nextGroup = nextPayload.groups.find((group) => group.id === selectedGroup.id);
+              return nextGroup ? { type: 'group', id: nextGroup.id, name: nextGroup.name, label: nextGroup.name } : getDefaultChat(nextPayload, user?.username);
+            });
+          }
+        }
+      }
 
       setImageCaption('');
       event.target.value = '';
-      reportStatus('Group image uploaded.');
+      reportStatus(`${uploads.length} image${uploads.length === 1 ? '' : 's'} uploaded.`);
     } catch (error) {
+      event.target.value = '';
       reportError(error.message);
+    }
+  }
+
+  async function handleDownloadGroupImage(image) {
+    if (!image?.s3Key) {
+      reportError('Image key is missing.');
+      return;
+    }
+    try {
+      const response = await fetch(`/api/chat/group-image-download?s3Key=${encodeURIComponent(image.s3Key)}`);
+      const payload = await readJsonResponse(response);
+      if (!payload?.url) throw new Error('Unable to generate download link.');
+      window.open(payload.url, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      reportError(error.message || 'Download failed.');
     }
   }
 
@@ -1580,7 +1784,11 @@ export default function ChatPage() {
 
   function handleSendMessage(event) {
     event.preventDefault();
-    if (!socket || !activeChat || !composerText.trim() || connectionState !== 'connected') return;
+    if (!socket || connectionState !== 'connected') {
+      reportError('Not connected to chat. Please wait while reconnecting...');
+      return;
+    }
+    if (!activeChat || !composerText.trim()) return;
     socket.emit('message', {
       type: 'text',
       text: composerText.trim(),
@@ -1592,9 +1800,58 @@ export default function ChatPage() {
 
   function openWhatsAppShare() {
     if (!selectedGroup || typeof window === 'undefined') return;
-    const inviteUrl = new URL(`/join-group/${encodeURIComponent(String(selectedGroup.shareToken || '').trim())}`, window.location.origin).toString();
-    const message = `${inviteUrl}\n\nJoin ${selectedGroup.name} on Cosmix`;
-    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer');
+    const inviteUrl = new URL(`/j/${encodeURIComponent(String(selectedGroup.shareToken || '').trim())}`, window.location.origin).toString();
+    window.open(`https://wa.me/?text=${encodeURIComponent(inviteUrl)}`, '_blank', 'noopener,noreferrer');
+  }
+
+  async function updatePushPreferences(nextPartial) {
+    if (!user?.username) return;
+    const next = {
+      ...pushPreferences,
+      ...nextPartial,
+    };
+    try {
+      const response = await fetch(`${chatApiBase}/push/preferences`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actorUsername: user.username,
+          muteAll: Boolean(next.muteAll),
+          mutedGroupIds: Array.from(new Set(next.mutedGroupIds || [])),
+          mutedUsernames: Array.from(new Set((next.mutedUsernames || []).map((entry) => normalizeUsername(entry)).filter(Boolean))),
+          wellnessReminderEnabled: next.wellnessReminderEnabled !== false,
+        }),
+      });
+      const payload = await readJsonResponse(response);
+      setPushPreferences({
+        muteAll: Boolean(payload.muteAll),
+        mutedGroupIds: Array.isArray(payload.mutedGroupIds) ? payload.mutedGroupIds : [],
+        mutedUsernames: Array.isArray(payload.mutedUsernames) ? payload.mutedUsernames : [],
+        wellnessReminderEnabled: payload.wellnessReminderEnabled !== false,
+      });
+    } catch (error) {
+      reportError(error.message || 'Unable to save push preferences.');
+    }
+  }
+
+  function handleJoinCall(callUrl) {
+    if (!callPresenceRoom || !socket || connectionState !== 'connected') {
+      if (callUrl) {
+        window.open(callUrl, '_blank', 'noopener,noreferrer');
+      }
+      return;
+    }
+    socket.emit('call_join', { room: callPresenceRoom });
+    setJoinedCallRoom(callPresenceRoom);
+    if (callUrl) {
+      window.open(callUrl, '_blank', 'noopener,noreferrer');
+    }
+  }
+
+  function handleLeaveCall() {
+    if (!joinedCallRoom || !socket || connectionState !== 'connected') return;
+    socket.emit('call_leave', { room: joinedCallRoom });
+    setJoinedCallRoom('');
   }
 
   const canPostToGroup = selectedMembership?.canPost;
@@ -1603,6 +1860,9 @@ export default function ChatPage() {
   const isGroupOwner = selectedMembership?.role === 'owner';
   const canManageFolders = selectedMembership?.role === 'owner' || selectedMembership?.role === 'admin' || !selectedGroup?.settings?.onlyAdminsCreateFolders;
   const canBookmarkMessages = selectedMembership?.role === 'owner' || selectedMembership?.role === 'admin' || !selectedGroup?.settings?.onlyAdminsBookmarkMessages;
+  const isInCurrentCall = Boolean(callPresenceRoom && joinedCallRoom === callPresenceRoom);
+  const isCurrentGroupMuted = Boolean(selectedGroup?.id && pushPreferences.mutedGroupIds.includes(selectedGroup.id));
+  const isCurrentDmMuted = Boolean(activeChat?.type === 'dm' && pushPreferences.mutedUsernames.includes(normalizeUsername(activeChat.name)));
 
   // ── panel render helpers ────────────────────────────────────────────────
   function renderMembersPanel() {
@@ -1695,10 +1955,16 @@ export default function ChatPage() {
         <div style={styles.formRow}>
           <p style={styles.label}>Upload Image</p>
           <input style={styles.input} value={imageCaption} onChange={(e) => setImageCaption(e.target.value)} placeholder="Optional caption" />
+          <select style={styles.select} value={selectedUploadFolderId} onChange={(event) => setSelectedUploadFolderId(event.target.value)}>
+            <option value="">No folder</option>
+            {(selectedGroup.folders || []).map((folder) => (
+              <option key={folder.id} value={folder.id}>{folder.name}</option>
+            ))}
+          </select>
           <button type="button" style={{ ...styles.btn, ...styles.btnSecondary }} onClick={() => fileInputRef.current?.click()} disabled={!canPostToGroup}>
-            📎 Choose Image
+            📎 Choose Image(s)
           </button>
-          <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleGroupImageUpload} />
+          <input ref={fileInputRef} type="file" multiple accept="image/*" style={{ display: 'none' }} onChange={handleGroupImageUpload} />
           <p style={styles.helperText}>{selectedGroup.images.length} images in this group</p>
         </div>
         {selectedGroup.images.length > 0 && (
@@ -1709,6 +1975,9 @@ export default function ChatPage() {
                 <div style={{ padding: '8px 10px' }}>
                   <div style={styles.listItemTitle}>{image.caption || 'Untitled'}</div>
                   <div style={styles.listItemMeta}>by {image.uploadedBy}</div>
+                  <button type="button" style={{ ...styles.btn, ...styles.btnSecondary, marginTop: '8px' }} onClick={() => handleDownloadGroupImage(image)}>
+                    Download
+                  </button>
                   {canCommentInGroup ? (
                     <div style={{ display: 'grid', gap: '6px', marginTop: '8px' }}>
                       <input style={styles.input} value={commentDrafts[image.id] || ''} onChange={(e) => setCommentDrafts((p) => ({ ...p, [image.id]: e.target.value }))} placeholder="Add comment…" />
@@ -1726,35 +1995,119 @@ export default function ChatPage() {
 
   function renderInvitePanel() {
     const inviteUrl = selectedGroup?.shareToken && typeof window !== 'undefined'
-      ? new URL(`/join-group/${encodeURIComponent(String(selectedGroup.shareToken || '').trim())}`, window.location.origin).toString()
+      ? new URL(`/j/${encodeURIComponent(String(selectedGroup.shareToken || '').trim())}`, window.location.origin).toString()
+      : '';
+    const callUrl = selectedGroup?.id
+      ? `https://meet.jit.si/cosmix-thread-${String(selectedGroup.id).replace(/[^a-zA-Z0-9-]/g, '-')}`
       : '';
     return (
       <>
         {inviteUrl && (
           <div style={styles.formRow}>
             <p style={styles.label}>Invite Link</p>
-            <div style={{ ...styles.listItem, wordBreak: 'break-all' }}>
-              <a href={inviteUrl} target="_blank" rel="noreferrer" style={{ ...styles.listItemMeta, fontSize: '11px', color: theme.blue }}>
-                {inviteUrl}
-              </a>
-            </div>
+            <input
+              style={{ ...styles.input, fontSize: '12px' }}
+              value={inviteUrl}
+              readOnly
+              onFocus={(event) => event.target.select()}
+            />
             <button
               type="button"
               style={styles.btn}
               onClick={async () => {
                 try {
                   await copyText(inviteUrl);
-                  reportStatus('Link copied!');
+                  reportStatus('Invite URL copied.');
                 } catch (error) {
                   reportError(error.message || 'Copy failed.');
                 }
               }}
             >
-              📋 Copy Link
+              📋 Copy URL Only
             </button>
             <button type="button" style={{ ...styles.btn, background: '#25D366', border: 'none', color: '#fff' }} onClick={openWhatsAppShare}>
-              💬 Share on WhatsApp
+              💬 Share URL on WhatsApp
             </button>
+            {callUrl ? (
+              <>
+                    <label style={styles.helperText}>
+                      <input
+                        type="checkbox"
+                        checked={isCurrentGroupMuted}
+                        onChange={(event) => {
+                          const groupId = selectedGroup?.id;
+                          if (!groupId) return;
+                          const nextSet = new Set(pushPreferences.mutedGroupIds || []);
+                          if (event.target.checked) nextSet.add(groupId);
+                          else nextSet.delete(groupId);
+                          void updatePushPreferences({ mutedGroupIds: Array.from(nextSet) });
+                        }}
+                      />
+                      {' '}Mute push for this group
+                    </label>
+                    <label style={styles.helperText}>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(pushPreferences.muteAll)}
+                        onChange={(event) => {
+                          void updatePushPreferences({ muteAll: event.target.checked });
+                        }}
+                      />
+                      {' '}Mute all push notifications
+                    </label>
+                    <label style={styles.helperText}>
+                      <input
+                        type="checkbox"
+                        checked={pushPreferences.wellnessReminderEnabled !== false}
+                        onChange={(event) => {
+                          void updatePushPreferences({ wellnessReminderEnabled: event.target.checked });
+                        }}
+                      />
+                      {' '}Enable daily wellness reminder push
+                    </label>
+                <button
+                  type="button"
+                  style={{ ...styles.btn, ...styles.btnSecondary }}
+                  onClick={async () => {
+                    try {
+                      await copyText(callUrl);
+                      reportStatus('Call room link copied.');
+                    } catch (error) {
+                      reportError(error.message || 'Copy failed.');
+                    }
+                  }}
+                >
+                  📞 Copy Video Call Link
+                </button>
+                <button
+                  type="button"
+                  style={styles.btn}
+                  onClick={() => handleJoinCall(callUrl)}
+                >
+                  🎥 Join Thread Video Call
+                </button>
+                {isInCurrentCall ? (
+                  <button
+                    type="button"
+                    style={{ ...styles.btn, ...styles.btnSecondary }}
+                    onClick={handleLeaveCall}
+                  >
+                    ⛔ Leave Call Presence
+                  </button>
+                ) : null}
+                <div style={styles.formRow}>
+                  <p style={styles.label}>In Call ({callParticipants.length})</p>
+                  {callParticipants.length ? callParticipants.map((participant) => (
+                    <div key={`${participant.username}-${participant.joinedAt}`} style={styles.listItem}>
+                      <div style={styles.listItemText}>
+                        <div style={styles.listItemTitle}>{participant.username}</div>
+                        <div style={styles.listItemMeta}>Joined call</div>
+                      </div>
+                    </div>
+                  )) : <p style={styles.helperText}>No one is in the thread call yet.</p>}
+                </div>
+              </>
+            ) : null}
           </div>
         )}
       </>
@@ -1812,6 +2165,7 @@ export default function ChatPage() {
         <div style={styles.sidebarHeader}>
           <div style={styles.sidebarAvatar}>{(user?.username || '?').slice(0, 2).toUpperCase()}</div>
           <span style={styles.sidebarUsername}>{user?.username || 'Loading…'}</span>
+          <button type="button" title="Logout" style={{ ...styles.iconBtn, padding: '0 10px', minWidth: '70px', height: '28px', fontSize: '11px', fontWeight: 800 }} onClick={handleLogout}>Logout</button>
           <div style={{ ...styles.connDot, background: connectionState === 'connected' ? theme.green : connectionState === 'connecting' ? theme.orange : theme.red }} title={connectionState} />
         </div>
 
@@ -1863,6 +2217,7 @@ export default function ChatPage() {
               {filteredGroups.map(({ group, depth }) => {
                 const chatKey = getChatKey({ type: 'group', id: group.id });
                 const isActive = activeChat?.type === 'group' && activeChat?.id === group.id;
+                const activeCallCount = Number(callStatusByGroup[group.id] || 0);
                 return (
                   <button key={group.id} type="button" className="sidebar-item" style={{ ...styles.sidebarItem, paddingLeft: `${14 + depth * 12}px`, ...(isActive ? styles.sidebarItemActive : {}) }} onClick={() => { selectGroup(group); setShowSidebar(false); }}>
                     <div style={{ ...styles.sidebarItemAvatar, background: getUserColor(group.name, theme), fontSize: '15px' }}>{depth ? '↳' : '#'}</div>
@@ -1870,6 +2225,7 @@ export default function ChatPage() {
                       <div style={styles.sidebarItemName}>{group.name}</div>
                       <div style={styles.sidebarItemMeta}>{group.memberships.length} members</div>
                     </div>
+                    {activeCallCount > 0 ? <span style={{ ...styles.sidebarUnread, background: theme.green }}>{activeCallCount}📞</span> : null}
                     {unreadCounts[chatKey] ? <span style={styles.sidebarUnread}>{unreadCounts[chatKey]}</span> : null}
                   </button>
                 );
@@ -1962,6 +2318,23 @@ export default function ChatPage() {
           </div>
           <div style={styles.topBarIcons}>
             <button type="button" title="Dashboard" style={styles.iconBtn} onClick={() => router.push('/dashboard')}>🏠</button>
+            <button type="button" title="Logout" style={{ ...styles.iconBtn, padding: '0 10px', minWidth: '70px', fontSize: '11px', fontWeight: 800 }} onClick={handleLogout}>Logout</button>
+            {activeChat?.type === 'dm' ? (
+              <button
+                type="button"
+                title={isCurrentDmMuted ? 'Unmute DM push' : 'Mute DM push'}
+                style={{ ...styles.iconBtn, ...(isCurrentDmMuted ? styles.iconBtnActive : {}) }}
+                onClick={() => {
+                  const target = normalizeUsername(activeChat.name);
+                  const nextSet = new Set(pushPreferences.mutedUsernames || []);
+                  if (nextSet.has(target)) nextSet.delete(target);
+                  else nextSet.add(target);
+                  void updatePushPreferences({ mutedUsernames: Array.from(nextSet) });
+                }}
+              >
+                {isCurrentDmMuted ? '🔕' : '🔔'}
+              </button>
+            ) : null}
             <div style={{ ...styles.connDot, background: connectionState === 'connected' ? theme.green : connectionState === 'connecting' ? theme.orange : theme.red }} title={connectionState} />
             {selectedGroup && (
               <>

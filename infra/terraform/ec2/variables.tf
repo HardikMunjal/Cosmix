@@ -124,3 +124,29 @@ variable "strava_client_secret" {
   sensitive   = true
   default     = ""
 }
+
+# ── RDS ──────────────────────────────────────────────────────────────────────
+
+variable "rds_az" {
+  description = "AZ for the RDS private subnet — must differ from availability_zone"
+  type        = string
+  default     = "us-east-1b"
+}
+
+variable "rds_subnet_cidr" {
+  description = "CIDR block for the RDS private subnet"
+  type        = string
+  default     = "10.42.2.0/24"
+}
+
+variable "rds_instance_class" {
+  description = "RDS instance class (db.t3.micro is free-tier eligible)"
+  type        = string
+  default     = "db.t3.micro"
+}
+
+variable "rds_postgres_version" {
+  description = "PostgreSQL engine version for RDS"
+  type        = string
+  default     = "16"
+}

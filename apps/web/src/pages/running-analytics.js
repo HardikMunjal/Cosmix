@@ -117,8 +117,101 @@ function WellnessRow({ entry, theme }) {
   );
 }
 
+function PaceTrendChart({ runRows, theme }) {
+  const paceData = [...(runRows || [])]
+    .filter((r) => r.distance > 0 && r.minutes > 0)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+    .slice(-20)
+    .map((r) => ({ date: r.date, pace: r.minutes / r.distance }));
+  if (paceData.length < 2) return null;
+  const W = 400, H = 100;
+  const minPace = Math.min(...paceData.map((d) => d.pace));
+  const maxPace = Math.max(...paceData.map((d) => d.pace));
+  const range = Math.max(0.5, maxPace - minPace);
+  const pts = paceData.map((d, i) => {
+    const x = (i / (paceData.length - 1)) * W;
+    const y = H - ((d.pace - minPace) / range) * (H - 20) - 10;
+    return `${x},${y}`;
+  }).join(' ');
+  const fillPts = `0,${H} ${pts} ${W},${H}`;
+  return (
+    <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: '18px', padding: '16px 20px' }}>
+      <div style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.13em', color: theme.textMuted, marginBottom: '10px' }}>Pace Trend — min/km (lower = faster)</div>
+      <div style={{ overflowX: 'auto' }}>
+        <svg viewBox={`0 0 ${W} ${H + 20}`} style={{ width: '100%', height: H + 20, minWidth: 200 }}>
+          <defs>
+            <linearGradient id="pace-fill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={theme.cyan} stopOpacity="0.25" />
+              <stop offset="100%" stopColor={theme.cyan} stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          <polygon fill="url(#pace-fill)" points={fillPts} />
+          <polyline fill="none" stroke={theme.cyan} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" points={pts} />
+          {paceData.map((d, i) => {
+            const x = (i / (paceData.length - 1)) * W;
+            const y = H - ((d.pace - minPace) / range) * (H - 20) - 10;
+            const showLabel = i === 0 || i === paceData.length - 1 || i % Math.max(1, Math.floor(paceData.length / 5)) === 0;
+            return (
+              <g key={d.date}>
+                <circle cx={x} cy={y} r="3.5" fill={theme.cyan} />
+                {showLabel && <text x={x} y={H + 16} textAnchor="middle" fill={theme.textMuted} fontSize="9">{d.date.slice(5)}</text>}
+                {showLabel && <text x={x} y={y - 6} textAnchor="middle" fill={theme.cyan} fontSize="9" fontWeight="700">{fmtPace(d.pace)}</text>}
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '4px' }}>Last {paceData.length} runs</div>
+    </div>
+  );
+}
+
+function WeeklyMileageChart({ runRows, theme }) {
+  const weekMap = {};
+  (runRows || []).forEach((r) => {
+    const d = new Date(`${r.date}T00:00:00`);
+    const dayOfWeek = d.getDay();
+    const monday = new Date(d);
+    monday.setDate(d.getDate() - ((dayOfWeek + 6) % 7));
+    const key = monday.toISOString().slice(0, 10);
+    if (!weekMap[key]) weekMap[key] = { week: key, km: 0, sessions: 0 };
+    weekMap[key].km += Number(r.distance || 0);
+    weekMap[key].sessions += 1;
+  });
+  const weeks = Object.values(weekMap).sort((a, b) => a.week.localeCompare(b.week)).slice(-10);
+  if (weeks.length === 0) return null;
+  const maxKm = Math.max(...weeks.map((w) => w.km), 1);
+  const W = 420, H = 100;
+  const colW = W / weeks.length;
+  const barW = Math.max(12, colW * 0.55);
+  return (
+    <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: '18px', padding: '16px 20px' }}>
+      <div style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.13em', color: theme.textMuted, marginBottom: '10px' }}>Weekly Distance — km per week</div>
+      <div style={{ overflowX: 'auto' }}>
+        <svg viewBox={`0 0 ${W} ${H + 22}`} style={{ width: '100%', height: H + 22, minWidth: 180 }}>
+          {weeks.map((w, i) => {
+            const cx = i * colW + colW / 2;
+            const barH = Math.max(4, (w.km / maxKm) * (H - 12));
+            const y = H - barH;
+            const isLatest = i === weeks.length - 1;
+            const fill = isLatest ? theme.orange : theme.blue;
+            return (
+              <g key={w.week}>
+                <rect x={cx - barW / 2} y={y} width={barW} height={barH} rx="5" fill={fill} opacity={isLatest ? 1 : 0.65} />
+                <text x={cx} y={y - 4} textAnchor="middle" fill={fill} fontSize="9" fontWeight="800">{w.km.toFixed(1)}</text>
+                <text x={cx} y={H + 16} textAnchor="middle" fill={theme.textMuted} fontSize="8">{w.week.slice(5)}</text>
+              </g>
+            );
+          })}
+          <line x1="0" x2={W} y1={H} y2={H} stroke={theme.cardBorder} strokeWidth="1" />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
 // ─── sport tab panels ──────────────────────────────────────
-function RunningTab({ runStats, wellStats, wellSummary, name, theme }) {
+function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows }) {
   const noData = !runStats || runStats.totalRuns === 0;
   if (noData) return <EmptyState sport="Running" theme={theme} />;
   return (
@@ -153,11 +246,11 @@ function RunningTab({ runStats, wellStats, wellSummary, name, theme }) {
           <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: '18px', overflow: 'hidden' }}>
             <div style={{ padding: '14px 18px', fontWeight: 800, fontSize: '14px', color: theme.textHeading, borderBottom: `1px solid ${theme.cardBorder}` }}>{name}&apos;s Fastest Runs (min 2 km)</div>
             {(runStats.topSpeeds || []).slice(0, 7).map((e, i) => (
-              <div key={`${e.date}-${i}`} style={{ display: 'grid', gridTemplateColumns: '28px 1fr auto auto', gap: '10px', padding: '11px 18px', borderTop: i > 0 ? `1px solid ${theme.cardBorder}` : 'none', alignItems: 'center' }}>
+              <div key={`${e.date}-${i}`} style={{ display: 'grid', gridTemplateColumns: '28px 1fr 1fr auto', gap: '10px', padding: '11px 18px', borderTop: i > 0 ? `1px solid ${theme.cardBorder}` : 'none', alignItems: 'center' }}>
                 <span style={{ fontSize: '12px', fontWeight: 800, color: i === 0 ? theme.orange : theme.textMuted }}>#{i + 1}</span>
                 <span style={{ fontSize: '12px', color: theme.textSecondary }}>{fmtDate(e.date)}</span>
                 <span style={{ fontSize: '13px', fontWeight: 700, color: theme.green }}>{e.speed} km/h</span>
-                <span style={{ fontSize: '11px', color: theme.textMuted }}>{e.distance} km</span>
+                <span style={{ fontSize: '11px', color: theme.textMuted }}>{e.distance} km in {e.time}</span>
               </div>
             ))}
           </div>
@@ -174,6 +267,16 @@ function RunningTab({ runStats, wellStats, wellSummary, name, theme }) {
           </div>
         </div>
       </div>
+
+      {runRows && runRows.length > 1 && (
+        <div>
+          <SectionLabel theme={theme}>Performance Charts</SectionLabel>
+          <div className="sport-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+            <PaceTrendChart runRows={runRows} theme={theme} />
+            <WeeklyMileageChart runRows={runRows} theme={theme} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -408,7 +511,7 @@ export default function RunningAnalytics() {
           <OverviewTab wellStats={wellStats} wellSummary={wellSummary} allSportStats={allSportStats} name={name} theme={theme} />
         )}
         {activeTab === 'running' && (
-          <RunningTab runStats={runStats} wellStats={wellStats} wellSummary={wellSummary} name={name} theme={theme} />
+          <RunningTab runStats={runStats} wellStats={wellStats} wellSummary={wellSummary} name={name} theme={theme} runRows={allSportStats.running?.rows || []} />
         )}
         {activeTab === 'badminton' && (
           <SimpleSportTab stats={allSportStats.badminton} name={name} sportLabel="Badminton" minKey="badmintonMinutes" showDistance={false} accent={theme.yellow || '#eab308'} theme={theme} />

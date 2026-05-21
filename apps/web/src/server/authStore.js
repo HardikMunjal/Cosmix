@@ -397,18 +397,38 @@ export async function signUpUser(payload) {
 }
 
 export async function quickJoinWithName(payload) {
-  const displayName = normalizeName(payload.name || payload.username || '');
+  const username = validateUsername(payload.username);
+  const displayName = normalizeName(payload.name || username || '');
   if (!displayName) throw new Error('Name is required.');
-
-  const usernameSeed = buildUsernameSeedFromName(displayName);
-  const username = `${usernameSeed}.${crypto.randomBytes(2).toString('hex')}`;
-  const password = crypto.randomBytes(8).toString('hex');
+  const password = '123';
   return signUpUser({
     username,
     name: displayName,
     password,
     email: '',
   });
+}
+
+export async function checkUsernameAvailability(payload) {
+  const username = validateUsername(payload?.username);
+  const usernameKey = normalizeUsername(username);
+
+  if (hasPostgresStorage()) {
+    await ensureSeededUser();
+    const pool = getWebPool();
+    const existing = await pool.query('SELECT id FROM app_users WHERE username_key = $1 LIMIT 1', [usernameKey]);
+    return {
+      available: !existing.rows[0],
+      normalized: username,
+    };
+  }
+
+  const { users } = await getStores();
+  const existing = await users.findOneAsync({ usernameKey }).execAsync();
+  return {
+    available: !existing,
+    normalized: username,
+  };
 }
 
 export async function loginWithUsernamePassword(payload) {

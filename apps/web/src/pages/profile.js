@@ -66,6 +66,42 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, Number(value)));
 }
 
+function resolveWellnessUserId(account) {
+  return String(account?.id || account?.email || account?.username || '').trim();
+}
+
+function isSameUser(left, right) {
+  const leftId = String(left?.id || '').trim().toLowerCase();
+  const rightId = String(right?.id || '').trim().toLowerCase();
+  if (leftId && rightId && leftId === rightId) return true;
+
+  const leftUsername = String(left?.username || '').trim().toLowerCase();
+  const rightUsername = String(right?.username || '').trim().toLowerCase();
+  if (leftUsername && rightUsername && leftUsername === rightUsername) return true;
+
+  return false;
+}
+
+function computeRunningStreak(entries = []) {
+  const runDates = [...new Set((Array.isArray(entries) ? entries : [])
+    .filter((entry) => Number(entry?.runningDistanceKm || 0) > 0)
+    .map((entry) => String(entry?.date || ''))
+    .filter(Boolean)
+    .sort())];
+
+  if (!runDates.length) return 0;
+  let best = 1;
+  let current = 1;
+  for (let index = 1; index < runDates.length; index += 1) {
+    const prev = new Date(runDates[index - 1]);
+    const now = new Date(runDates[index]);
+    const diff = Math.round((now.getTime() - prev.getTime()) / 86400000);
+    current = diff === 1 ? current + 1 : 1;
+    if (current > best) best = current;
+  }
+  return best;
+}
+
 function getAvatarMediaStyle({ avatar, frame, mode }) {
   const activeMode = mode === 'body' ? 'body' : 'face';
   const width = avatar.isCutout ? (activeMode === 'body' ? '84%' : '70%') : '112%';
@@ -177,7 +213,10 @@ export default function Profile() {
   const avatarFileRef = useRef(null);
   const { theme, themeId, setTheme } = useTheme();
   const [user, setUser] = useState(null);
+  const [profileUser, setProfileUser] = useState(null);
   const [strategies, setStrategies] = useState([]);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [wellnessProfile, setWellnessProfile] = useState({ entries: [], dailyScores: [], plan: null, plans: [] });
   const [profileForm, setProfileForm] = useState({
     username: '',
     quote: '',
@@ -197,34 +236,120 @@ export default function Profile() {
 
   useEffect(() => {
     let active = true;
-
     restoreUserSession(router, setUser).then((sessionUser) => {
       if (!active || !sessionUser) return;
-      const avatarProfile = parseAvatarProfile(sessionUser.avatar || '');
-      setProfileForm({
-        username: sessionUser.username || '',
-        quote: sessionUser.quote || 'Building better decisions, one signal at a time.',
-        avatar: avatarProfile.src || '',
-        avatarCutout: avatarProfile.cutoutSrc || '',
-        avatarMode: avatarProfile.mode || 'face',
-        avatarRemoveBackground: avatarProfile.removeBackground || false,
-        avatarFrames: normalizeAvatarFrames(avatarProfile.frames),
-      });
+      setProfileUser(sessionUser);
     });
-
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, [router]);
+
+  const requestedUser = String(router.query.user || '').trim();
 
   useEffect(() => {
     if (!user) return;
+    const normalizedRequested = requestedUser.toLowerCase();
+    const selfMatches = !normalizedRequested
+      || normalizedRequested === String(user.username || '').toLowerCase()
+      || normalizedRequested === String(user.id || '').toLowerCase();
+
+    if (selfMatches) {
+      setProfileUser(user);
+      return;
+    }
+
+    let cancelled = false;
+    fetch(`/api/chat/buddy-search?q=${encodeURIComponent(requestedUser)}`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload) => {
+        if (cancelled) return;
+        const results = Array.isArray(payload?.results) ? payload.results : [];
+        const match = results.find((entry) => String(entry?.username || '').toLowerCase() === normalizedRequested)
+          || results[0]
+          || null;
+        if (!match) {
+          setProfileUser(user);
+          return;
+        }
+        setProfileUser({
+          id: String(match.id || '').trim(),
+          username: String(match.username || requestedUser).trim(),
+          name: String(match.name || match.username || requestedUser).trim(),
+          quote: String(match.quote || 'Focused on daily progress.').trim(),
+          avatar: String(match.avatar || ''),
+          email: String(match.email || ''),
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setProfileUser(user);
+      });
+
+    return () => { cancelled = true; };
+  }, [requestedUser, user]);
+
+  useEffect(() => {
+    if (!profileUser) return;
+    const avatarProfile = parseAvatarProfile(profileUser.avatar || '');
+    setProfileForm({
+      username: profileUser.username || '',
+      quote: profileUser.quote || 'Building better decisions, one signal at a time.',
+      avatar: avatarProfile.src || '',
+      avatarCutout: avatarProfile.cutoutSrc || '',
+      avatarMode: avatarProfile.mode || 'face',
+      avatarRemoveBackground: avatarProfile.removeBackground || false,
+      avatarFrames: normalizeAvatarFrames(avatarProfile.frames),
+    });
+    setIsEditMode(false);
+  }, [profileUser]);
+
+  const isOwnProfile = useMemo(() => isSameUser(user, profileUser), [user, profileUser]);
+
+  useEffect(() => {
+    if (!isOwnProfile || !user) {
+      setStrategies([]);
+      return;
+    }
 
     fetch('/api/options-strategies')
       .then((response) => response.ok ? response.json() : null)
       .then((data) => setStrategies(data?.strategies || []))
       .catch(() => setStrategies([]));
-  }, [user]);
+  }, [isOwnProfile, user]);
+
+  useEffect(() => {
+    if (!profileUser) return;
+    const base = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+      ? `${window.location.protocol}//${window.location.hostname}:3004`
+      : '';
+
+    const targetIds = Array.from(new Set([
+      resolveWellnessUserId(profileUser),
+      profileUser?.username ? `usr-${String(profileUser.username).toLowerCase()}` : '',
+    ].filter(Boolean)));
+
+    let cancelled = false;
+    const load = async () => {
+      for (const targetId of targetIds) {
+        try {
+          const response = await fetch(`${base}/wellness/data/${encodeURIComponent(targetId)}`);
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) continue;
+          if (cancelled) return;
+          setWellnessProfile({
+            entries: Array.isArray(data.entries) ? data.entries : [],
+            dailyScores: Array.isArray(data.dailyScores) ? data.dailyScores : [],
+            plan: data.plan || null,
+            plans: Array.isArray(data.plans) ? data.plans : [],
+          });
+          return;
+        } catch (_) {
+          // Try next target id.
+        }
+      }
+      if (!cancelled) setWellnessProfile({ entries: [], dailyScores: [], plan: null, plans: [] });
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [profileUser]);
 
   const insights = useMemo(() => buildProfileInsights({ strategies, userId: user?.id }), [strategies, user?.id]);
 
@@ -271,7 +396,7 @@ export default function Profile() {
       setStatus('Starting cutout in background (page stays responsive)...');
 
       const cutoutDataUrl = await new Promise((resolve, reject) => {
-        const worker = new Worker(new URL('../workers/cutout.worker.js', import.meta.url));
+        const worker = new Worker('/workers/cutout.worker.js', { type: 'module' });
         worker.onmessage = async (event) => {
           const { type } = event.data;
           if (type === 'progress') {
@@ -353,6 +478,7 @@ export default function Profile() {
   const previewFrame = avatarPreview.frames?.[previewMode] || editorFrame;
 
   const handleSave = async () => {
+    if (!isOwnProfile || !isEditMode) return;
     const nextUsername = profileForm.username.trim();
     const nextQuote = profileForm.quote.trim();
 
@@ -394,6 +520,7 @@ export default function Profile() {
       const avatarProfile = parseAvatarProfile(data.user.avatar || '');
       persistClientUser(data.user);
       setUser(data.user);
+      setProfileUser(data.user);
       setProfileForm({
         username: data.user.username,
         quote: data.user.quote || '',
@@ -403,6 +530,7 @@ export default function Profile() {
         avatarRemoveBackground: avatarProfile.removeBackground || false,
         avatarFrames: normalizeAvatarFrames(avatarProfile.frames),
       });
+      setIsEditMode(false);
       setStatus('Profile updated successfully.');
     } catch (error) {
       setStatus(error.message || 'Could not update profile.');
@@ -411,17 +539,26 @@ export default function Profile() {
     }
   };
 
-  if (!user) {
+  if (!user || !profileUser) {
     return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: theme.pageBgSolid, color: theme.textPrimary, fontFamily: theme.font }}>Loading...</div>;
   }
 
   const authLabel = user.authMethod === 'gmail' ? 'Gmail sign-in' : 'Username and password';
+  const orderedScores = [...(Array.isArray(wellnessProfile.dailyScores) ? wellnessProfile.dailyScores : [])]
+    .sort((left, right) => String(left.date || '').localeCompare(String(right.date || '')));
+  const latestScore = orderedScores[orderedScores.length - 1] || null;
+  const maxScore = orderedScores.reduce((best, row) => {
+    const value = Number(row?.cumulativeTotalScore || 0);
+    return value > best ? value : best;
+  }, 0);
+  const activeGoals = wellnessProfile.plan ? 1 : 0;
+  const completedGoals = 0;
   const statCards = [
-    { label: 'Total profit', value: formatCurrency(insights.totalProfit), hint: 'Across your saved strategies', accent: insights.totalProfit >= 0 ? theme.green : theme.red },
-    { label: 'Total fitness score', value: String(insights.totalFitnessScore), hint: 'From your logged wellness entries', accent: theme.blue },
-    { label: 'Total friends', value: String(insights.totalFriends), hint: 'Known chat contacts', accent: theme.orange },
-    { label: 'Running streak', value: `${insights.runningStreak} day${insights.runningStreak === 1 ? '' : 's'}`, hint: `${insights.weeklyRunningKm} km this week`, accent: theme.emerald },
-    { label: 'Highest run', value: `${insights.highestRunKm.toFixed(2)} km`, hint: 'Best logged distance', accent: theme.cyan },
+    { label: 'Current wellness score', value: Number(latestScore?.cumulativeTotalScore || 0).toFixed(1), hint: 'Latest cumulative score', accent: theme.blue },
+    { label: 'Best wellness score', value: Number(maxScore || 0).toFixed(1), hint: 'Peak cumulative score', accent: theme.cyan },
+    { label: 'Running streak', value: `${computeRunningStreak(wellnessProfile.entries)} day${computeRunningStreak(wellnessProfile.entries) === 1 ? '' : 's'}`, hint: 'Consecutive running days', accent: theme.emerald },
+    { label: 'My goals', value: String(activeGoals), hint: 'Active wellness plans', accent: theme.orange },
+    { label: 'Completed goals', value: String(completedGoals), hint: 'Closed plan count', accent: theme.green },
     { label: 'Fastest run', value: formatPace(insights.fastestRunPace), hint: 'Runs above 2 km only', accent: theme.purple },
   ];
 
@@ -457,13 +594,15 @@ export default function Profile() {
 
       <div style={styles.header} className="profile-header">
         <div>
-          <div style={styles.eyebrow}>Account settings</div>
-          <h1 style={styles.title}>Profile</h1>
-          <p style={styles.subtitle} className="profile-title-copy">Update your identity, image, theme, and track the personal stats that matter on one page.</p>
+          <div style={styles.eyebrow}>{isOwnProfile ? 'My public profile' : 'Public profile'}</div>
+          <h1 style={styles.title}>{isOwnProfile ? 'My Profile' : `${profileUser.name || profileUser.username}`}</h1>
+          <p style={styles.subtitle} className="profile-title-copy">{isOwnProfile ? 'View your public profile metrics first, then switch to edit mode for quote/avatar updates.' : 'Public profile view with wellness metrics and goals snapshot.'}</p>
         </div>
         <div style={styles.headerActions} className="profile-actions">
           <button type="button" onClick={() => router.push('/dashboard')} style={styles.secondaryButton}>Back to Dashboard</button>
-          <button type="button" onClick={handleSave} style={styles.primaryButton} disabled={saving}>{saving ? 'Saving...' : 'Save Profile'}</button>
+          {isOwnProfile && !isEditMode ? <button type="button" onClick={() => setIsEditMode(true)} style={styles.primaryButton}>Edit Profile</button> : null}
+          {isOwnProfile && isEditMode ? <button type="button" onClick={() => { setIsEditMode(false); setStatus(''); }} style={styles.secondaryButton}>Cancel</button> : null}
+          {isOwnProfile && isEditMode ? <button type="button" onClick={handleSave} style={styles.primaryButton} disabled={saving}>{saving ? 'Saving...' : 'Save Profile'}</button> : null}
         </div>
       </div>
 
@@ -480,7 +619,7 @@ export default function Profile() {
                 <GuideOverlay mode={editorTarget} theme={theme} frameX={editorFrame.x} frameY={editorFrame.y} markPos={markPos} />
               </>
             ) : (
-              <div style={styles.avatarFallback}>{(profileForm.username || user.username || 'U').slice(0, 1).toUpperCase()}</div>
+              <div style={styles.avatarFallback}>{(profileForm.username || profileUser.username || 'U').slice(0, 1).toUpperCase()}</div>
             )}
           </div>
 
@@ -489,15 +628,17 @@ export default function Profile() {
             <div style={styles.profileQuote}>"{profileForm.quote || 'Add your profile quote'}"</div>
           </div>
 
-          <input ref={fileRef} type="file" accept="image/*" onChange={handleFile} style={{ display: 'none' }} />
-          <div style={styles.avatarActionStack}>
-            <button type="button" onClick={() => fileRef.current?.click()} style={styles.secondaryButton}>Upload Profile Photo</button>
-            <button type="button" onClick={handleGenerateCutout} style={styles.primaryButton} disabled={cutoutLoading || !profileForm.avatar}>
-              {cutoutLoading ? 'Cutting out...' : 'Generate Cutout'}
-            </button>
-          </div>
+          {isOwnProfile && isEditMode ? <input ref={fileRef} type="file" accept="image/*" onChange={handleFile} style={{ display: 'none' }} /> : null}
+          {isOwnProfile && isEditMode ? (
+            <div style={styles.avatarActionStack}>
+              <button type="button" onClick={() => fileRef.current?.click()} style={styles.secondaryButton}>Upload Profile Photo</button>
+              <button type="button" onClick={handleGenerateCutout} style={styles.primaryButton} disabled={cutoutLoading || !profileForm.avatar}>
+                {cutoutLoading ? 'Cutting out...' : 'Generate Cutout'}
+              </button>
+            </div>
+          ) : null}
 
-          <div style={styles.cutoutCard}>
+          {isOwnProfile && isEditMode ? <div style={styles.cutoutCard}>
             <div style={styles.infoLabel}>Avatar style</div>
             <div style={styles.cutoutModeRow} className="profile-cutout-modes">
               <button type="button" onClick={() => setProfileForm((current) => ({ ...current, avatarRemoveBackground: false }))} style={{ ...styles.cutoutModeButton, ...(!profileForm.avatarRemoveBackground ? styles.cutoutModeButtonActive : {}) }}>Original</button>
@@ -526,7 +667,7 @@ export default function Profile() {
                 <input type="range" min="-35" max="35" value={Math.round(editorFrame.y)} onChange={(event) => updateAvatarFrame(editorTarget, { y: Number(event.target.value) })} style={styles.rangeInput} />
               </label>
             </div>
-          </div>
+          </div> : null}
 
           <div style={styles.quickInfoCard}>
             <div style={styles.infoLabel}>Sign-in method</div>
@@ -534,11 +675,11 @@ export default function Profile() {
           </div>
           <div style={styles.quickInfoCard}>
             <div style={styles.infoLabel}>Email</div>
-            <div style={styles.infoValue}>{user.email || 'Not added'}</div>
+            <div style={styles.infoValue}>{profileUser.email || 'Not added'}</div>
           </div>
           <div style={styles.quickInfoCard}>
             <div style={styles.infoLabel}>Mobile</div>
-            <div style={styles.infoValue}>{user.mobile || 'Not added'}</div>
+            <div style={styles.infoValue}>{profileUser.mobile || 'Not added'}</div>
           </div>
         </section>
 
@@ -546,15 +687,30 @@ export default function Profile() {
           <div style={styles.block}>
             <div style={styles.sectionTitle}>Personal details</div>
 
-            <label style={styles.label}>
-              Username
-              <input value={profileForm.username} onChange={(event) => updateForm('username', event.target.value)} style={styles.input} placeholder="Enter your username" />
-            </label>
+            {isOwnProfile && isEditMode ? (
+              <>
+                <label style={styles.label}>
+                  Username
+                  <input value={profileForm.username} onChange={(event) => updateForm('username', event.target.value)} style={styles.input} placeholder="Enter your username" />
+                </label>
 
-            <label style={styles.label}>
-              Profile quote
-              <textarea value={profileForm.quote} onChange={(event) => updateForm('quote', event.target.value)} style={{ ...styles.input, ...styles.textarea }} placeholder="Write a short line for your profile" />
-            </label>
+                <label style={styles.label}>
+                  Profile quote
+                  <textarea value={profileForm.quote} onChange={(event) => updateForm('quote', event.target.value)} style={{ ...styles.input, ...styles.textarea }} placeholder="Write a short line for your profile" />
+                </label>
+              </>
+            ) : (
+              <>
+                <div style={styles.quickInfoCard}>
+                  <div style={styles.infoLabel}>Username</div>
+                  <div style={styles.infoValue}>{profileUser.username || 'Not added'}</div>
+                </div>
+                <div style={styles.quickInfoCard}>
+                  <div style={styles.infoLabel}>Profile quote</div>
+                  <div style={styles.infoValue}>{profileForm.quote || 'No quote yet'}</div>
+                </div>
+              </>
+            )}
           </div>
 
           <div style={styles.block}>
@@ -570,11 +726,13 @@ export default function Profile() {
             </div>
           </div>
 
-          <div style={styles.themeCard}>
-            <div style={styles.sectionTitle}>Theme settings</div>
-            <div style={styles.themeHint}>Theme selection lives here so the dashboard can stay focused on work and live metrics.</div>
-            <ThemePicker theme={theme} themeId={themeId} setTheme={setTheme} />
-          </div>
+          {isOwnProfile && isEditMode ? (
+            <div style={styles.themeCard}>
+              <div style={styles.sectionTitle}>Theme settings</div>
+              <div style={styles.themeHint}>Theme selection lives here so the dashboard can stay focused on work and live metrics.</div>
+              <ThemePicker theme={theme} themeId={themeId} setTheme={setTheme} />
+            </div>
+          ) : null}
 
           {status ? <div style={styles.status}>{status}</div> : null}
         </section>

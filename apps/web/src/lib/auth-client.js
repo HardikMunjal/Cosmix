@@ -8,7 +8,7 @@ export function clearClientUser() {
 
 export async function restoreUserSession(router, setUser) {
   try {
-    const response = await fetch('/api/auth/session');
+    const response = await fetch('/api/auth/session', { cache: 'no-store' });
     const data = await response.json();
     if (!response.ok || !data.user) {
       throw new Error(data.error || 'Session expired.');
@@ -24,12 +24,38 @@ export async function restoreUserSession(router, setUser) {
   }
 }
 
+export async function clearClientCaches() {
+  if (typeof window === 'undefined') return;
+
+  try {
+    window.localStorage.clear();
+  } catch (_) {
+    // Ignore storage clear failures.
+  }
+
+  try {
+    window.sessionStorage.clear();
+  } catch (_) {
+    // Ignore storage clear failures.
+  }
+
+  try {
+    if ('caches' in window) {
+      const keys = await window.caches.keys();
+      await Promise.all(keys.map((key) => window.caches.delete(key)));
+    }
+  } catch (_) {
+    // Ignore cache API failures.
+  }
+}
+
 export async function logoutClientSession(router) {
   try {
     await fetch('/api/auth/logout', { method: 'POST' });
   } catch (_) {
     // Ignore logout cleanup failures.
   }
+  await clearClientCaches();
   clearClientUser();
   router.push('/');
 }

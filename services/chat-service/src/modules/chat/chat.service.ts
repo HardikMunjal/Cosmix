@@ -5,6 +5,7 @@ import {
     NotFoundException,
 } from '@nestjs/common';
 import * as crypto from 'crypto';
+const webpush = require('web-push');
 
 const { Pool } = require('pg');
 
@@ -210,6 +211,12 @@ type BootstrapPayload = {
     incomingRequests: string[];
     outgoingRequests: string[];
     groups: GroupView[];
+    pushPreferences?: {
+        muteAll: boolean;
+        mutedGroupIds: string[];
+        mutedUsernames: string[];
+        wellnessReminderEnabled: boolean;
+    };
 };
 
 type FriendshipRow = {
@@ -312,6 +319,42 @@ type ChatMessageRow = {
     payload: any;
 };
 
+type PushSubscriptionRecord = {
+    id: string;
+    username: string;
+    endpoint: string;
+    subscription: any;
+    createdAt: string;
+    updatedAt: string;
+};
+
+type PushSubscriptionRow = {
+    id: string;
+    username: string;
+    endpoint: string;
+    subscription_json: any;
+    created_at: Date;
+    updated_at: Date;
+};
+
+type PushPreferencesRecord = {
+    username: string;
+    muteAll: boolean;
+    mutedGroupIds: string[];
+    mutedUsernames: string[];
+    wellnessReminderEnabled: boolean;
+    updatedAt: string;
+};
+
+type PushPreferencesRow = {
+    username: string;
+    mute_all: boolean;
+    muted_group_ids: any;
+    muted_usernames: any;
+    wellness_reminder_enabled: boolean;
+    updated_at: Date;
+};
+
 const GENERAL_GROUP_ID = 'general';
 
 @Injectable()
@@ -329,6 +372,14 @@ export class ChatService {
     private folders: GroupFolderRecord[] = [];
     private folderItems: GroupFolderItemRecord[] = [];
     private bookmarks: GroupBookmarkRecord[] = [];
+    private pushSubscriptions: PushSubscriptionRecord[] = [];
+    private pushPreferences = new Map<string, PushPreferencesRecord>();
+    private webPushConfigured = false;
+    private reminderTimer: NodeJS.Timeout | null = null;
+
+    constructor() {
+        this.startWellnessReminderScheduler();
+    }
 
     private hasDatabase() {
         return Boolean(this.databaseUrl);
@@ -344,6 +395,134 @@ export class ChatService {
 
     private nowIso() {
         return new Date().toISOString();
+    }
+
+    private configureWebPush() {
+        if (this.webPushConfigured) return;
+        this.webPushConfigured = true;
+        const publicKey = process.env.WEB_PUSH_VAPID_PUBLIC_KEY || '';
+        const privateKey = process.env.WEB_PUSH_VAPID_PRIVATE_KEY || '';
+        const contactEmail = process.env.WEB_PUSH_CONTACT_EMAIL || 'mailto:notifications@cosmix.local';
+        if (!publicKey || !privateKey) return;
+        webpush.setVapidDetails(contactEmail, publicKey, privateKey);
+    }
+
+    private webPushEnabled() {
+        return Boolean(process.env.WEB_PUSH_VAPID_PUBLIC_KEY && process.env.WEB_PUSH_VAPID_PRIVATE_KEY);
+    }
+
+    private parseJsonArray(value: any): string[] {
+        if (!value) return [];
+        if (Array.isArray(value)) return value.map((entry) => String(entry || '').trim()).filter(Boolean);
+        try {
+            const parsed = JSON.parse(String(value));
+            if (!Array.isArray(parsed)) return [];
+            return parsed.map((entry) => String(entry || '').trim()).filter(Boolean);
+        } catch (_) {
+            return [];
+        }
+    }
+
+    private normalizePushPreferences(username: string, payload?: Partial<PushPreferencesRecord> | null): PushPreferencesRecord {
+        const normalizedUsername = this.normalizeUsername(username);
+        return {
+            username: normalizedUsername,
+            muteAll: Boolean(payload?.muteAll),
+            mutedGroupIds: Array.from(new Set((payload?.mutedGroupIds || []).map((entry) => String(entry || '').trim()).filter(Boolean))),
+            mutedUsernames: Array.from(new Set((payload?.mutedUsernames || []).map((entry) => this.normalizeUsername(entry)).filter(Boolean))),
+            wellnessReminderEnabled: payload?.wellnessReminderEnabled !== false,
+            updatedAt: payload?.updatedAt || this.nowIso(),
+        };
+    }
+
+    private defaultPushPreferences(username: string): PushPreferencesRecord {
+        return this.normalizePushPreferences(username, {
+            muteAll: false,
+            mutedGroupIds: [],
+            mutedUsernames: [],
+            wellnessReminderEnabled: true,
+        });
+    }
+
+    private hmInTimezone(timeZone: string) {
+        const formatter = new Intl.DateTimeFormat('en-GB', {
+            timeZone,
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false,
+        });
+        return formatter.format(new Date());
+    }
+
+    private dateInTimezone(timeZone: string) {
+        const formatter = new Intl.DateTimeFormat('en-CA', {
+            timeZone,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+        });
+        return formatter.format(new Date());
+    }
+
+    private startWellnessReminderScheduler() {
+        if (this.reminderTimer) return;
+        this.reminderTimer = setInterval(() => {
+            void this.runDailyWellnessReminderTick();
+        }, 60 * 1000);
+        void this.runDailyWellnessReminderTick();
+    }
+
+    private async runDailyWellnessReminderTick() {
+        if (!this.webPushEnabled() || !this.hasDatabase()) return;
+
+        const reminderTime = String(process.env.WELLNESS_REMINDER_LOCAL_TIME || '20:00').trim();
+        const reminderTimezone = String(process.env.WELLNESS_REMINDER_TIMEZONE || 'Asia/Kolkata').trim();
+        if (this.hmInTimezone(reminderTimezone) !== reminderTime) return;
+
+        const reminderDate = this.dateInTimezone(reminderTimezone);
+        const pool = await this.ensureSchema();
+        const candidates = await pool?.query(
+            `SELECT DISTINCT s.username,
+                    u.id AS user_id,
+                    COALESCE(p.mute_all, FALSE) AS mute_all,
+                    COALESCE(p.wellness_reminder_enabled, TRUE) AS wellness_reminder_enabled
+             FROM chat_push_subscriptions s
+             LEFT JOIN app_users u ON LOWER(u.username) = LOWER(s.username)
+             LEFT JOIN chat_push_preferences p ON p.username = s.username
+             WHERE COALESCE(p.wellness_reminder_enabled, TRUE) = TRUE
+               AND COALESCE(p.mute_all, FALSE) = FALSE`,
+        );
+
+        for (const row of candidates?.rows || []) {
+            const username = this.normalizeUsername(row.username);
+            const userId = String(row.user_id || '').trim();
+
+            if (userId) {
+                const hasEntryResult = await pool?.query(
+                    'SELECT 1 FROM wellness_daily_scores WHERE user_id = $1 AND score_date = $2::date LIMIT 1',
+                    [userId, reminderDate],
+                );
+                if (hasEntryResult?.rows?.[0]) continue;
+            }
+
+            const logInsert = await pool?.query(
+                `INSERT INTO chat_wellness_reminder_log (id, username, reminder_date, created_at)
+                 VALUES ($1, $2, $3::date, $4)
+                 ON CONFLICT (username, reminder_date) DO NOTHING
+                 RETURNING id`,
+                [this.buildId('wellness-reminder'), username, reminderDate, this.nowIso()],
+            );
+            if (!logInsert?.rows?.[0]) continue;
+
+            await this.sendPushToUsers([username], {
+                title: 'Wellness reminder',
+                body: 'Please add your wellness data for today.',
+                url: '/wellness',
+                tag: `wellness-${username}-${reminderDate}`,
+            }, {
+                type: 'wellness',
+            });
+        }
     }
 
     private normalizeUsername(value: string) {
@@ -787,6 +966,34 @@ export class ChatService {
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_chat_message_bookmarks_group ON chat_message_bookmarks(group_id, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS chat_push_subscriptions (
+                    id TEXT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    endpoint TEXT NOT NULL UNIQUE,
+                    subscription_json JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_chat_push_subscriptions_user ON chat_push_subscriptions(username);
+
+                CREATE TABLE IF NOT EXISTS chat_push_preferences (
+                    username TEXT PRIMARY KEY,
+                    mute_all BOOLEAN NOT NULL DEFAULT FALSE,
+                    muted_group_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    muted_usernames JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    wellness_reminder_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+
+                CREATE TABLE IF NOT EXISTS chat_wellness_reminder_log (
+                    id TEXT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    reminder_date DATE NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE(username, reminder_date)
+                );
             `);
         }
         await this.schemaPromise;
@@ -866,6 +1073,7 @@ export class ChatService {
 
     async getBootstrap(username: string): Promise<BootstrapPayload> {
         const normalizedUsername = this.normalizeUsername(username);
+        const pushPreferences = await this.getPushPreferences(normalizedUsername);
         if (this.hasDatabase()) {
             const pool = await this.ensureSchema();
             const friendshipsResult = await pool?.query(
@@ -1003,6 +1211,7 @@ export class ChatService {
                     .filter((entry) => entry.status === 'pending' && entry.requested_by === normalizedUsername)
                     .map((entry) => (entry.user_a === normalizedUsername ? entry.user_b : entry.user_a)),
                 groups,
+                pushPreferences,
             };
         }
 
@@ -1031,7 +1240,225 @@ export class ChatService {
                 .filter((entry) => entry.status === 'pending' && entry.requestedBy === normalizedUsername)
                 .map((entry) => (entry.userA === normalizedUsername ? entry.userB : entry.userA)),
             groups: visibleGroups,
+            pushPreferences,
         };
+    }
+
+    async getPushPreferences(actorUsername: string) {
+        const username = this.normalizeUsername(actorUsername);
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            const result = await pool?.query(
+                'SELECT * FROM chat_push_preferences WHERE username = $1 LIMIT 1',
+                [username],
+            );
+            const row = (result?.rows?.[0] || null) as PushPreferencesRow | null;
+            if (!row) {
+                return this.defaultPushPreferences(username);
+            }
+            return this.normalizePushPreferences(username, {
+                muteAll: row.mute_all,
+                mutedGroupIds: this.parseJsonArray(row.muted_group_ids),
+                mutedUsernames: this.parseJsonArray(row.muted_usernames),
+                wellnessReminderEnabled: row.wellness_reminder_enabled,
+                updatedAt: row.updated_at.toISOString(),
+            });
+        }
+
+        return this.pushPreferences.get(username) || this.defaultPushPreferences(username);
+    }
+
+    async updatePushPreferences(
+        actorUsername: string,
+        payload: {
+            muteAll?: boolean;
+            mutedGroupIds?: string[];
+            mutedUsernames?: string[];
+            wellnessReminderEnabled?: boolean;
+        },
+    ) {
+        const username = this.normalizeUsername(actorUsername);
+        const previous = await this.getPushPreferences(username);
+        const next = this.normalizePushPreferences(username, {
+            muteAll: payload.muteAll ?? previous.muteAll,
+            mutedGroupIds: payload.mutedGroupIds ?? previous.mutedGroupIds,
+            mutedUsernames: payload.mutedUsernames ?? previous.mutedUsernames,
+            wellnessReminderEnabled: payload.wellnessReminderEnabled ?? previous.wellnessReminderEnabled,
+        });
+
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            await pool?.query(
+                `INSERT INTO chat_push_preferences (username, mute_all, muted_group_ids, muted_usernames, wellness_reminder_enabled, updated_at)
+                 VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $6)
+                 ON CONFLICT (username) DO UPDATE
+                 SET mute_all = EXCLUDED.mute_all,
+                     muted_group_ids = EXCLUDED.muted_group_ids,
+                     muted_usernames = EXCLUDED.muted_usernames,
+                     wellness_reminder_enabled = EXCLUDED.wellness_reminder_enabled,
+                     updated_at = EXCLUDED.updated_at`,
+                [username, next.muteAll, JSON.stringify(next.mutedGroupIds), JSON.stringify(next.mutedUsernames), next.wellnessReminderEnabled, next.updatedAt],
+            );
+            return next;
+        }
+
+        this.pushPreferences.set(username, next);
+        return next;
+    }
+
+    getWebPushPublicKey() {
+        return process.env.WEB_PUSH_VAPID_PUBLIC_KEY || '';
+    }
+
+    async upsertPushSubscription(actorUsername: string, subscription: any) {
+        const username = this.normalizeUsername(actorUsername);
+        const endpoint = String(subscription?.endpoint || '').trim();
+        if (!endpoint) {
+            throw new BadRequestException('Push subscription endpoint is required.');
+        }
+        const now = this.nowIso();
+
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            await pool?.query(
+                `INSERT INTO chat_push_subscriptions (id, username, endpoint, subscription_json, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4::jsonb, $5, $5)
+                 ON CONFLICT (endpoint) DO UPDATE
+                 SET username = EXCLUDED.username,
+                     subscription_json = EXCLUDED.subscription_json,
+                     updated_at = EXCLUDED.updated_at`,
+                [this.buildId('push-sub'), username, endpoint, JSON.stringify(subscription), now],
+            );
+            return { ok: true };
+        }
+
+        const existing = this.pushSubscriptions.find((entry) => entry.endpoint === endpoint);
+        if (existing) {
+            existing.username = username;
+            existing.subscription = subscription;
+            existing.updatedAt = now;
+            return { ok: true };
+        }
+        this.pushSubscriptions.push({
+            id: this.buildId('push-sub'),
+            username,
+            endpoint,
+            subscription,
+            createdAt: now,
+            updatedAt: now,
+        });
+        return { ok: true };
+    }
+
+    async removePushSubscription(actorUsername: string, endpoint: string) {
+        const username = this.normalizeUsername(actorUsername);
+        const normalizedEndpoint = String(endpoint || '').trim();
+        if (!normalizedEndpoint) {
+            throw new BadRequestException('Push subscription endpoint is required.');
+        }
+
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            await pool?.query(
+                'DELETE FROM chat_push_subscriptions WHERE username = $1 AND endpoint = $2',
+                [username, normalizedEndpoint],
+            );
+            return { ok: true };
+        }
+
+        this.pushSubscriptions = this.pushSubscriptions.filter((entry) => !(entry.username === username && entry.endpoint === normalizedEndpoint));
+        return { ok: true };
+    }
+
+    private async pushSubscriptionsForUsers(usernames: string[]) {
+        const targets = Array.from(new Set((usernames || []).map((name) => this.normalizeUsername(name)).filter(Boolean)));
+        if (!targets.length) return [] as PushSubscriptionRecord[];
+
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            const result = await pool?.query(
+                'SELECT * FROM chat_push_subscriptions WHERE username = ANY($1::text[])',
+                [targets],
+            );
+            return ((result?.rows || []) as PushSubscriptionRow[]).map((row) => ({
+                id: row.id,
+                username: row.username,
+                endpoint: row.endpoint,
+                subscription: row.subscription_json,
+                createdAt: row.created_at.toISOString(),
+                updatedAt: row.updated_at.toISOString(),
+            }));
+        }
+
+        return this.pushSubscriptions.filter((entry) => targets.includes(entry.username));
+    }
+
+    private async prunePushSubscriptionByEndpoint(endpoint: string) {
+        const normalizedEndpoint = String(endpoint || '').trim();
+        if (!normalizedEndpoint) return;
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            await pool?.query('DELETE FROM chat_push_subscriptions WHERE endpoint = $1', [normalizedEndpoint]);
+            return;
+        }
+        this.pushSubscriptions = this.pushSubscriptions.filter((entry) => entry.endpoint !== normalizedEndpoint);
+    }
+
+    private async sendPushToUsers(
+        usernames: string[],
+        payload: { title: string; body: string; url?: string; tag?: string },
+        context?: { type?: 'friend' | 'dm' | 'group' | 'wellness'; senderUsername?: string; groupId?: string },
+    ) {
+        if (!this.webPushEnabled()) return;
+        this.configureWebPush();
+        const allowedRecipients: string[] = [];
+        for (const username of usernames || []) {
+            const normalized = this.normalizeUsername(username);
+            const preferences = await this.getPushPreferences(normalized);
+            if (preferences.muteAll) continue;
+            if (context?.type === 'group' && context.groupId && preferences.mutedGroupIds.includes(context.groupId)) continue;
+            if ((context?.type === 'dm' || context?.type === 'friend') && context.senderUsername) {
+                const sender = this.normalizeUsername(context.senderUsername);
+                if (preferences.mutedUsernames.includes(sender)) continue;
+            }
+            if (context?.type === 'wellness' && preferences.wellnessReminderEnabled === false) continue;
+            allowedRecipients.push(normalized);
+        }
+
+        const subscriptions = await this.pushSubscriptionsForUsers(allowedRecipients);
+        if (!subscriptions.length) return;
+
+        const message = JSON.stringify({
+            title: String(payload.title || 'Cosmix'),
+            body: String(payload.body || ''),
+            url: String(payload.url || '/chat'),
+            tag: String(payload.tag || 'cosmix-notification'),
+        });
+
+        for (const entry of subscriptions) {
+            try {
+                await webpush.sendNotification(entry.subscription, message);
+            } catch (error: any) {
+                const statusCode = Number(error?.statusCode || 0);
+                if (statusCode === 404 || statusCode === 410) {
+                    await this.prunePushSubscriptionByEndpoint(entry.endpoint);
+                }
+            }
+        }
+    }
+
+    private async groupMemberUsernames(groupId: string) {
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            const result = await pool?.query(
+                'SELECT username FROM chat_group_memberships WHERE group_id = $1 AND can_view = TRUE',
+                [groupId],
+            );
+            return ((result?.rows || []) as Array<{ username: string }>).map((row) => row.username);
+        }
+        return this.memberships
+            .filter((entry) => entry.groupId === groupId && entry.canView)
+            .map((entry) => entry.username);
     }
 
     async sendFriendRequest(actorUsername: string, targetUsername: string) {
@@ -1057,6 +1484,15 @@ export class ChatService {
                      updated_at = EXCLUDED.updated_at`,
                 [this.buildId('friendship'), pair.userA, pair.userB, requester, now],
             );
+            void this.sendPushToUsers([addressee], {
+                title: 'New friend request',
+                body: `${requester} sent you a friend request.`,
+                url: '/chat',
+                tag: `friend-request-${requester}`,
+            }, {
+                type: 'friend',
+                senderUsername: requester,
+            });
             return this.getBootstrap(requester);
         }
 
@@ -1076,6 +1512,15 @@ export class ChatService {
                 updatedAt: now,
             });
         }
+        void this.sendPushToUsers([addressee], {
+            title: 'New friend request',
+            body: `${requester} sent you a friend request.`,
+            url: '/chat',
+            tag: `friend-request-${requester}`,
+        }, {
+            type: 'friend',
+            senderUsername: requester,
+        });
         return this.getBootstrap(requester);
     }
 
@@ -1757,10 +2202,56 @@ export class ChatService {
                     chatMessage.timestamp,
                 ],
             );
+            if (chatMessage.chat.type === 'dm') {
+                void this.sendPushToUsers([chatMessage.chat.name], {
+                    title: `New message from ${senderUsername}`,
+                    body: String(chatMessage.text || chatMessage.gif || 'Sent you a message.'),
+                    url: '/chat',
+                    tag: `dm-${chatMessage.id}`,
+                }, {
+                    type: 'dm',
+                    senderUsername,
+                });
+            } else {
+                const recipients = (await this.groupMemberUsernames(chatId)).filter((username) => username !== senderUsername);
+                void this.sendPushToUsers(recipients, {
+                    title: `New message in ${chatMessage.chat.name}`,
+                    body: `${senderUsername}: ${String(chatMessage.text || chatMessage.gif || 'New message')}`,
+                    url: '/chat',
+                    tag: `group-${chatId}-${chatMessage.id}`,
+                }, {
+                    type: 'group',
+                    senderUsername,
+                    groupId: chatId,
+                });
+            }
             return chatMessage;
         }
 
         this.messages.push(chatMessage);
+        if (chatMessage.chat.type === 'dm') {
+            void this.sendPushToUsers([chatMessage.chat.name], {
+                title: `New message from ${senderUsername}`,
+                body: String(chatMessage.text || chatMessage.gif || 'Sent you a message.'),
+                url: '/chat',
+                tag: `dm-${chatMessage.id}`,
+            }, {
+                type: 'dm',
+                senderUsername,
+            });
+        } else {
+            const recipients = (await this.groupMemberUsernames(chatId)).filter((username) => username !== senderUsername);
+            void this.sendPushToUsers(recipients, {
+                title: `New message in ${chatMessage.chat.name}`,
+                body: `${senderUsername}: ${String(chatMessage.text || chatMessage.gif || 'New message')}`,
+                url: '/chat',
+                tag: `group-${chatId}-${chatMessage.id}`,
+            }, {
+                type: 'group',
+                senderUsername,
+                groupId: chatId,
+            });
+        }
         return chatMessage;
     }
 

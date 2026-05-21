@@ -55,6 +55,63 @@ const webService = {
 const children = [];
 let shuttingDown = false;
 
+function stripWrappingQuotes(value) {
+  if (!value) return value;
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+function loadEnvFile(filePath, targetEnv) {
+  if (!fs.existsSync(filePath)) {
+    return false;
+  }
+
+  const raw = fs.readFileSync(filePath, 'utf-8');
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) {
+      continue;
+    }
+
+    const separatorIndex = trimmed.indexOf('=');
+    if (separatorIndex <= 0) {
+      continue;
+    }
+
+    const key = trimmed.slice(0, separatorIndex).trim();
+    const value = stripWrappingQuotes(trimmed.slice(separatorIndex + 1).trim());
+    if (!key || Object.prototype.hasOwnProperty.call(targetEnv, key)) {
+      continue;
+    }
+    targetEnv[key] = value;
+  }
+
+  return true;
+}
+
+function buildServiceEnv() {
+  const serviceEnv = { ...process.env };
+  const loadedFiles = [];
+  const candidateFiles = [
+    path.join(repoRoot, '.env'),
+    path.join(repoRoot, '.env.local'),
+    path.join(repoRoot, 'infra', '.env'),
+    path.join(repoRoot, 'apps', 'web', '.env.local'),
+  ];
+
+  for (const filePath of candidateFiles) {
+    if (loadEnvFile(filePath, serviceEnv)) {
+      loadedFiles.push(path.relative(repoRoot, filePath));
+    }
+  }
+
+  return { serviceEnv, loadedFiles };
+}
+
+const { serviceEnv, loadedFiles: loadedEnvFiles } = buildServiceEnv();
+
 function log(message) {
   process.stdout.write(`[dev-local] ${message}\n`);
 }
@@ -186,7 +243,7 @@ function spawnService(service) {
   log(`Starting ${service.name}...`);
   const child = spawn(service.command[0], service.command[1], {
     cwd: service.cwd,
-    env: process.env,
+    env: serviceEnv,
     stdio: ['inherit', 'pipe', 'pipe'],
     shell: useShell,
   });
@@ -211,6 +268,13 @@ function spawnService(service) {
 async function main() {
   process.on('SIGINT', () => shutdown(0));
   process.on('SIGTERM', () => shutdown(0));
+
+  if (loadedEnvFiles.length) {
+    log(`Loaded env from: ${loadedEnvFiles.join(', ')}`);
+  }
+  if (!serviceEnv.DATABASE_URL) {
+    log('DATABASE_URL not set. Services will use local file storage.');
+  }
 
   const portsToCheck = [...backendServices, webService];
   const busyPorts = [];

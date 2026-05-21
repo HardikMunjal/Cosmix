@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
-import { restoreUserSession } from '../lib/auth-client';
+import { logoutClientSession, restoreUserSession } from '../lib/auth-client';
 
 // ── Storage keys ──────────────────────────────────────────────
 const STORAGE_ENTRIES_KEY  = 'cosmix-wellness-entries';
@@ -144,8 +144,8 @@ function parseTranscriptIntoForm(form, transcript) {
   return next;
 }
 
-// Daily quote (rotates each calendar day)
-const dailyQuote = TREK_QUOTES[new Date().getDate() % TREK_QUOTES.length];
+// Daily quote (rotates each UTC day to keep SSR/CSR output consistent)
+const dailyQuote = TREK_QUOTES[new Date().getUTCDate() % TREK_QUOTES.length];
 
 // ── Mountain background component ────────────────────────────
 function MountainBg() {
@@ -551,6 +551,9 @@ export default function WellnessPage() {
             )}
             <button onClick={() => router.push('/dashboard')} style={styles.secondaryButton}>
               &#8592; Dashboard
+            </button>
+            <button onClick={() => logoutClientSession(router)} style={styles.secondaryButton}>
+              Logout
             </button>
           </div>
         </div>

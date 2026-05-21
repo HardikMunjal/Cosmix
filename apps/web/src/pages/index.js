@@ -1,23 +1,15 @@
 import { useRouter } from 'next/router';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { clearClientUser, persistClientUser } from '../lib/auth-client';
-
-const AUTH_MODES = {
-  signup: 'signup',
-  login: 'login',
-};
 
 export default function Home() {
   const router = useRouter();
-  const [authMode, setAuthMode] = useState(AUTH_MODES.signup);
+  const [showSignup, setShowSignup] = useState(false);
   const [signupUsername, setSignupUsername] = useState('');
-  const [signupEmail, setSignupEmail] = useState('');
   const [signupPassword, setSignupPassword] = useState('');
-  const [gmailEmail, setGmailEmail] = useState('');
   const [loginIdentifier, setLoginIdentifier] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [error, setError] = useState('');
-  const [info, setInfo] = useState('');
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -25,7 +17,7 @@ export default function Home() {
 
     (async () => {
       try {
-        const response = await fetch('/api/auth/session');
+        const response = await fetch('/api/auth/session', { cache: 'no-store' });
         const data = await response.json();
         if (!active) return;
         if (response.ok && data.user) {
@@ -47,20 +39,9 @@ export default function Home() {
     };
   }, [router]);
 
-  const formTitle = useMemo(() => {
-    if (authMode === AUTH_MODES.signup) return 'Create your account';
-    return 'Login';
-  }, [authMode]);
-
-  const formSubtitle = useMemo(() => {
-    if (authMode === AUTH_MODES.signup) return 'Username is required. Gmail is optional. Set a password now for future logins.';
-    return 'Use your username and password, or log in with the Gmail already linked to your account.';
-  }, [authMode]);
-
-  const resetMessages = (mode) => {
-    setAuthMode(mode);
+  const toggleSignup = (enabled) => {
+    setShowSignup(enabled);
     setError('');
-    setInfo('');
   };
 
   const completeLogin = (user) => {
@@ -72,15 +53,14 @@ export default function Home() {
     event.preventDefault();
     setLoading(true);
     setError('');
-    setInfo('');
 
     try {
       const response = await fetch('/api/auth/signup', {
         method: 'POST',
+        cache: 'no-store',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           username: signupUsername,
-          email: signupEmail,
           password: signupPassword,
         }),
       });
@@ -96,39 +76,15 @@ export default function Home() {
     }
   };
 
-  const handleGmailLogin = async (event) => {
-    event.preventDefault();
-    setLoading(true);
-    setError('');
-    setInfo('');
-
-    try {
-      const response = await fetch('/api/auth/gmail', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: gmailEmail }),
-      });
-      const data = await response.json();
-      if (!response.ok || !data.user) {
-        throw new Error(data.error || 'Unable to log in with Gmail.');
-      }
-      completeLogin(data.user);
-    } catch (loginError) {
-      setError(loginError.message || 'Unable to log in with Gmail.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handlePasswordLogin = async (event) => {
     event.preventDefault();
     setLoading(true);
     setError('');
-    setInfo('');
 
     try {
       const response = await fetch('/api/auth/login', {
         method: 'POST',
+        cache: 'no-store',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           identifier: loginIdentifier,
@@ -150,30 +106,66 @@ export default function Home() {
   return (
     <div style={styles.page}>
       <style>{`
+        @keyframes cloudDrift {
+          0% { transform: translateX(0px); }
+          100% { transform: translateX(18px); }
+        }
+
+        @keyframes orbFloat {
+          0% { transform: translate3d(0px, 0px, 0px) scale(1); }
+          50% { transform: translate3d(18px, -20px, 0px) scale(1.04); }
+          100% { transform: translate3d(-10px, 14px, 0px) scale(0.98); }
+        }
+
+        @keyframes particleDrift {
+          0% { transform: translateX(0px) translateY(0px); }
+          100% { transform: translateX(-28px) translateY(18px); }
+        }
+
+        @keyframes lightSweep {
+          0% { transform: translateX(-18%) skewX(-8deg); opacity: 0.12; }
+          50% { opacity: 0.22; }
+          100% { transform: translateX(22%) skewX(-8deg); opacity: 0.12; }
+        }
+
+        @keyframes mistPulse {
+          0% { opacity: 0.18; }
+          50% { opacity: 0.28; }
+          100% { opacity: 0.18; }
+        }
+
+        @keyframes laneShift {
+          0% { stroke-dashoffset: 0; }
+          100% { stroke-dashoffset: -40; }
+        }
+
+        @keyframes runnerStride {
+          0% { transform: translateY(0px) rotate(0deg); }
+          50% { transform: translateY(-4px) rotate(-1.2deg); }
+          100% { transform: translateY(0px) rotate(0deg); }
+        }
+
+        @keyframes speedSweep {
+          0% { stroke-dashoffset: 0; opacity: 0.18; }
+          100% { stroke-dashoffset: -120; opacity: 0.34; }
+        }
+
         @media (max-width: 560px) {
           .login-page {
             padding: 10px !important;
-            align-items: flex-start !important;
           }
-          .login-panel {
+          .login-form {
             padding: 16px !important;
-            border-radius: 20px !important;
           }
-          .login-tab-row {
-            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-            gap: 8px !important;
-            margin-top: 14px !important;
-            margin-bottom: 16px !important;
-          }
-          .login-panel h1 { font-size: 22px !important; }
-          .login-panel p { font-size: 12px !important; line-height: 1.4 !important; }
-          .login-panel input,
-          .login-panel button {
+          .login-form h1 { font-size: 22px !important; }
+          .login-form p { font-size: 12px !important; line-height: 1.4 !important; }
+          .login-form input,
+          .login-form button {
             min-height: 42px !important;
             font-size: 14px !important;
             border-radius: 12px !important;
           }
-          .login-panel label {
+          .login-form label {
             margin-top: 10px !important;
             margin-bottom: 5px !important;
             font-size: 11px !important;
@@ -202,52 +194,74 @@ export default function Home() {
         }
         @media (max-width: 420px) {
           .login-page { padding: 8px !important; }
-          .login-panel {
+          .login-form {
             padding: 14px !important;
-            border-radius: 16px !important;
           }
-          .login-panel h1 { font-size: 19px !important; }
-          .login-panel p { font-size: 11px !important; }
-          .login-tab-row {
-            gap: 6px !important;
-            margin-top: 12px !important;
-            margin-bottom: 14px !important;
-          }
-          .login-panel input,
-          .login-panel button {
+          .login-form h1 { font-size: 19px !important; }
+          .login-form p { font-size: 11px !important; }
+          .login-form input,
+          .login-form button {
             min-height: 40px !important;
             font-size: 13px !important;
           }
         }
       `}</style>
 
-      <div style={styles.shell} className="login-page">
-        <section style={styles.formPanel} className="login-panel">
-          <div style={styles.topMeta} className="login-meta-chip">Free signup and login</div>
+      <div style={styles.bgLayer} aria-hidden="true">
+        <svg viewBox="0 0 1400 900" style={styles.bgSvg}>
+          <defs>
+            <linearGradient id="skyA" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#e8f2ff" />
+              <stop offset="100%" stopColor="#fdf5e8" />
+            </linearGradient>
+            <linearGradient id="mountFar" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="rgba(137,167,211,0.42)" />
+              <stop offset="100%" stopColor="rgba(116,144,191,0.42)" />
+            </linearGradient>
+            <linearGradient id="mountNear" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="rgba(92,122,170,0.46)" />
+              <stop offset="100%" stopColor="rgba(74,99,138,0.48)" />
+            </linearGradient>
+          </defs>
 
-          <div style={styles.tabRow} className="login-tab-row">
-            <button
-              type="button"
-              onClick={() => resetMessages(AUTH_MODES.signup)}
-              style={{ ...styles.tabButton, ...(authMode === AUTH_MODES.signup ? styles.activeTabButton : {}) }}
-            >
-              Sign up
-            </button>
-            <button
-              type="button"
-              onClick={() => resetMessages(AUTH_MODES.login)}
-              style={{ ...styles.tabButton, ...(authMode === AUTH_MODES.login ? styles.activeTabButton : {}) }}
-            >
-              Login
-            </button>
-          </div>
+          <rect x="0" y="0" width="1400" height="900" fill="url(#skyA)" />
+          <circle cx="1080" cy="140" r="96" fill="rgba(255,185,118,0.28)" />
 
+          <ellipse cx="320" cy="190" rx="170" ry="42" fill="rgba(255,255,255,0.42)" style={{ animation: 'cloudDrift 12s ease-in-out infinite alternate' }} />
+          <ellipse cx="920" cy="230" rx="130" ry="34" fill="rgba(255,255,255,0.38)" style={{ animation: 'cloudDrift 10s ease-in-out infinite alternate' }} />
+
+          <polygon points="0,640 160,470 310,560 460,430 640,560 830,410 1020,560 1200,460 1400,620 1400,900 0,900" fill="url(#mountFar)" />
+          <polygon points="0,740 180,610 360,700 520,580 720,700 910,560 1110,700 1290,620 1400,700 1400,900 0,900" fill="url(#mountNear)" />
+
+          <ellipse cx="700" cy="760" rx="760" ry="160" fill="rgba(255,255,255,0.14)" style={{ animation: 'mistPulse 8s ease-in-out infinite' }} />
+
+          <path d="M120 780 C 430 690, 960 700, 1280 790" fill="none" stroke="rgba(255,255,255,0.36)" strokeWidth="3" strokeDasharray="10 12" style={{ animation: 'laneShift 5s linear infinite' }} />
+
+          <path d="M120 540 L500 494" fill="none" stroke="rgba(59,130,246,0.24)" strokeWidth="4" strokeDasharray="20 24" style={{ animation: 'speedSweep 2s linear infinite' }} />
+          <path d="M160 590 L560 536" fill="none" stroke="rgba(59,130,246,0.18)" strokeWidth="4" strokeDasharray="20 24" style={{ animation: 'speedSweep 2.2s linear infinite' }} />
+
+          <g style={{ animation: 'runnerStride 1.7s ease-in-out infinite', transformOrigin: '980px 510px' }}>
+            <circle cx="980" cy="410" r="26" fill="rgba(15,23,42,0.62)" />
+            <path d="M980 438 L944 520 L1020 556 L1078 500" fill="none" stroke="rgba(15,23,42,0.62)" strokeWidth="22" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M944 520 L872 606" fill="none" stroke="rgba(15,23,42,0.62)" strokeWidth="20" strokeLinecap="round" />
+            <path d="M1020 556 L1110 650" fill="none" stroke="rgba(15,23,42,0.62)" strokeWidth="20" strokeLinecap="round" />
+            <path d="M974 474 L904 448" fill="none" stroke="rgba(15,23,42,0.62)" strokeWidth="16" strokeLinecap="round" />
+            <path d="M1028 476 L1104 450" fill="none" stroke="rgba(15,23,42,0.62)" strokeWidth="16" strokeLinecap="round" />
+          </g>
+        </svg>
+      </div>
+      <div style={styles.liveGlowA} aria-hidden="true" />
+      <div style={styles.liveGlowB} aria-hidden="true" />
+      <div style={styles.liveParticles} aria-hidden="true" />
+      <div style={styles.liveSweep} aria-hidden="true" />
+
+      <div style={styles.shell} className="login-page login-shell">
+        <section style={styles.formPanel} className="login-form">
           <div style={styles.formHeader} className="login-form-header">
-            <h1 style={styles.formTitle}>{formTitle}</h1>
-            <p style={styles.formSubtitle}>{formSubtitle}</p>
+            <h1 style={styles.formTitle}>{showSignup ? 'Create your account' : 'Login'}</h1>
           </div>
 
-          {authMode === AUTH_MODES.signup ? (
+          {showSignup ? (
             <form onSubmit={handleSignup}>
               <label style={styles.label} htmlFor="signup-username">Username</label>
               <input
@@ -257,19 +271,6 @@ export default function Home() {
                 value={signupUsername}
                 onChange={(event) => {
                   setSignupUsername(event.target.value);
-                  setError('');
-                }}
-                style={styles.input}
-              />
-
-              <label style={styles.label} htmlFor="signup-email">Gmail address (optional)</label>
-              <input
-                id="signup-email"
-                type="email"
-                placeholder="name@gmail.com"
-                value={signupEmail}
-                onChange={(event) => {
-                  setSignupEmail(event.target.value);
                   setError('');
                 }}
                 style={styles.input}
@@ -291,10 +292,15 @@ export default function Home() {
               <button type="submit" style={styles.primaryButton} disabled={loading}>
                 {loading ? 'Creating account...' : 'Create account'}
               </button>
-            </form>
-          ) : null}
 
-          {authMode === AUTH_MODES.login ? (
+              <p style={styles.switchText}>
+                Already have an account?{' '}
+                <button type="button" style={styles.switchButton} onClick={() => toggleSignup(false)}>
+                  Login
+                </button>
+              </p>
+            </form>
+          ) : (
             <div>
               <form onSubmit={handlePasswordLogin}>
                 <label style={styles.label} htmlFor="login-identifier">Username or Gmail</label>
@@ -324,43 +330,20 @@ export default function Home() {
                 />
 
                 <button type="submit" style={styles.primaryButton} disabled={loading}>
-                  {loading ? 'Logging in...' : 'Login with password'}
+                  {loading ? 'Logging in...' : 'Login'}
                 </button>
-              </form>
 
-              <div style={styles.dividerRow} className="login-form-divider">
-                <span style={styles.dividerLine} />
-                <span style={styles.dividerText}>or</span>
-                <span style={styles.dividerLine} />
-              </div>
-
-              <form onSubmit={handleGmailLogin}>
-                <label style={styles.label} htmlFor="gmail-email">Linked Gmail address</label>
-              <input
-                id="gmail-email"
-                type="email"
-                placeholder="name@gmail.com"
-                value={gmailEmail}
-                onChange={(event) => {
-                  setGmailEmail(event.target.value);
-                  setError('');
-                }}
-                style={styles.input}
-              />
-
-              <button type="submit" style={styles.googleButton} disabled={loading}>
-                {loading ? 'Logging in...' : 'Login with Gmail'}
-              </button>
+                <p style={styles.switchText}>
+                  Don't have an account?{' '}
+                  <button type="button" style={styles.switchButton} onClick={() => toggleSignup(true)}>
+                    Signup
+                  </button>
+                </p>
               </form>
             </div>
-          ) : null}
+          )}
 
           {error ? <div style={styles.errorBanner} className="login-banner">{error}</div> : null}
-          {info ? <div style={styles.infoBanner} className="login-banner">{info}</div> : null}
-
-          <div style={styles.helperText} className="login-footer-note">
-            Sessions stay active for 30 days and extend automatically while you keep using the app.
-          </div>
         </section>
       </div>
     </div>
@@ -369,75 +352,108 @@ export default function Home() {
 
 const styles = {
   page: {
-    minHeight: '100vh',
+    minHeight: '100dvh',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     padding: '16px',
-    background: 'radial-gradient(circle at top left, #ffe0b8, transparent 28%), linear-gradient(180deg, #fff8ef, #fff1e6)',
-    fontFamily: "'Inter', system-ui, -apple-system, sans-serif",
+    background: 'linear-gradient(165deg, #f2f6ff 0%, #f8fbff 50%, #fff5eb 100%)',
+    fontFamily: "'Segoe UI', 'Trebuchet MS', Tahoma, sans-serif",
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  bgLayer: {
+    position: 'absolute',
+    inset: 0,
+    pointerEvents: 'none',
+    opacity: 0.38,
+  },
+  bgSvg: {
+    width: '100%',
+    height: '100%',
+    display: 'block',
+  },
+  liveGlowA: {
+    position: 'absolute',
+    width: '44vw',
+    minWidth: '260px',
+    maxWidth: '520px',
+    aspectRatio: '1 / 1',
+    borderRadius: '999px',
+    left: '-10vw',
+    top: '8vh',
+    background: 'radial-gradient(circle, rgba(114,154,232,0.26) 0%, rgba(114,154,232,0.1) 44%, rgba(114,154,232,0) 72%)',
+    filter: 'blur(2px)',
+    animation: 'orbFloat 14s ease-in-out infinite',
+    pointerEvents: 'none',
+    zIndex: 1,
+  },
+  liveGlowB: {
+    position: 'absolute',
+    width: '38vw',
+    minWidth: '240px',
+    maxWidth: '470px',
+    aspectRatio: '1 / 1',
+    borderRadius: '999px',
+    right: '-8vw',
+    bottom: '6vh',
+    background: 'radial-gradient(circle, rgba(255,168,124,0.24) 0%, rgba(255,168,124,0.08) 46%, rgba(255,168,124,0) 72%)',
+    filter: 'blur(2px)',
+    animation: 'orbFloat 16s ease-in-out infinite reverse',
+    pointerEvents: 'none',
+    zIndex: 1,
+  },
+  liveParticles: {
+    position: 'absolute',
+    inset: 0,
+    backgroundImage: 'radial-gradient(rgba(255,255,255,0.5) 1.2px, transparent 1.2px), radial-gradient(rgba(127,158,206,0.24) 1px, transparent 1px)',
+    backgroundSize: '34px 34px, 42px 42px',
+    backgroundPosition: '0 0, 12px 8px',
+    opacity: 0.28,
+    animation: 'particleDrift 20s linear infinite alternate',
+    pointerEvents: 'none',
+    zIndex: 1,
+  },
+  liveSweep: {
+    position: 'absolute',
+    inset: 0,
+    background: 'linear-gradient(96deg, rgba(255,255,255,0) 18%, rgba(255,255,255,0.34) 48%, rgba(255,255,255,0) 80%)',
+    mixBlendMode: 'screen',
+    animation: 'lightSweep 9s ease-in-out infinite',
+    pointerEvents: 'none',
+    zIndex: 1,
   },
   shell: {
     width: '100%',
-    maxWidth: '480px',
+    maxWidth: '420px',
     margin: '0 auto',
+    position: 'relative',
+    zIndex: 2,
+    display: 'block',
+    minHeight: 'auto',
+    borderRadius: '16px',
+    overflow: 'hidden',
+    border: '1px solid rgba(133,152,185,0.22)',
+    boxShadow: '0 20px 48px rgba(26,39,67,0.10)',
+    background: '#fff',
   },
   formPanel: {
-    padding: '24px',
-    borderRadius: '24px',
-    background: 'rgba(255,253,248,0.98)',
-    border: '1px solid #f3d2b1',
-    boxShadow: '0 18px 42px rgba(217, 119, 6, 0.10)',
-  },
-  topMeta: {
-    display: 'inline-flex',
-    padding: '5px 10px',
-    borderRadius: '999px',
-    background: '#fff1e6',
-    border: '1px solid #fdba74',
-    color: '#9a3412',
-    fontSize: '11px',
-    fontWeight: '700',
-    letterSpacing: '0.08em',
-    textTransform: 'uppercase',
-  },
-  tabRow: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-    gap: '8px',
-    marginTop: '16px',
-    marginBottom: '18px',
-  },
-  tabButton: {
-    minHeight: '44px',
-    borderRadius: '12px',
-    border: '1px solid #f3d2b1',
-    background: '#fff7ed',
-    color: '#7c5b3b',
-    cursor: 'pointer',
-    fontWeight: '700',
-    fontSize: '12px',
-    padding: '0 12px',
-  },
-  activeTabButton: {
-    background: '#f97316',
-    color: '#fff',
-    border: '1px solid #f97316',
-    boxShadow: '0 16px 30px rgba(249, 115, 22, 0.18)',
+    padding: '18px',
+    borderRadius: '16px',
+    background: '#ffffff',
+    border: 'none',
+    boxShadow: 'none',
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'flex-start',
   },
   formHeader: {
     marginBottom: '14px',
   },
   formTitle: {
     margin: 0,
-    fontSize: '28px',
-    color: '#111827',
-  },
-  formSubtitle: {
-    margin: '6px 0 0',
-    color: '#5b6472',
-    fontSize: '13px',
-    lineHeight: '1.5',
+    fontSize: '24px',
+    color: '#18273f',
   },
   label: {
     display: 'block',
@@ -451,8 +467,8 @@ const styles = {
     width: '100%',
     minHeight: '46px',
     borderRadius: '12px',
-    border: '1px solid #fdba74',
-    background: '#fffdf8',
+    border: '1px solid rgba(132,156,194,0.34)',
+    background: 'rgba(255,255,255,0.96)',
     padding: '11px 13px',
     fontSize: '14px',
     color: '#111827',
@@ -465,42 +481,26 @@ const styles = {
     marginTop: '16px',
     borderRadius: '12px',
     border: 'none',
-    background: 'linear-gradient(135deg, #f97316, #ea580c)',
+    background: 'linear-gradient(135deg, #4477dc, #2f63c8)',
     color: '#fff',
     fontSize: '14px',
     fontWeight: '800',
     cursor: 'pointer',
   },
-  googleButton: {
-    width: '100%',
-    minHeight: '46px',
+  switchText: {
     marginTop: '14px',
-    borderRadius: '12px',
-    border: '1px solid #f3d2b1',
-    background: '#fff',
-    color: '#111827',
-    fontSize: '14px',
+    marginBottom: 0,
+    fontSize: '13px',
+    color: '#425574',
+    textAlign: 'center',
+  },
+  switchButton: {
+    border: 'none',
+    background: 'transparent',
+    color: '#2f63c8',
     fontWeight: '800',
     cursor: 'pointer',
-    boxShadow: '0 10px 18px rgba(15, 23, 42, 0.04)',
-  },
-  dividerRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
-    marginTop: '16px',
-  },
-  dividerLine: {
-    flex: 1,
-    height: '1px',
-    background: '#f3d2b1',
-  },
-  dividerText: {
-    color: '#8b98ab',
-    fontSize: '12px',
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: '0.08em',
+    padding: 0,
   },
   errorBanner: {
     marginTop: '16px',
@@ -511,21 +511,5 @@ const styles = {
     color: '#be123c',
     fontSize: '13px',
     fontWeight: '600',
-  },
-  infoBanner: {
-    marginTop: '16px',
-    padding: '10px 12px',
-    borderRadius: '12px',
-    background: '#eff6ff',
-    border: '1px solid #bfdbfe',
-    color: '#1d4ed8',
-    fontSize: '13px',
-    fontWeight: '600',
-  },
-  helperText: {
-    marginTop: '14px',
-    color: '#8b98ab',
-    fontSize: '11px',
-    lineHeight: '1.6',
   },
 };

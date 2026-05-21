@@ -535,24 +535,20 @@ export default function WellnessPage() {
 
         const buddyRows = await Promise.all(buddyParticipants.map(async (participant) => {
           try {
-            const response = await fetch(`${API_BASE}/wellness/data/${encodeURIComponent(participant.userId)}`);
+            const response = await fetch(`${API_BASE}/wellness/plan-summary/${encodeURIComponent(participant.userId)}`);
             const data = await response.json();
-            // Always return a row, even if no plan or scores
-            let sortedScores = [];
-            let planName = 'No active plan';
-            let planStartDate = '';
-            if (response.ok && data?.plan && data.plan.status === 'active') {
-              sortedScores = sortDailyScoresByDate(data.dailyScores || []);
-              planName = String(data.plan.name || 'Active plan');
-              planStartDate = data.plan.startDate;
-            }
-            // If no scores, add a single zero point for sparkline
-            if (sortedScores.length === 0) {
-              sortedScores = [{ date: todayDate(), cumulativeTotalScore: 0, totalScore: 0 }];
-            }
-            const normalizedSeries = buildCumulativeSeries(sortedScores);
-            const latestScore = sortedScores[sortedScores.length - 1] || { totalScore: 0 };
-            const cumulativeTotal = computeLatestCumulativeScore(sortedScores);
+            const hasActivePlan = response.ok && data?.hasActivePlan && data?.plan;
+            const planName = hasActivePlan ? String(data.plan.name || 'Active plan') : 'No active plan';
+            const planStartDate = hasActivePlan ? (data.plan.startDate || '') : '';
+            const cumulativeTotal = hasActivePlan ? Number(data.cumulativeTotal || 0) : 0;
+            const lastDayScore = hasActivePlan ? Number(data.lastDayScore || 0) : 0;
+            const days = hasActivePlan ? Math.max(1, Number(data.days || 0)) : 1;
+            // Use pre-computed series directly from plan-summary (already cumulative { date, cumulative })
+            const rawSeries = hasActivePlan && Array.isArray(data.series) && data.series.length > 0
+              ? [...data.series]
+                  .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')))
+                  .map((point) => ({ date: point.date, cumulative: Number(point.cumulative || 0) }))
+              : [{ date: todayDate(), cumulative: 0 }];
             return {
               id: participant.userId,
               name: participant.displayName,
@@ -562,12 +558,9 @@ export default function WellnessPage() {
               planName,
               planStartDate,
               cumulativeTotal,
-              lastDayScore: Number(latestScore?.totalScore || 0),
-              days: sortedScores.length,
-              series: normalizedSeries.map((score) => ({
-                date: score.date,
-                cumulative: Number(score.cumulative || 0),
-              })),
+              lastDayScore,
+              days,
+              series: rawSeries,
             };
           } catch (_) {
             // Still return a row with zero data

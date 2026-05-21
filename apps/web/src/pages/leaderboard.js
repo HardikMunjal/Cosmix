@@ -40,6 +40,20 @@ function computeLatestCumulativeScore(dailyScores = []) {
   return ordered.reduce((sum, s) => sum + Number(s.totalScore || 0), 0);
 }
 
+function buildCumulativeSeries(dailyScores = []) {
+  const ordered = sortDailyScoresByDate(dailyScores);
+  let runningTotal = 0;
+  return ordered.map((score) => {
+    const dayScore = Number(score.totalScore || 0);
+    runningTotal += Number.isFinite(dayScore) ? dayScore : 0;
+    const direct = Number(score.cumulativeTotalScore || 0);
+    return {
+      ...score,
+      cumulative: Number.isFinite(direct) && direct !== 0 ? direct : Number(runningTotal.toFixed(2)),
+    };
+  });
+}
+
 // ─── tooltip ──────────────────────────────────────────────
 function Tooltip({ text, children }) {
   const [show, setShow] = useState(false);
@@ -67,16 +81,17 @@ function Tooltip({ text, children }) {
 
 // ─── mini spark line ──────────────────────────────────────
 function Spark({ series, max, color }) {
-  const W = 120, H = 32;
+  const W = 120, H = 36;
   if (!series?.length) return <span style={{ fontSize: '11px', color: '#666' }}>—</span>;
   const pts = series.map((p, i) => {
     const x = series.length <= 1 ? W / 2 : (i / (series.length - 1)) * W;
-    const y = H - ((Number(p.cumulative || 0) / Math.max(1, max)) * (H - 6)) - 3;
+    const rawY = H - ((Number(p.cumulative || 0) / Math.max(1, max)) * (H - 8)) - 4;
+    const y = Math.max(4, Math.min(H - 4, rawY));
     return `${x},${y}`;
   }).join(' ');
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: W, height: H }}>
-      <polyline fill="none" stroke={color} strokeWidth="2" points={pts} />
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxWidth: W, height: H, overflow: 'visible', display: 'block' }}>
+      <polyline fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" points={pts} />
     </svg>
   );
 }
@@ -319,6 +334,7 @@ export default function Leaderboard() {
             const data = await res.json();
             if (!res.ok || !data?.plan || data.plan.status !== 'active') return null;
             const sorted = sortDailyScoresByDate(data.dailyScores || []);
+            const normalizedSeries = buildCumulativeSeries(sorted);
             const latest = sorted[sorted.length - 1] || null;
             const entries = Array.isArray(data.entries) ? data.entries : [];
 
@@ -351,7 +367,7 @@ export default function Leaderboard() {
               days: sorted.length,
               cumulativeTotal: computeLatestCumulativeScore(sorted),
               lastDayScore: Number(latest?.totalScore || 0),
-              series: sorted.map((s) => ({ date: s.date, cumulative: Number(s.cumulativeTotalScore || 0) })),
+              series: normalizedSeries.map((s) => ({ date: s.date, cumulative: Number(s.cumulative || 0) })),
               runEntries,
               badmintonEntries,
               cyclingEntries,

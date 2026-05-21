@@ -111,6 +111,11 @@ export class WellnessController {
     return this.storageService.loadAnalytics(userId, Number(days || 90));
   }
 
+  @Get('plan-summary/:userId')
+  async getPlanSummary(@Param('userId') userId: string) {
+    return this.storageService.loadActivePlanSummary(userId);
+  }
+
   @Get('scoring-rules')
   getScoringRules() {
     return this.storageService.loadScoringRules();

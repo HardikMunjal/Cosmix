@@ -1256,4 +1256,44 @@ export class WellnessStorageService {
       })),
     };
   }
+
+  async loadActivePlanSummary(userId: string) {
+    const [store, scoringRules] = await Promise.all([this.loadStore(userId), this.loadScoringRules()]);
+    const normalizedStore = this.normalizeStore(store);
+    const derived = this.deriveScoresWithCache(normalizedStore, scoringRules);
+    const activePlan = derived.plan;
+
+    if (!activePlan || activePlan.status !== 'active') {
+      return {
+        userId,
+        hasActivePlan: false,
+        plan: null,
+        days: 0,
+        cumulativeTotal: 0,
+        lastDayScore: 0,
+        series: [],
+      };
+    }
+
+    const orderedScores = [...(Array.isArray(derived.dailyScores) ? derived.dailyScores : [])]
+      .sort((left, right) => String(left.date || '').localeCompare(String(right.date || '')));
+    const latest = orderedScores[orderedScores.length - 1] || null;
+
+    return {
+      userId,
+      hasActivePlan: true,
+      plan: {
+        id: activePlan.id,
+        name: activePlan.name,
+        startDate: activePlan.startDate,
+      },
+      days: orderedScores.length,
+      cumulativeTotal: Number(latest?.cumulativeTotalScore || 0),
+      lastDayScore: Number(latest?.totalScore || 0),
+      series: orderedScores.map((score) => ({
+        date: score.date,
+        cumulative: Number(score.cumulativeTotalScore || 0),
+      })),
+    };
+  }
 }

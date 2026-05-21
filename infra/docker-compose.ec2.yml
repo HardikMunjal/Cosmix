@@ -48,7 +48,11 @@ services:
       context: ..
       dockerfile: services/chat-service/Dockerfile
     restart: unless-stopped
-    environment: *default-env
+    environment:
+      <<: *default-env
+      WEB_PUSH_VAPID_PUBLIC_KEY: ${WEB_PUSH_VAPID_PUBLIC_KEY:-}
+      WEB_PUSH_VAPID_PRIVATE_KEY: ${WEB_PUSH_VAPID_PRIVATE_KEY:-}
+      WEB_PUSH_CONTACT_EMAIL: ${WEB_PUSH_CONTACT_EMAIL:-notifications@cosmix.app}
     depends_on:
       postgres:
         condition: service_healthy

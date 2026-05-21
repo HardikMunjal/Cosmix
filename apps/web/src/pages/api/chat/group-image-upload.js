@@ -39,10 +39,10 @@ export default async function handler(req, res) {
 
   try {
     const form = formidable({
-      multiples: false,
-      maxFiles: 1,
+      multiples: true,
+      maxFiles: 25,
       maxFileSize: MAX_IMAGE_UPLOAD_BYTES,
-      maxTotalFileSize: MAX_IMAGE_UPLOAD_BYTES,
+      maxTotalFileSize: MAX_IMAGE_UPLOAD_BYTES * 25,
     });
 
     form.parse(req, async (error, fields, files) => {
@@ -52,7 +52,14 @@ export default async function handler(req, res) {
 
       const username = fields.username?.[0] || 'unknown';
       const groupId = fields.groupId?.[0] || 'general';
-      let file = files.file;
+      const folderNameRaw = fields.folderName?.[0] || '';
+      const folderName = String(folderNameRaw)
+        .trim()
+        .replace(/[^a-zA-Z0-9-_ ]/g, '')
+        .replace(/\s+/g, '-')
+        .slice(0, 80);
+
+      let file = files.files || files.file;
 
       if (!file) {
         return res.status(400).json({ error: 'No file provided.' });
@@ -62,14 +69,6 @@ export default async function handler(req, res) {
         file = [file];
       }
 
-      const uploadedFile = file[0];
-      if (!uploadedFile?.filepath) {
-        return res.status(400).json({ error: 'Uploaded file path is missing.' });
-      }
-
-      const originalName = uploadedFile.originalFilename || uploadedFile.filename || 'group-image';
-      const extension = originalName.includes('.') ? originalName.slice(originalName.lastIndexOf('.')) : '.jpg';
-      const key = `chat-groups/${groupId}/${username}/${Date.now()}${extension}`;
       const s3 = new AWS.S3({
         region: awsConfig.region,
         ...(awsConfig.accessKeyId && awsConfig.secretAccessKey
@@ -80,23 +79,40 @@ export default async function handler(req, res) {
           : {}),
       });
 
+      const uploads = [];
       try {
-        await s3.upload({
-          Bucket: awsConfig.bucket,
-          Key: key,
-          Body: fs.createReadStream(uploadedFile.filepath),
-          ContentType: uploadedFile.mimetype || 'image/jpeg',
-        }).promise();
+        for (const uploadedFile of file) {
+          if (!uploadedFile?.filepath) continue;
+          const originalName = uploadedFile.originalFilename || uploadedFile.filename || 'group-image';
+          const extension = originalName.includes('.') ? originalName.slice(originalName.lastIndexOf('.')) : '.jpg';
+          const folderSegment = folderName ? `${folderName}/` : '';
+          const key = `chat-groups/${groupId}/${folderSegment}${username}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}${extension}`;
 
-        try {
-          fs.unlinkSync(uploadedFile.filepath);
-        } catch (cleanupError) {
-          console.warn('Cleanup warning:', cleanupError.message);
+          await s3.upload({
+            Bucket: awsConfig.bucket,
+            Key: key,
+            Body: fs.createReadStream(uploadedFile.filepath),
+            ContentType: uploadedFile.mimetype || 'image/jpeg',
+          }).promise();
+
+          uploads.push({
+            key,
+            url: `https://${awsConfig.bucket}.s3.${awsConfig.region}.amazonaws.com/${key}`,
+          });
+
+          try {
+            fs.unlinkSync(uploadedFile.filepath);
+          } catch (cleanupError) {
+            console.warn('Cleanup warning:', cleanupError.message);
+          }
+        }
+
+        if (!uploads.length) {
+          return res.status(400).json({ error: 'No valid files were uploaded.' });
         }
 
         return res.status(200).json({
-          key,
-          url: `https://${awsConfig.bucket}.s3.${awsConfig.region}.amazonaws.com/${key}`,
+          uploads,
         });
       } catch (uploadError) {
         console.error('S3 upload failed:', uploadError);

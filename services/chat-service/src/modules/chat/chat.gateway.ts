@@ -27,6 +27,40 @@ export class ChatGateway
   private users = new Map<string, string>(); // socketId -> username
   private userSockets = new Map<string, Set<string>>(); // username -> socketIds
   private userActors = new Map<string, { username: string; userId?: string | null; avatar?: string | null }>();
+  private callParticipants = new Map<string, Map<string, { username: string; userId?: string | null; avatar?: string | null; joinedAt: string }>>();
+
+  private watchRoomId(room: string) {
+    return `call-watch:${room}`;
+  }
+
+  private callStatusSnapshot() {
+    return Array.from(this.callParticipants.entries()).map(([room, participants]) => ({
+      room,
+      count: participants.size,
+    }));
+  }
+
+  private emitCallStatus(room: string) {
+    const count = this.callParticipants.get(room)?.size || 0;
+    this.server.emit('call_status', { room, count });
+  }
+
+  private emitCallPresence(room: string) {
+    const participants = Array.from(this.callParticipants.get(room)?.values() || []);
+    this.server.to(this.watchRoomId(room)).emit('call_presence', { room, participants });
+    this.emitCallStatus(room);
+  }
+
+  private removeSocketFromCallPresence(socketId: string) {
+    for (const [room, participants] of this.callParticipants.entries()) {
+      if (!participants.has(socketId)) continue;
+      participants.delete(socketId);
+      if (!participants.size) {
+        this.callParticipants.delete(room);
+      }
+      this.emitCallPresence(room);
+    }
+  }
 
   /* 🟢 CONNECT */
   handleConnection(socket: Socket) {
@@ -36,6 +70,7 @@ export class ChatGateway
   /* 🔴 DISCONNECT */
   handleDisconnect(socket: Socket) {
     const username = this.users.get(socket.id);
+    this.removeSocketFromCallPresence(socket.id);
 
     if (username) {
       this.users.delete(socket.id);
@@ -73,8 +108,16 @@ export class ChatGateway
     this.userActors.set(socket.id, { username, userId: data.userId || null, avatar: data.avatar || null });
 
     this.server.emit('online_users', this.getOnlineUsers());
+    socket.emit('call_status_snapshot', this.callStatusSnapshot());
 
     console.log(`${username} joined`);
+  }
+
+  @SubscribeMessage('call_status_snapshot')
+  handleCallStatusSnapshot(
+    @ConnectedSocket() socket: Socket,
+  ) {
+    socket.emit('call_status_snapshot', this.callStatusSnapshot());
   }
 
   /* 🏠 JOIN ROOM */
@@ -126,7 +169,10 @@ export class ChatGateway
     const sender = this.users.get(socket.id);
     const actor = this.userActors.get(socket.id);
 
-    if (!sender || !actor) return;
+    if (!sender || !actor) {
+      socket.emit('chat_error', { message: 'Connection not ready. Please wait a moment and try again.' });
+      return;
+    }
 
     let payload;
     try {
@@ -210,6 +256,67 @@ export class ChatGateway
         this.server.to(targetSocketId).emit('typing', { user: data.user });
       });
     }
+  }
+
+  @SubscribeMessage('call_presence_watch')
+  handleCallPresenceWatch(
+    @MessageBody() data: { room: string },
+    @ConnectedSocket() socket: Socket,
+  ) {
+    const room = String(data?.room || '').trim();
+    if (!room) return;
+    socket.join(this.watchRoomId(room));
+    this.emitCallPresence(room);
+  }
+
+  @SubscribeMessage('call_presence_unwatch')
+  handleCallPresenceUnwatch(
+    @MessageBody() data: { room: string },
+    @ConnectedSocket() socket: Socket,
+  ) {
+    const room = String(data?.room || '').trim();
+    if (!room) return;
+    socket.leave(this.watchRoomId(room));
+  }
+
+  @SubscribeMessage('call_join')
+  handleCallJoin(
+    @MessageBody() data: { room: string },
+    @ConnectedSocket() socket: Socket,
+  ) {
+    const room = String(data?.room || '').trim();
+    const actor = this.userActors.get(socket.id);
+    if (!room || !actor?.username) return;
+
+    let participants = this.callParticipants.get(room);
+    if (!participants) {
+      participants = new Map();
+      this.callParticipants.set(room, participants);
+    }
+    participants.set(socket.id, {
+      username: actor.username,
+      userId: actor.userId || null,
+      avatar: actor.avatar || null,
+      joinedAt: new Date().toISOString(),
+    });
+    socket.join(this.watchRoomId(room));
+    this.emitCallPresence(room);
+  }
+
+  @SubscribeMessage('call_leave')
+  handleCallLeave(
+    @MessageBody() data: { room: string },
+    @ConnectedSocket() socket: Socket,
+  ) {
+    const room = String(data?.room || '').trim();
+    if (!room) return;
+    const participants = this.callParticipants.get(room);
+    if (!participants) return;
+    participants.delete(socket.id);
+    if (!participants.size) {
+      this.callParticipants.delete(room);
+    }
+    this.emitCallPresence(room);
   }
 
   /* 🔎 Simple local AI command handler (open-source/mock) */

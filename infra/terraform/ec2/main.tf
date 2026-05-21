@@ -130,6 +130,83 @@ resource "aws_key_pair" "cosmix" {
   }
 }
 
+# ── RDS ─────────────────────────────────────────────────────────────────────
+
+# Second subnet in a different AZ — required by aws_db_subnet_group
+resource "aws_subnet" "rds_private" {
+  vpc_id            = aws_vpc.cosmix.id
+  cidr_block        = var.rds_subnet_cidr
+  availability_zone = var.rds_az
+
+  tags = {
+    Name = "cosmix-rds-subnet"
+  }
+}
+
+resource "aws_db_subnet_group" "cosmix" {
+  name       = "cosmix-db-subnet-group"
+  subnet_ids = [aws_subnet.public.id, aws_subnet.rds_private.id]
+
+  tags = {
+    Name = "cosmix-db-subnet-group"
+  }
+}
+
+resource "aws_security_group" "rds" {
+  name        = "cosmix-rds-sg"
+  description = "PostgreSQL access from EC2 only"
+  vpc_id      = aws_vpc.cosmix.id
+
+  ingress {
+    description     = "PostgreSQL from EC2"
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.cosmix.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "cosmix-rds-sg"
+  }
+}
+
+resource "aws_db_instance" "cosmix" {
+  identifier        = "cosmix-db"
+  engine            = "postgres"
+  engine_version    = var.rds_postgres_version
+  instance_class    = var.rds_instance_class
+  allocated_storage = 20
+  storage_type      = "gp2"
+
+  db_name  = var.postgres_db
+  username = var.postgres_user
+  password = var.postgres_password
+
+  db_subnet_group_name   = aws_db_subnet_group.cosmix.name
+  vpc_security_group_ids = [aws_security_group.rds.id]
+
+  publicly_accessible     = false
+  multi_az                = false
+  deletion_protection     = false
+  backup_retention_period = 7
+
+  skip_final_snapshot       = false
+  final_snapshot_identifier = "cosmix-db-final-snapshot"
+
+  tags = {
+    Name = "cosmix-db"
+  }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 resource "aws_instance" "cosmix" {
   ami                         = data.aws_ami.amazon_linux_2023.id
   instance_type               = var.instance_type

@@ -10,7 +10,7 @@ export default async function handler(req, res) {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
     const user = await quickJoinWithName(body);
     await createAuthenticatedSession(user.id, res);
-    return res.status(200).json({ ok: true, user });
+    return res.status(200).json({ ok: true, user, temporaryPassword: '123' });
   } catch (error) {
     return res.status(400).json({ error: error.message || 'Unable to create account.' });
   }

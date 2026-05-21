@@ -11,3 +11,8 @@ swap_size_mb    = 2048
 # Use a public repository URL here, or leave repo_url empty and copy the repo manually.
 repo_url        = ""
 repo_branch     = "main"
+
+# RDS (managed PostgreSQL) — free-tier: db.t3.micro, 20 GB gp2
+# rds_instance_class   = "db.t3.micro"
+# rds_postgres_version = "16"
+# rds_az               = "us-east-1b"   # must differ from availability_zone

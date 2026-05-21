@@ -5,6 +5,40 @@ import { ChatService } from './chat.service';
 export class ChatController {
   constructor(private readonly chatService: ChatService) {}
 
+  @Get('push/public-key')
+  getPushPublicKey() {
+    return { publicKey: this.chatService.getWebPushPublicKey() };
+  }
+
+  @Post('push/subscribe')
+  subscribePush(@Body() body: { actorUsername: string; subscription: any }) {
+    return this.chatService.upsertPushSubscription(body.actorUsername, body.subscription);
+  }
+
+  @Post('push/unsubscribe')
+  unsubscribePush(@Body() body: { actorUsername: string; endpoint: string }) {
+    return this.chatService.removePushSubscription(body.actorUsername, body.endpoint);
+  }
+
+  @Get('push/preferences')
+  getPushPreferences(@Query('username') username: string) {
+    return this.chatService.getPushPreferences(username);
+  }
+
+  @Put('push/preferences')
+  updatePushPreferences(
+    @Body()
+    body: {
+      actorUsername: string;
+      muteAll?: boolean;
+      mutedGroupIds?: string[];
+      mutedUsernames?: string[];
+      wellnessReminderEnabled?: boolean;
+    },
+  ) {
+    return this.chatService.updatePushPreferences(body.actorUsername, body);
+  }
+
   @Get('bootstrap')
   getBootstrap(@Query('username') username: string) {
     return this.chatService.getBootstrap(username);
