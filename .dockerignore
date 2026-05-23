@@ -12,3 +12,8 @@ npm-debug.log
 **/npm-debug.log
 Dockerfile*
 infra/postgres_data
+local-info
+cosmix-deploy.tar
+secret-transfer.bundle.enc
+apps/web/data
+apps/web/.env.local
