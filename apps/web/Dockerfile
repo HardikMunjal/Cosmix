@@ -4,7 +4,7 @@ WORKDIR /usr/src/app
 ENV NODE_OPTIONS=--max-old-space-size=1536
 
 COPY apps/web/package*.json ./
-RUN npm ci --legacy-peer-deps --no-audit --no-fund
+RUN npm install --legacy-peer-deps --no-audit --no-fund
 
 COPY apps/web/ ./
 RUN npm run build
@@ -15,7 +15,7 @@ WORKDIR /usr/src/app
 ENV NODE_ENV=production
 
 COPY apps/web/package*.json ./
-RUN npm ci --omit=dev --legacy-peer-deps --no-audit --no-fund
+RUN npm install --omit=dev --legacy-peer-deps --no-audit --no-fund
 
 COPY --from=builder /usr/src/app/.next .next
 COPY --from=builder /usr/src/app/public ./public

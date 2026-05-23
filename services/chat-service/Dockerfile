@@ -3,7 +3,7 @@ FROM node:20-slim AS builder
 WORKDIR /usr/src/app
 
 COPY services/chat-service/package*.json ./
-RUN npm ci --legacy-peer-deps --no-audit --no-fund
+RUN npm install --legacy-peer-deps --no-audit --no-fund
 
 COPY services/chat-service/ ./
 RUN npm run build
@@ -14,7 +14,7 @@ WORKDIR /usr/src/app
 ENV NODE_ENV=production
 
 COPY services/chat-service/package*.json ./
-RUN npm ci --omit=dev --legacy-peer-deps --no-audit --no-fund
+RUN npm install --omit=dev --legacy-peer-deps --no-audit --no-fund
 
 COPY --from=builder /usr/src/app/dist ./dist
 
