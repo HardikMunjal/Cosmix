@@ -6,7 +6,7 @@ const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..');
-const npmCommand = 'npm';
+const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const useShell = process.platform === 'win32';
 const args = new Set(process.argv.slice(2));
 const dryRun = args.has('--dry-run');
@@ -41,6 +41,18 @@ const backendServices = [
     name: 'wellness-service',
     cwd: path.join(repoRoot, 'services', 'wellness-service'),
     port: 3004,
+    command: [npmCommand, ['run', 'dev']],
+  },
+  {
+    name: 'notification-service',
+    cwd: path.join(repoRoot, 'services', 'notification-service'),
+    port: 3006,
+    command: [npmCommand, ['run', 'dev']],
+  },
+  {
+    name: 'post-service',
+    cwd: path.join(repoRoot, 'services', 'post-service'),
+    port: 3007,
     command: [npmCommand, ['run', 'dev']],
   },
 ];

@@ -5,6 +5,7 @@ import { logoutClientSession, restoreUserSession } from '../lib/auth-client';
 import { useTheme } from '../lib/ThemePicker';
 import { buildStrategySummary, formatCurrency } from '../lib/userInsights';
 import NotificationModule from '../modules/dashboard/NotificationModule';
+import PostFeedModule from '../modules/dashboard/PostFeedModule';
 
 const tradingDeskModules = [
   { icon: 'NT', title: 'Nifty Tracker', desc: 'Track saved strategies, live payoff movement, and execution snapshots.', path: '/nifty-strategies', accent: '#22c55e' },
@@ -13,14 +14,19 @@ const tradingDeskModules = [
   { icon: 'OP', title: 'Option Pricing', desc: 'Compare expected option prices across models and expiries.', path: '/expected-option-prices', accent: '#e11d48' },
 ];
 
-const workspaceModules = [
-  { icon: 'AN', title: 'Analytics', desc: 'Review portfolio behavior, exits, and strategy-level performance.', path: '/analytics', accent: '#f59e0b' },
-  { icon: '📊', title: 'Strategy Analytics', desc: 'Comprehensive day-wise and strategy-wise P/L dashboard.', path: '/analytics-enhanced', accent: '#06b6d4' },
-  { icon: '🏃', title: 'Running Dashboard', desc: 'Keep running and wellness analytics separate from strategy tracking.', path: '/running-analytics', accent: '#10b981' },
-  { icon: '🏆', title: 'Leaderboard', desc: 'Compete with friends on running distance, speed, and fitness achievements.', path: '/leaderboard', accent: '#f59e0b' },
-  { icon: 'WL', title: 'Wellness Dashboard', desc: 'Track recovery, fitness score, and routine consistency.', path: '/wellness', accent: '#10b981' },
-  { icon: 'CH', title: 'Chat', desc: 'Message live users directly and keep the conversation flow simple.', path: '/chat', accent: '#8b5cf6' },
-  { icon: 'MD', title: 'Media', desc: 'Manage your saved screenshots, images, and visual references.', path: '/media', accent: '#fb923c' },
+const wellnessImageModules = [
+  'Running Dashboard',
+  'Leaderboard',
+  'Wellness Dashboard',
+  'Chat',
+  'Media',
+];
+
+const niftyImageModules = [
+  'Nifty Tracker',
+  'Strategy History',
+  'Strategy Builder',
+  'Option Pricing',
 ];
 
 function resolveWellnessUserId(user) {
@@ -226,6 +232,97 @@ function MetricGrid({ items, theme }) {
         </div>
       ))}
     </div>
+  );
+}
+
+const defaultPostImages = {
+  running: 'https://images.unsplash.com/photo-1517430816045-df4b7de11d14?auto=format&fit=crop&w=1200&q=80',
+  cycling: 'https://images.unsplash.com/photo-1508606572321-901ea4437072?auto=format&fit=crop&w=1200&q=80',
+  yoga: 'https://images.unsplash.com/photo-1517836357463-d25dfeac3438?auto=format&fit=crop&w=1200&q=80',
+  strength: 'https://images.unsplash.com/photo-1517836357463-d25dfeac3438?auto=format&fit=crop&w=1200&q=80',
+  default: 'https://images.unsplash.com/photo-1517836357463-d25dfeac3438?auto=format&fit=crop&w=1200&q=80',
+};
+
+function getDefaultPostImage(post) {
+  const type = String(post.activityType || post.title || post.body || '').toLowerCase();
+  if (type.includes('run') || type.includes('running') || type.includes('km')) return defaultPostImages.running;
+  if (type.includes('cycle') || type.includes('cycling') || type.includes('ride')) return defaultPostImages.cycling;
+  if (type.includes('yoga')) return defaultPostImages.yoga;
+  if (type.includes('lift') || type.includes('strength') || type.includes('weights') || type.includes('gym')) return defaultPostImages.strength;
+  return defaultPostImages.default;
+}
+
+const buddyImages = [
+  'https://images.unsplash.com/photo-1508606572321-901ea4437072?auto=format&fit=crop&w=1200&q=80',
+  'https://images.unsplash.com/photo-1517836357463-d25dfeac3438?auto=format&fit=crop&w=1200&q=80',
+  'https://images.unsplash.com/photo-1508606572321-901ea4437072?auto=format&fit=crop&w=1200&q=80',
+  'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=1200&q=80',
+  'https://images.unsplash.com/photo-1491553895911-0055eca6402d?auto=format&fit=crop&w=1200&q=80',
+];
+
+function getBuddyImage(name, index) {
+  return buddyImages[index % buddyImages.length];
+}
+
+function MiniTrendSparkline({ series = [], theme }) {
+  if (!series.length) {
+    return <div style={{ fontSize: '12px', color: theme.textMuted }}>No recent performance yet</div>;
+  }
+
+  const width = 220;
+  const height = 70;
+  const values = series.map((point) => Number(point.cumulative || 0));
+  const min = Math.min(...values, 0);
+  const max = Math.max(...values, 0);
+  const range = max - min || 1;
+  const pad = { left: 14, right: 14, top: 8, bottom: 16 };
+  const plotWidth = width - pad.left - pad.right;
+  const plotHeight = height - pad.top - pad.bottom;
+  const points = series.map((point, index) => {
+    const x = pad.left + (index / Math.max(1, series.length - 1)) * plotWidth;
+    const y = pad.top + plotHeight - (((Number(point.cumulative || 0) - min) / range) * plotHeight);
+    return `${x},${y}`;
+  }).join(' ');
+  const stroke = theme.blue;
+
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height: 'auto', display: 'block' }} preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="mini-spark-gradient" x1="0" x2="1" y1="0" y2="1">
+          <stop offset="0%" stopColor={theme.blue} stopOpacity="0.24" />
+          <stop offset="100%" stopColor={theme.blue} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <path d={`M${points}`} fill="none" stroke={stroke} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+      <polygon fill="url(#mini-spark-gradient)" points={`${pad.left},${height - pad.bottom} ${points} ${width - pad.right},${height - pad.bottom}`} />
+    </svg>
+  );
+}
+
+function BuddyCard({ buddy, theme }) {
+  const imageUrl = getBuddyImage(buddy.name || buddy.label || buddy.id || 'buddy', Number(buddy.rank || 0));
+  const latestValue = buddy.series?.length ? Number(buddy.series[buddy.series.length - 1].cumulative || 0) : 0;
+  return (
+    <article style={{ borderRadius: '24px', border: `1px solid ${theme.cardBorder}`, background: theme.cardBg, overflow: 'hidden', display: 'grid', gap: '14px' }}>
+      <div style={{ position: 'relative', minHeight: '170px', overflow: 'hidden' }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={imageUrl} alt={`Buddy ${buddy.name || 'profile'}`} style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center' }} />
+        <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: '14px', background: 'linear-gradient(180deg, transparent, rgba(15,23,42,0.85))' }}>
+          <div style={{ fontSize: '16px', fontWeight: 800, color: '#fff' }}>{buddy.name || buddy.displayPlanName || 'Buddy'}</div>
+          <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.85)', marginTop: '4px' }}>{buddy.displayPlanName || buddy.planName || 'Performance companion'}</div>
+        </div>
+      </div>
+      <div style={{ display: 'grid', gap: '10px', padding: '0 14px 16px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: '20px', fontWeight: 900, color: theme.textHeading }}>{formatCurrency(latestValue)}</div>
+            <div style={{ fontSize: '11px', color: theme.textMuted }}>{`${buddy.series?.length || 0} days of tracked performance`}</div>
+          </div>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '10px 12px', borderRadius: '999px', background: `${theme.blue}10`, color: theme.textHeading, fontWeight: 800, fontSize: '11px' }}>#{buddy.rank || '-'}</div>
+        </div>
+        <MiniTrendSparkline series={buddy.series || []} theme={theme} />
+      </div>
+    </article>
   );
 }
 
@@ -464,10 +561,15 @@ export default function Dashboard() {
   const [wellnessData, setWellnessData] = useState({ entries: [], dailyScores: [], plans: [], plan: null });
   const [buddyTrendRows, setBuddyTrendRows] = useState([]);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [serverNotifications, setServerNotifications] = useState([]);
+  const [feedPosts, setFeedPosts] = useState([]);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [chatBootstrap, setChatBootstrap] = useState({ incomingRequests: [], groups: [] });
+  const [activeTab, setActiveTab] = useState('home');
 
   const configuredWellnessApiBase = process.env.NEXT_PUBLIC_WELLNESS_API_BASE || '';
+  const notificationsApiBase = '/api/notifications';
+  const postsApiBase = '/api/posts';
   const API_BASE = configuredWellnessApiBase || (typeof window !== 'undefined'
     ? ((window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
       ? `${window.location.protocol}//${window.location.hostname}:3004`
@@ -477,6 +579,16 @@ export default function Dashboard() {
   useEffect(() => {
     restoreUserSession(router, setUser);
   }, [router]);
+
+  useEffect(() => {
+    if (!router.isReady) return;
+    const tabParam = String(router.query.tab || 'home').toLowerCase();
+    if (['home', 'posts', 'buddies'].includes(tabParam)) {
+      setActiveTab(tabParam);
+      return;
+    }
+    setActiveTab('home');
+  }, [router.isReady, router.query.tab]);
 
   const loadStrategies = useCallback(async () => {
     try {
@@ -673,20 +785,72 @@ export default function Dashboard() {
     }
   }, [API_BASE, user]);
 
+  const loadServerNotifications = useCallback(async () => {
+    if (!user) return;
+    const baseUid = resolveWellnessUserId(user);
+    if (!baseUid) return;
+
+    try {
+      const response = await fetch(`${notificationsApiBase}/${encodeURIComponent(baseUid)}`);
+      const data = await response.json();
+      if (response.ok && Array.isArray(data.notifications)) {
+        setServerNotifications(data.notifications);
+      } else {
+        setServerNotifications([]);
+      }
+    } catch (_) {
+      setServerNotifications([]);
+    }
+  }, [notificationsApiBase, user]);
+
+  const loadFeedPosts = useCallback(async () => {
+    if (!user) return;
+    const baseUid = resolveWellnessUserId(user);
+    if (!baseUid) return;
+
+    try {
+      const response = await fetch(`${postsApiBase}/${encodeURIComponent(baseUid)}`);
+      const data = await response.json();
+      if (response.ok && Array.isArray(data.posts)) {
+        setFeedPosts(data.posts);
+      } else {
+        setFeedPosts([]);
+      }
+    } catch (_) {
+      setFeedPosts([]);
+    }
+  }, [postsApiBase, user]);
+
+  const likePost = useCallback(async (postId) => {
+    if (!postId) return;
+    try {
+      await fetch(`${postsApiBase}/${encodeURIComponent(postId)}/like`, { method: 'PUT' });
+      setFeedPosts((current) => current.map((post) => (post.id === postId ? { ...post, likes: Number(post.likes || 0) + 1 } : post)));
+    } catch (_) {
+      // Ignore like failures.
+    }
+  }, [postsApiBase]);
+
   useEffect(() => {
     if (!user) return undefined;
     loadStrategies();
     loadWellnessData();
     loadBuddyTrendRows();
+    loadServerNotifications();
+    loadFeedPosts();
     const interval = setInterval(loadStrategies, 30000);
     const wellnessInterval = setInterval(loadWellnessData, 30000);
     const buddyInterval = setInterval(loadBuddyTrendRows, 30000);
+    const notificationsInterval = setInterval(loadServerNotifications, 30000);
+    const feedInterval = setInterval(loadFeedPosts, 30000);
     return () => {
       clearInterval(interval);
       clearInterval(wellnessInterval);
       clearInterval(buddyInterval);
+      clearInterval(notificationsInterval);
+      clearInterval(feedInterval);
     };
-  }, [user, loadStrategies, loadWellnessData, loadBuddyTrendRows]);
+  }, [user, loadStrategies, loadWellnessData, loadBuddyTrendRows, loadServerNotifications, loadFeedPosts]);
 
   const strategySummary = useMemo(() => buildStrategySummary(strategies), [strategies]);
   const wellnessSummary = useMemo(() => {
@@ -822,7 +986,76 @@ export default function Dashboard() {
       .slice(0, 4)
   ), [comparisonTrendRows]);
 
+  const buddyRows = useMemo(() => comparisonTrendRows.filter((row) => !row.isSelf), [comparisonTrendRows]);
+  const displayedBuddyRows = useMemo(() => {
+    if (buddyRows.length > 0) return buddyRows;
+    return [
+      {
+        id: 'buddy-sample-1',
+        name: 'Aisha',
+        displayPlanName: 'Morning run challenge',
+        current: 88,
+        series: [
+          { date: 'Day 1', cumulative: 24 },
+          { date: 'Day 4', cumulative: 42 },
+          { date: 'Day 7', cumulative: 61 },
+          { date: 'Day 10', cumulative: 78 },
+          { date: 'Day 14', cumulative: 88 },
+        ],
+        rank: 1,
+        color: theme.blue,
+        activityTotals: { runningDistanceKm: 13.4, runningMinutes: 98 },
+        isSelf: false,
+      },
+      {
+        id: 'buddy-sample-2',
+        name: 'Mia',
+        displayPlanName: 'Cycle power streak',
+        current: 72,
+        series: [
+          { date: 'Day 1', cumulative: 18 },
+          { date: 'Day 4', cumulative: 35 },
+          { date: 'Day 7', cumulative: 52 },
+          { date: 'Day 10', cumulative: 64 },
+          { date: 'Day 14', cumulative: 72 },
+        ],
+        rank: 2,
+        color: theme.cyan,
+        activityTotals: { cyclingDistanceKm: 34.8, runningMinutes: 42 },
+        isSelf: false,
+      },
+      {
+        id: 'buddy-sample-3',
+        name: 'Noah',
+        displayPlanName: 'Strength flow',
+        current: 58,
+        series: [
+          { date: 'Day 1', cumulative: 12 },
+          { date: 'Day 4', cumulative: 24 },
+          { date: 'Day 7', cumulative: 38 },
+          { date: 'Day 10', cumulative: 49 },
+          { date: 'Day 14', cumulative: 58 },
+        ],
+        rank: 3,
+        color: theme.orange,
+        activityTotals: { strengthSessions: 4, runningMinutes: 0 },
+        isSelf: false,
+      },
+    ];
+  }, [buddyRows, theme.blue, theme.cyan, theme.orange]);
+
   const notifications = useMemo(() => {
+    if (Array.isArray(serverNotifications) && serverNotifications.length > 0) {
+      return serverNotifications.map((item) => ({
+        id: item.id,
+        type: 'notification',
+        title: item.title,
+        description: item.description,
+        timeLabel: item.createdAt ? `${Math.max(0, Math.round((Date.now() - new Date(item.createdAt).getTime()) / 3600000))}h ago` : 'recently',
+        actionLabel: 'View',
+      }));
+    }
+
     const items = [];
 
     // Real incoming friend requests
@@ -863,7 +1096,31 @@ export default function Dashboard() {
     }
 
     return items.slice(0, 5);
-  }, [chatBootstrap, buddyTrendRows]);
+  }, [chatBootstrap, buddyTrendRows, serverNotifications]);
+
+  const buddyActivityItems = useMemo(() => {
+    const items = buddyTrendRows.slice(0, 3).map((row) => {
+      const distanceKm = Number(row.activityTotals?.runningDistanceKm || 0);
+      const minutes = Number(row.activityTotals?.runningMinutes || 0);
+      const description = distanceKm > 0
+        ? `${distanceKm.toFixed(1)} km in ${minutes || '--'} min.`
+        : `${minutes > 0 ? `${minutes} min` : 'A fresh session'} of wellness activity.`;
+      return {
+        id: row.id,
+        avatar: String(row.name || 'B').slice(0, 1).toUpperCase(),
+        title: `${row.name || 'Buddy'} just posted a new run`,
+        description: `Completed ${description}`,
+      };
+    });
+
+    if (items.length > 0) return items;
+    return [{
+      id: 'sample-activity',
+      avatar: 'H',
+      title: 'Hardi just made a record',
+      description: 'Hardi just made a record of 8.3 km in 68 min with image.',
+    }];
+  }, [buddyTrendRows]);
 
   const notificationCount = notifications.length;
 
@@ -885,7 +1142,7 @@ export default function Dashboard() {
         @media (max-width: 720px) {
           .dashboard-page { padding: 14px !important; }
           .dashboard-header { flex-direction: column !important; }
-          .dashboard-header-actions { width: 100%; justify-content: space-between; }
+          .dashboard-header-actions { width: 100%; justify-content: space-between; order: -1; }
           .dashboard-module-grid, .dashboard-scorecard-grid, .dashboard-market-modules { grid-template-columns: 1fr !important; }
           .dashboard-club-grid { grid-template-columns: 1fr !important; }
         }
@@ -938,10 +1195,9 @@ export default function Dashboard() {
               <button
                 type="button"
                 onClick={() => { setShowNotifications((v) => !v); setShowSettingsMenu(false); }}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', borderRadius: '999px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, color: theme.textHeading, padding: '10px 16px', cursor: 'pointer', fontSize: '12px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.09em', boxShadow: `0 4px 14px ${theme.shadow}` }}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '10px', borderRadius: '999px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, color: theme.textHeading, padding: '10px 14px', cursor: 'pointer', fontSize: '12px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.09em', boxShadow: `0 4px 14px ${theme.shadow}` }}
               >
                 <BellIcon color={theme.textHeading} />
-                Notifications
                 <span style={{ minWidth: '22px', height: '22px', borderRadius: '999px', display: 'inline-grid', placeItems: 'center', background: notificationCount > 0 ? theme.orange : theme.cardBorder, color: notificationCount > 0 ? '#fff' : theme.textMuted, fontSize: '11px', fontWeight: 900 }}>{notificationCount}</span>
               </button>
             </div>
@@ -951,10 +1207,9 @@ export default function Dashboard() {
               <button
                 type="button"
                 onClick={() => { setShowSettingsMenu((v) => !v); setShowNotifications(false); }}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', borderRadius: '999px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, color: theme.textHeading, padding: '10px 16px', cursor: 'pointer', fontSize: '12px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.09em', boxShadow: `0 4px 14px ${theme.shadow}` }}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '0', borderRadius: '999px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, color: theme.textHeading, padding: '10px 14px', cursor: 'pointer', fontSize: '12px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.09em', boxShadow: `0 4px 14px ${theme.shadow}` }}
               >
                 <SettingsIcon color={theme.textHeading} />
-                Settings
               </button>
               {showSettingsMenu ? (
                 <div style={{ position: 'absolute', right: 0, top: '52px', width: '220px', borderRadius: '14px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, boxShadow: `0 18px 36px ${theme.shadow}`, padding: '8px', display: 'grid', gap: '6px', zIndex: 10 }}>
@@ -981,47 +1236,37 @@ export default function Dashboard() {
           />
         ) : null}
 
-        <section style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '16px' }} className="dashboard-club-grid">
-          <div
-            style={{ borderRadius: '24px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '14px', display: 'grid', gap: '10px', boxShadow: `0 18px 40px ${theme.shadow}` }}
-            role="button"
-            tabIndex={0}
-            onClick={() => router.push('/wellness')}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') router.push('/wellness');
-            }}
-          >
-            <div style={{ fontSize: '11px', letterSpacing: '0.12em', textTransform: 'uppercase', color: theme.textMuted, fontWeight: 800 }}>Wellness Club</div>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="https://images.unsplash.com/photo-1517836357463-d25dfeac3438?auto=format&fit=crop&w=1200&q=80"
-              alt="Live fitness training"
-              style={{ width: '100%', height: '160px', borderRadius: '16px', objectFit: 'cover', border: `1px solid ${theme.cardBorder}` }}
-            />
-            <div style={{ fontSize: '13px', color: theme.textSecondary, lineHeight: 1.45 }}>All wellness modules, buddy trends, activity duels and running consistency in one training command center.</div>
-          </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '14px', marginTop: '16px' }}>
+          {['home', 'posts', 'buddies'].map((tabKey) => (
+            <button
+              key={tabKey}
+              type="button"
+              onClick={() => {
+                setActiveTab(tabKey);
+                if (router.isReady) {
+                  router.push({ pathname: '/dashboard', query: { ...router.query, tab: tabKey } }, undefined, { shallow: true });
+                }
+              }}
+              style={{
+                borderRadius: '999px',
+                border: `1px solid ${activeTab === tabKey ? theme.blue : theme.cardBorder}`,
+                background: activeTab === tabKey ? theme.blue : theme.panelBg,
+                color: activeTab === tabKey ? '#fff' : theme.textPrimary,
+                padding: '10px 18px',
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontWeight: 800,
+                minWidth: '100px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.08em',
+              }}
+            >
+              {tabKey === 'home' ? 'Home' : tabKey === 'posts' ? 'Fitstagram' : 'Buddies'}
+            </button>
+          ))}
+        </div>
 
-          <div
-            style={{ borderRadius: '24px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '14px', display: 'grid', gap: '10px', boxShadow: `0 18px 40px ${theme.shadow}` }}
-            role="button"
-            tabIndex={0}
-            onClick={() => router.push('/nifty-strategies')}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') router.push('/nifty-strategies');
-            }}
-          >
-            <div style={{ fontSize: '11px', letterSpacing: '0.12em', textTransform: 'uppercase', color: theme.textMuted, fontWeight: 800 }}>Nifty Club</div>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?auto=format&fit=crop&w=1200&q=80"
-              alt="Live market screen"
-              style={{ width: '100%', height: '160px', borderRadius: '16px', objectFit: 'cover', border: `1px solid ${theme.cardBorder}` }}
-            />
-            <div style={{ fontSize: '13px', color: theme.textSecondary, lineHeight: 1.45 }}>All Nifty strategy modules, option pricing and market analytics grouped in one active trading workspace.</div>
-          </div>
-        </section>
-
-        <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.12fr) minmax(320px, 0.88fr)', gap: '16px' }} className="dashboard-top-grid">
+        <section style={{ display: activeTab === 'home' ? 'grid' : 'none', gridTemplateColumns: 'minmax(0, 1.12fr) minmax(320px, 0.88fr)', gap: '16px' }} className="dashboard-top-grid">
           <div style={{ borderRadius: '30px', border: `1px solid ${theme.cardBorder}`, background: `radial-gradient(circle at top left, ${theme.orange}20, transparent 24%), radial-gradient(circle at 78% 16%, ${theme.cyan}16, transparent 22%), linear-gradient(135deg, ${theme.cardBg}, ${theme.cyan}08, ${theme.orange}08)`, padding: '18px', boxShadow: `0 24px 64px ${theme.shadow}`, display: 'grid', gap: '16px' }} className="dashboard-panel">
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) minmax(0, 1fr)', gap: '14px', alignItems: 'stretch' }} className="dashboard-profile-shell">
               <div style={{ borderRadius: '24px', padding: '12px', background: 'transparent', border: 'none', display: 'grid', placeItems: 'center', position: 'relative', overflow: 'hidden', minHeight: '260px' }} className="dashboard-avatar-wrap">
@@ -1073,8 +1318,68 @@ export default function Dashboard() {
           </div>
         </section>
 
+        <section style={{ display: activeTab === 'home' ? 'grid' : 'none', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '16px' }} className="dashboard-top-grid">
+          <div
+            style={{ borderRadius: '24px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '14px', display: 'grid', gap: '10px', boxShadow: `0 18px 40px ${theme.shadow}` }}
+            role="button"
+            tabIndex={0}
+            onClick={() => router.push('/wellness')}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') router.push('/wellness');
+            }}
+          >
+            <div style={{ fontSize: '11px', letterSpacing: '0.12em', textTransform: 'uppercase', color: theme.textMuted, fontWeight: 800 }}>Wellness Club</div>
+            <div style={{ position: 'relative' }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="https://images.unsplash.com/photo-1517836357463-d25dfeac3438?auto=format&fit=crop&w=1200&q=80"
+                alt="Live fitness training"
+                style={{ width: '100%', height: '160px', borderRadius: '16px', objectFit: 'cover', border: `1px solid ${theme.cardBorder}` }}
+              />
+              <div style={{ position: 'absolute', left: '16px', bottom: '16px', right: '16px', display: 'grid', gap: '8px', padding: '10px', borderRadius: '18px', background: 'rgba(15,23,42,0.72)' }}>
+                <div style={{ fontSize: '11px', fontWeight: 800, color: '#fff', letterSpacing: '0.08em' }}>Wellness modules</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px' }}>
+                  {wellnessImageModules.map((item) => (
+                    <span key={item} style={{ fontSize: '10px', fontWeight: 700, color: '#fff', padding: '6px 8px', borderRadius: '999px', background: 'rgba(255,255,255,0.12)', textAlign: 'center' }}>{item}</span>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div style={{ fontSize: '13px', color: theme.textSecondary, lineHeight: 1.45 }}>Live wellness program shortcuts, quick access to workouts, recovery plans, and coach guidance.</div>
+          </div>
+
+          <div
+            style={{ borderRadius: '24px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '14px', display: 'grid', gap: '10px', boxShadow: `0 18px 40px ${theme.shadow}` }}
+            role="button"
+            tabIndex={0}
+            onClick={() => router.push('/nifty-strategies')}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') router.push('/nifty-strategies');
+            }}
+          >
+            <div style={{ fontSize: '11px', letterSpacing: '0.12em', textTransform: 'uppercase', color: theme.textMuted, fontWeight: 800 }}>Nifty Club</div>
+            <div style={{ position: 'relative' }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?auto=format&fit=crop&w=1200&q=80"
+                alt="Stock market dashboard"
+                style={{ width: '100%', height: '160px', borderRadius: '16px', objectFit: 'cover', border: `1px solid ${theme.cardBorder}` }}
+              />
+              <div style={{ position: 'absolute', left: '16px', bottom: '16px', right: '16px', display: 'grid', gap: '8px', padding: '10px', borderRadius: '18px', background: 'rgba(15,23,42,0.72)' }}>
+                <div style={{ fontSize: '11px', fontWeight: 800, color: '#fff', letterSpacing: '0.08em' }}>Nifty modules</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px' }}>
+                  {niftyImageModules.map((item) => (
+                    <span key={item} style={{ fontSize: '10px', fontWeight: 700, color: '#fff', padding: '6px 8px', borderRadius: '999px', background: 'rgba(255,255,255,0.12)', textAlign: 'center' }}>{item}</span>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div style={{ fontSize: '13px', color: theme.textSecondary, lineHeight: 1.45 }}>Market and strategy shortcuts for quick entries, trend checks, and live trade ideas.</div>
+          </div>
+        </section>
+
         <section
-          style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '12px', cursor: 'pointer' }}
+          style={{ display: activeTab === 'buddies' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '12px', cursor: 'pointer' }}
           className="dashboard-panel"
           role="button"
           tabIndex={0}
@@ -1085,7 +1390,7 @@ export default function Dashboard() {
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
             <div>
-              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Wellness showdown</div>
+              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Buddy showdown</div>
               <div style={{ fontSize: '24px', fontWeight: 800, color: theme.textHeading, marginTop: '6px' }}>{showdownTitle}</div>
             </div>
             <div style={{ fontSize: '11px', color: theme.textMuted, fontWeight: 700 }}>{`${Math.max(0, comparisonTrendRows.length - 1)} rivals • open leaderboard`}</div>
@@ -1096,9 +1401,68 @@ export default function Dashboard() {
           <ComparisonTrendChart rows={comparisonTrendRows} theme={theme} emptyLabel="Add wellness activity and active buddies to start the score sprint" />
         </section>
 
-        <section
-          style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '12px', cursor: 'pointer' }}
-          className="dashboard-panel"
+        <section style={{ display: activeTab === 'buddies' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '18px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '14px' }} className="dashboard-panel">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Buddy activity</div>
+              <div style={{ fontSize: '24px', fontWeight: 800, color: theme.textHeading, marginTop: '6px' }}>Friends on the move</div>
+            </div>
+            <div style={{ fontSize: '11px', color: theme.textMuted, fontWeight: 700 }}>Live activity highlights from your training circle</div>
+          </div>
+
+          <div style={{ display: 'grid', gap: '12px' }}>
+            {buddyActivityItems.map((item) => (
+              <div key={item.id} style={{ display: 'grid', gap: '10px', borderRadius: '20px', border: `1px solid ${theme.cardBorder}`, padding: '14px', background: theme.cardBg }}>
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                  <div style={{ width: '44px', height: '44px', borderRadius: '16px', display: 'grid', placeItems: 'center', background: `${theme.blue}10`, color: theme.blue, fontWeight: 800, fontSize: '18px' }}>{item.avatar}</div>
+                  <div style={{ display: 'grid', gap: '4px' }}>
+                    <div style={{ fontSize: '15px', fontWeight: 800, color: theme.textHeading }}>{item.title}</div>
+                    <div style={{ fontSize: '12px', color: theme.textSecondary, lineHeight: 1.4 }}>{item.description}</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section style={{ display: activeTab === 'posts' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '18px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '14px' }} className="dashboard-panel">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Community feed</div>
+              <div style={{ fontSize: '24px', fontWeight: 800, color: theme.textHeading, marginTop: '6px' }}>Intelligent post suggestions</div>
+            </div>
+            <div style={{ fontSize: '11px', color: theme.textMuted, fontWeight: 700 }}>{`${feedPosts.length} updates • refreshed every 30s`}</div>
+          </div>
+
+          <PostFeedModule posts={feedPosts.slice(0, 6)} theme={theme} onLike={likePost} />
+        </section>
+
+        <section style={{ display: activeTab === 'buddies' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '18px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '18px' }} className="dashboard-panel">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Buddy insights</div>
+              <div style={{ fontSize: '24px', fontWeight: 800, color: theme.textHeading, marginTop: '6px' }}>Your training circle</div>
+            </div>
+            <div style={{ fontSize: '11px', color: theme.textMuted, fontWeight: 700 }}>{`${buddyRows.length} buddies • performance graphs`}</div>
+          </div>
+
+          {buddyRows.length === 0 ? (
+            <div style={{ borderRadius: '20px', border: `1px solid ${theme.cardBorder}`, padding: '18px', color: theme.textMuted, background: theme.cardBg }}>No buddies are active yet. Add a buddy to compare performance and see side-by-side trend graphs.</div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '16px' }}>
+              {displayedBuddyRows.slice(0, 4).map((buddy) => (
+                <BuddyCard key={buddy.id} buddy={buddy} theme={theme} />
+              ))}
+            </div>
+          )}
+
+          <div style={{ borderRadius: '24px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px' }}>
+            <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textHeading, marginBottom: '12px' }}>Shared performance comparison</div>
+            <ComparisonTrendChart rows={displayedBuddyRows.slice(0, 6)} theme={theme} emptyLabel="Add buddies to unlock shared trend comparisons" />
+          </div>
+        </section>
+
+        <section style={{ display: activeTab === 'buddies' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '12px' }} className="dashboard-panel"
           role="button"
           tabIndex={0}
           onClick={() => router.push('/leaderboard')}
@@ -1127,7 +1491,7 @@ export default function Dashboard() {
           <ActivityFaceoffChart rows={activityShowdownRows} theme={theme} emptyLabel="Add activity minutes for you and your buddies to unlock the duel board" />
         </section>
 
-        <section style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.18fr) minmax(300px, 0.82fr)', gap: '16px' }} className="dashboard-market-grid">
+        <section style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '12px' }} className="dashboard-market-grid">
           <div
             style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '12px', cursor: 'pointer' }}
             className="dashboard-panel"
@@ -1150,39 +1514,8 @@ export default function Dashboard() {
 
             <MetricGrid items={marketCards} theme={theme} />
           </div>
-
-          <div style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '12px', alignContent: 'start' }} className="dashboard-panel">
-
-            <div style={{ display: 'grid', gap: '8px' }} className="dashboard-market-modules">
-              {tradingDeskModules.map((module) => (
-                <button key={module.path} type="button" onClick={() => router.push(module.path)} style={{ textAlign: 'left', borderRadius: '14px', border: `1px solid ${module.accent}44`, background: `linear-gradient(135deg, ${theme.cardBg}, ${module.accent}09)`, padding: '10px 12px', cursor: 'pointer', display: 'grid', gap: '4px', color: theme.textPrimary }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <div style={{ width: '32px', height: '32px', borderRadius: '10px', display: 'grid', placeItems: 'center', fontSize: '11px', fontWeight: 800, color: module.accent, background: `${module.accent}18`, border: `1px solid ${module.accent}30` }}>{module.icon}</div>
-                    <div style={{ fontSize: '14px', fontWeight: 800, color: theme.textHeading }}>{module.title}</div>
-                  </div>
-                  <div style={{ fontSize: '11px', color: theme.textMuted, lineHeight: 1.35 }}>{module.desc}</div>
-                </button>
-              ))}
-            </div>
-          </div>
         </section>
 
-        <section style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '14px' }} className="dashboard-panel">
-          <div>
-            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800, marginBottom: '8px' }}>Workspace</div>
-            <div style={{ fontSize: '24px', fontWeight: 800, color: theme.textHeading }}>Workspace</div>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '10px' }} className="dashboard-module-grid">
-            {workspaceModules.map((module) => (
-              <button key={module.path} type="button" onClick={() => router.push(module.path)} style={{ textAlign: 'left', borderRadius: '14px', border: `1px solid ${module.accent}55`, background: `linear-gradient(135deg, ${theme.cardBg}, ${module.accent}08)`, padding: '10px', cursor: 'pointer', display: 'grid', gap: '5px', color: theme.textPrimary, boxShadow: `0 8px 20px ${theme.shadow}` }}>
-                <div style={{ width: '34px', height: '34px', borderRadius: '10px', display: 'grid', placeItems: 'center', fontSize: '11px', fontWeight: 800, color: module.accent, background: `${module.accent}18`, border: `1px solid ${module.accent}30` }}>{module.icon}</div>
-                <div style={{ fontSize: '14px', fontWeight: 800, color: theme.textHeading }}>{module.title}</div>
-                <div style={{ fontSize: '11px', color: theme.textMuted, lineHeight: 1.3 }}>{module.desc}</div>
-              </button>
-            ))}
-          </div>
-        </section>
       </div>
     </div>
   );
