@@ -17,10 +17,18 @@ export class LoginService {
     return Boolean(this.databaseUrl);
   }
 
+  private getPoolOptions() {
+    const options: any = { connectionString: this.databaseUrl };
+    if (this.databaseUrl.includes('sslmode=') || this.databaseUrl.includes('ssl=true') || this.databaseUrl.includes('rds.amazonaws.com')) {
+      options.ssl = { rejectUnauthorized: false };
+    }
+    return options;
+  }
+
   private getPool() {
     if (!this.hasDatabase()) return null;
     if (!this.pool) {
-      this.pool = new Pool({ connectionString: this.databaseUrl });
+      this.pool = new Pool(this.getPoolOptions());
     }
     return this.pool;
   }

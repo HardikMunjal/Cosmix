@@ -9,12 +9,20 @@ export function hasPostgresStorage() {
   return Boolean(DATABASE_URL);
 }
 
+function getPostgresPoolOptions() {
+  const options = {
+    connectionString: DATABASE_URL,
+  };
+  if (DATABASE_URL.includes('sslmode=') || DATABASE_URL.includes('ssl=true') || DATABASE_URL.includes('rds.amazonaws.com')) {
+    options.ssl = { rejectUnauthorized: false };
+  }
+  return options;
+}
+
 export function getWebPool() {
   if (!hasPostgresStorage()) return null;
   if (!pool) {
-    pool = new Pool({
-      connectionString: DATABASE_URL,
-    });
+    pool = new Pool(getPostgresPoolOptions());
   }
   return pool;
 }

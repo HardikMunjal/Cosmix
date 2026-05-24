@@ -34,10 +34,18 @@ export class StravaService {
     return Boolean(DATABASE_URL);
   }
 
+  private getPoolOptions() {
+    const options: any = { connectionString: DATABASE_URL };
+    if (DATABASE_URL.includes('sslmode=') || DATABASE_URL.includes('ssl=true') || DATABASE_URL.includes('rds.amazonaws.com')) {
+      options.ssl = { rejectUnauthorized: false };
+    }
+    return options;
+  }
+
   private getPool() {
     if (!this.hasDatabase()) return null;
     if (!this.pool) {
-      this.pool = new Pool({ connectionString: DATABASE_URL });
+      this.pool = new Pool(this.getPoolOptions());
     }
     return this.pool;
   }
