@@ -1,5 +1,5 @@
 x-default-env: &default-env
-  DATABASE_URL: ${DATABASE_URL:-postgres://user:password@postgres:5432/cosmix}
+  DATABASE_URL: ${DATABASE_URL}
 
 services:
 

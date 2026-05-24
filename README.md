@@ -52,12 +52,18 @@ To get started with the Cosmix project, follow these steps:
    pnpm install
    ```
 
-3. Start the development environment:
+3. Create a local env file if you want the services to use Postgres or RDS.
+   Example values can be placed in `.env` or `.env.local` at the repo root.
+   ```env
+   DATABASE_URL=postgres://geekhm:<password>@cosmix.cmfi280ck4zl.us-east-1.rds.amazonaws.com:5432/cosmix?sslmode=require
+   ```
+
+4. Start the development environment:
    ```
   npm run dev
    ```
 
-4. Access the web application at `http://localhost:3005` and the API gateway at `http://localhost:3000`.
+5. Access the web application at `http://localhost:3005` and the API gateway at `http://localhost:3000`.
 
 ### Local Dev
 

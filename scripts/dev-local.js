@@ -119,6 +119,19 @@ function buildServiceEnv() {
     }
   }
 
+  if (!serviceEnv.DATABASE_URL) {
+    const pgUser = serviceEnv.POSTGRES_USER || serviceEnv.DB_USER || '';
+    const pgPassword = serviceEnv.POSTGRES_PASSWORD || serviceEnv.DB_PASSWORD || '';
+    const pgDb = serviceEnv.POSTGRES_DB || serviceEnv.DB_NAME || serviceEnv.DATABASE_NAME || '';
+    const pgHost = serviceEnv.POSTGRES_HOST || serviceEnv.DATABASE_HOST || serviceEnv.RDS_ENDPOINT || serviceEnv.POSTGRES_ENDPOINT || serviceEnv.DB_HOST || '';
+    const pgPort = serviceEnv.POSTGRES_PORT || serviceEnv.DB_PORT || '5432';
+
+    if (pgUser && pgPassword && pgDb && pgHost) {
+      const ssl = pgHost.includes('rds.amazonaws.com') || serviceEnv.PGSSLMODE === 'require' || serviceEnv.USE_SSL === 'true';
+      serviceEnv.DATABASE_URL = `postgres://${encodeURIComponent(pgUser)}:${encodeURIComponent(pgPassword)}@${pgHost}:${pgPort}/${pgDb}${ssl ? '?sslmode=require' : ''}`;
+    }
+  }
+
   return { serviceEnv, loadedFiles };
 }
 
