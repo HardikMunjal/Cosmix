@@ -1,5 +1,5 @@
 x-default-env: &default-env
-  DATABASE_URL: ${DATABASE_URL}
+  DATABASE_URL: ${DATABASE_URL:-postgres://user:password@postgres:5432/cosmix}
 
 services:
 
@@ -106,23 +106,3 @@ services:
         condition: service_started
     volumes:
       - ../apps/web/data:/usr/src/app/data
-
-  postgres:
-    image: postgres:13
-    restart: unless-stopped
-    ports:
-      - "5432:5432"
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
-      POSTGRES_DB: ${POSTGRES_DB:-cosmix}
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-cosmix}"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-
-volumes:
-  postgres_data:
