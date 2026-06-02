@@ -19,27 +19,9 @@ if (-not (Test-Path -LiteralPath $KeyPath)) {
     throw "SSH key not found: $KeyPath"
 }
 
-$remoteScript = @"
-set -euo pipefail
-cd /opt/cosmix
-echo '=== git pull ==='
-git pull origin main
-echo '=== docker disk cleanup ==='
-docker container prune -f || true
-docker image prune -af || true
-docker builder prune -af || true
-docker system prune -af || true
-df -h / | tail -1
-echo '=== build: $serviceList ==='
-$composeBase build $noCacheFlag $serviceList
-echo '=== restart stack ==='
-$composeBase up -d nginx web api-gateway chat-service wellness-service auth-service user-service
-echo '=== status ==='
-$composeBase ps
-docker system df
-"@
+$remoteScript = "cd /opt/cosmix && git pull origin main && docker container prune -f || true && docker image prune -af || true && docker builder prune -af || true && docker system prune -af || true && df -h / | tail -1 && $composeBase build $noCacheFlag $serviceList && $composeBase up -d nginx web api-gateway chat-service wellness-service auth-service user-service && $composeBase ps && docker system df"
 
-& $ssh -i $KeyPath "${ServerUser}@${ServerIP}" $remoteScript
+& $ssh -i $KeyPath "${ServerUser}@${ServerIP}" "bash -lc '$remoteScript'"
 if ($LASTEXITCODE -ne 0) {
     throw "Remote deploy failed with exit code $LASTEXITCODE"
 }
