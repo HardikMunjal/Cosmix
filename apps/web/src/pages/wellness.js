@@ -18,6 +18,7 @@ import {
   normalizeScoringRules,
 } from '../lib/wellnessScoring';
 import { resolveAvatarPresentation } from '../lib/avatarProfile';
+import { MobileBottomNav } from '../lib/MobileNav';
 
 const STORAGE_LANG_KEY = 'cosmix-henna-language';
 function storageKey(userId, suffix) { return `cosmix-wellness-${userId}-${suffix}`; }
@@ -1158,27 +1159,39 @@ export default function WellnessPage() {
       <MountainBg />
       <div style={s.page} className="henna-page">
         {/* header */}
-        <div style={s.header}>
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={s.header} className="wellness-header">
+          <div className="wellness-header-brand" style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 12 }}>
             <AvatarChip user={user} size={52} />
             <div style={{ minWidth: 0 }}>
               <div style={s.eyebrow}>Wellness Tracker</div>
               <h1 style={s.title}>Henna</h1>
             </div>
           </div>
-          <div style={s.headerRight}>
+          <div style={s.headerRight} className="wellness-header-actions">
             {weather && (
-              <div style={s.weatherPill}>
+              <div style={s.weatherPill} className="wellness-weather-pill">
                 <span>{weather.icon}</span>
                 <span style={{ fontWeight: 800 }}>{weather.temp}°C</span>
                 <span style={{ fontSize: 11, opacity: 0.8 }}>{weather.city}</span>
               </div>
             )}
-            {canManageScoringRules && <button onClick={() => router.push('/wellness-admin')} style={s.chipBtn}>Scoring Admin</button>}
-            <button onClick={() => router.push('/leaderboard')} style={s.chipBtn}>🏆 Leaderboard</button>
-            <button onClick={() => router.push('/running-analytics')} style={s.chipBtn}>📊 Analytics</button>
-            <button onClick={() => router.push('/dashboard')} style={s.chipBtn}>Dashboard</button>
-            <button onClick={() => logoutClientSession(router)} style={s.chipBtn}>Logout</button>
+            <button type="button" onClick={() => router.push('/dashboard')} style={s.chipBtn} className="wellness-nav-home">Home</button>
+            <details className="wellness-more-menu">
+              <summary style={s.chipBtn}>More</summary>
+              <div className="wellness-more-panel">
+                {canManageScoringRules && <button type="button" onClick={() => router.push('/wellness-admin')} style={s.menuBtn}>Scoring Admin</button>}
+                <button type="button" onClick={() => router.push('/leaderboard')} style={s.menuBtn}>Leaderboard</button>
+                <button type="button" onClick={() => router.push('/running-analytics')} style={s.menuBtn}>Analytics</button>
+                <button type="button" onClick={() => logoutClientSession(router)} style={{ ...s.menuBtn, color: '#fecaca' }}>Logout</button>
+              </div>
+            </details>
+            <div className="wellness-header-desktop">
+              {canManageScoringRules && <button type="button" onClick={() => router.push('/wellness-admin')} style={s.chipBtn}>Scoring Admin</button>}
+              <button type="button" onClick={() => router.push('/leaderboard')} style={s.chipBtn}>Leaderboard</button>
+              <button type="button" onClick={() => router.push('/running-analytics')} style={s.chipBtn}>Analytics</button>
+              <button type="button" onClick={() => router.push('/dashboard')} style={s.chipBtn}>Dashboard</button>
+              <button type="button" onClick={() => logoutClientSession(router)} style={s.chipBtn}>Logout</button>
+            </div>
           </div>
         </div>
 
@@ -1307,16 +1320,16 @@ export default function WellnessPage() {
             </div>
 
             {planInfo ? (<>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, padding: '10px 14px', borderRadius: 14, background: 'rgba(251,113,133,0.10)', border: '1px solid rgba(251,113,133,0.22)', flexWrap: 'wrap' }}>
+            <div className="wellness-date-row" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, padding: '10px 14px', borderRadius: 14, background: 'rgba(251,113,133,0.10)', border: '1px solid rgba(251,113,133,0.22)', flexWrap: 'wrap' }}>
               <span style={{ fontSize: 18 }}>📅</span>
               <span style={{ fontWeight: 800, fontSize: 13, opacity: 0.9 }}>Logging for:</span>
-              <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} style={{ ...s.dateInput, flex: '0 0 auto' }} max={todayDate()} />
+              <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} style={{ ...s.dateInput, flex: '1 1 160px', minWidth: 0 }} max={todayDate()} />
               <span style={{ fontSize: 14, fontWeight: 700, color: '#fde68a' }}>{formatDisplayDate(selectedDate)}</span>
               {!selectedDateIsToday && <span style={{ fontSize: 11, padding: '3px 9px', borderRadius: 999, background: 'rgba(251,191,36,0.18)', color: '#fbbf24', fontWeight: 700, border: '1px solid rgba(251,191,36,0.3)' }}>Past date</span>}
             </div>
-            <div style={s.toggleRow}>
-              <button onClick={() => setInputMode('dropdown')} style={inputMode === 'dropdown' ? s.toggleActive : s.toggleBtn}>Dropdown</button>
-              <button onClick={() => setInputMode('text')} style={inputMode === 'text' ? s.toggleActive : s.toggleBtn}>Text / Voice</button>
+            <div style={s.toggleRow} className="wellness-toggle-row">
+              <button type="button" onClick={() => setInputMode('dropdown')} style={inputMode === 'dropdown' ? s.toggleActive : s.toggleBtn}>Form</button>
+              <button type="button" onClick={() => setInputMode('text')} style={inputMode === 'text' ? s.toggleActive : s.toggleBtn}>Quick text</button>
             </div>
             {inputMode === 'dropdown' ? (
               <>
@@ -1324,6 +1337,8 @@ export default function WellnessPage() {
                   {activityOptions.map((a) => (
                     <button
                       key={a.id}
+                      type="button"
+                      className={selectedActivity === a.id ? 'wellness-act-btn wellness-act-btn-active' : 'wellness-act-btn'}
                       onClick={() => { setSelectedActivity(a.id); setFieldValues({}); }}
                       style={selectedActivity === a.id ? s.actBtnActive : s.actBtn}
                     >
@@ -1335,8 +1350,8 @@ export default function WellnessPage() {
 
                 {selectedActivityConfig && (
                   selectedActivity === 'headache' ? (
-                    <div style={{ marginTop: 14, animation: 'fadeIn .2s ease-out' }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 14px', marginBottom: 12 }}>
+                    <div className="wellness-activity-form" style={{ marginTop: 14, animation: 'fadeIn .2s ease-out' }}>
+                      <div className="wellness-field-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 14px', marginBottom: 12 }}>
                         {selectedActivityConfig.fields.map((f) => (
                           <div key={f.key} style={f.input === 'textarea' ? { gridColumn: '1 / -1' } : {}}>
                             <label style={s.fieldLabel}>{f.unit ? `${f.label} (${f.unit})` : f.label}</label>
@@ -1353,10 +1368,10 @@ export default function WellnessPage() {
                           </div>
                         ))}
                       </div>
-                      <button onClick={handleDropdownSave} style={s.addBtn}>+ Add Headache</button>
+                      <button type="button" onClick={handleDropdownSave} style={s.addBtn} className="wellness-add-btn">+ Add Headache</button>
                     </div>
                   ) : (
-                    <div style={s.fieldRow} className="field-row">
+                    <div style={s.fieldRow} className="field-row wellness-activity-form">
                       {selectedActivityConfig.fields.map((f) => (
                         <div key={f.key} style={s.fieldGroup}>
                           <label style={s.fieldLabel}>{f.unit ? `${f.label} (${f.unit})` : f.label}</label>
@@ -1372,14 +1387,14 @@ export default function WellnessPage() {
                           )}
                         </div>
                       ))}
-                      <button onClick={handleDropdownSave} style={s.addBtn}>+ Add</button>
+                      <button type="button" onClick={handleDropdownSave} style={s.addBtn} className="wellness-add-btn">+ Add activity</button>
                     </div>
                   )
                 )}
               </>
             ) : (
-              <div style={{ marginTop: 12 }}>
-                <div style={s.textRow}>
+              <div className="wellness-quick-entry" style={{ marginTop: 12 }}>
+                <div style={s.textRow} className="wellness-text-row">
                   <input
                     value={commandInput}
                     onChange={(e) => setCommandInput(e.target.value)}
@@ -1387,9 +1402,9 @@ export default function WellnessPage() {
                     placeholder="e.g. running 5 km 30 min"
                     style={s.textInput}
                   />
-                  <button onClick={() => handleParsedMessage(commandInput, 'text')} style={s.addBtn}>Add</button>
+                  <button type="button" onClick={() => handleParsedMessage(commandInput, 'text')} style={s.addBtn} className="wellness-add-btn">Add</button>
                 </div>
-                <div style={s.voiceRow}>
+                <div style={s.voiceRow} className="wellness-voice-row">
                   <button onClick={startVoiceInput} style={listening ? s.micActive : s.micBtn}>
                     {listening ? '🔴 Listening...' : '🎙️ Voice'}
                   </button>
@@ -1436,12 +1451,16 @@ export default function WellnessPage() {
                 <div style={s.loggedTitle}>Activities for {formatDisplayDate(selectedDate)}</div>
                 <div style={s.loggedList}>
                   {todayActivities.map((a) => (
-                    <div key={a.label} style={s.loggedItem}>
-                      <span>{a.icon}</span>
-                      <span style={{ fontWeight: 700 }}>{a.label}</span>
-                      <span style={{ opacity: 0.8, fontSize: 13 }}>{a.detail}</span>
-                      <button type="button" onClick={() => openActivityEditor(a.id)} style={s.smallChipBtn}>Edit</button>
-                      <button type="button" onClick={() => handleDeleteActivity(a.id)} style={{ ...s.smallChipBtn, borderColor: 'rgba(248,113,113,0.4)', color: '#fecaca', background: 'rgba(248,113,113,0.14)' }}>Delete</button>
+                    <div key={a.label} style={s.loggedItem} className="wellness-logged-item">
+                      <div className="wellness-logged-main">
+                        <span>{a.icon}</span>
+                        <span style={{ fontWeight: 700 }}>{a.label}</span>
+                        <span style={{ opacity: 0.8, fontSize: 13 }}>{a.detail}</span>
+                      </div>
+                      <div className="wellness-logged-actions">
+                        <button type="button" onClick={() => openActivityEditor(a.id)} style={s.smallChipBtn}>Edit</button>
+                        <button type="button" onClick={() => handleDeleteActivity(a.id)} style={{ ...s.smallChipBtn, borderColor: 'rgba(248,113,113,0.4)', color: '#fecaca', background: 'rgba(248,113,113,0.14)' }}>Delete</button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1974,6 +1993,17 @@ export default function WellnessPage() {
             </div>
           )}
         </div>
+
+        <MobileBottomNav
+          theme={{ blue: '#38bdf8', textMuted: '#cbd5e1' }}
+          activeId="wellness"
+          items={[
+            { id: 'home', label: 'Home', icon: '🏠', href: '/dashboard' },
+            { id: 'wellness', label: 'Log', icon: '💪', href: '/wellness' },
+            { id: 'board', label: 'Ranks', icon: '🏆', href: '/leaderboard' },
+            { id: 'stats', label: 'Stats', icon: '📊', href: '/running-analytics' },
+          ]}
+        />
       </div>
     </>
   );
@@ -1987,17 +2017,84 @@ const pageKeyframes = `
   .henna-page button{transition:transform .12s,box-shadow .15s}
   .henna-page button:hover{transform:translateY(-1px)}
   .henna-page button:active{transform:scale(0.97)}
+  .wellness-more-menu { position: relative; }
+  .wellness-more-menu summary { list-style: none; cursor: pointer; }
+  .wellness-more-menu summary::-webkit-details-marker { display: none; }
+  .wellness-more-panel {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 8px);
+    min-width: 180px;
+    padding: 6px;
+    border-radius: 14px;
+    background: rgba(29,18,44,0.96);
+    border: 1px solid rgba(255,255,255,0.12);
+    backdrop-filter: blur(18px);
+    display: grid;
+    gap: 4px;
+    z-index: 30;
+    box-shadow: 0 14px 40px rgba(0,0,0,0.28);
+  }
+  .wellness-header-desktop { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .wellness-more-menu { display: none; }
   @media(max-width:840px){
     .main-grid{grid-template-columns:1fr!important}
     .score-strip{grid-template-columns:1fr 1fr!important}
     .dash-grid{grid-template-columns:1fr!important}
     .activity-grid{grid-template-columns:repeat(4,1fr)!important}
-    .field-row{flex-direction:column!important}
+    .field-row{flex-direction:column!important;align-items:stretch!important}
     .plan-stats-grid{grid-template-columns:1fr 1fr!important}
+    .wellness-header-desktop{display:none!important}
+    .wellness-more-menu{display:block!important}
+    .wellness-header-actions{width:100%;justify-content:flex-end}
+    .wellness-header{flex-direction:column;align-items:stretch}
+    .wellness-header-brand{width:100%}
+  }
+  @media(max-width:720px){
+    .henna-page{padding:12px 12px 0!important}
+    .wellness-header{
+      padding:12px 14px;
+      border-radius:18px;
+      background:rgba(255,255,255,0.08);
+      border:1px solid rgba(255,255,255,0.12);
+      margin-bottom:10px;
+    }
+    .score-strip{gap:8px!important;margin-bottom:10px!important}
+    .score-card{padding:12px!important}
+    .score-num{font-size:18px!important}
+    .weekly-item{padding:8px 10px!important}
+    .card{padding:14px!important}
+    .activity-grid{grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:8px!important}
+    .wellness-act-btn{min-height:58px!important;padding:10px 6px!important}
+    .wellness-toggle-row{display:grid!important;grid-template-columns:1fr 1fr!important;gap:8px!important}
+    .wellness-toggle-row button{width:100%!important;min-height:44px!important}
+    .wellness-date-row{flex-direction:column!important;align-items:stretch!important}
+    .wellness-date-row input[type=date]{width:100%!important}
+    .wellness-field-grid{grid-template-columns:1fr!important}
+    .field-row .fieldGroup,.field-row .wellness-add-btn{width:100%!important}
+    .wellness-add-btn{width:100%!important;min-height:48px!important;margin-top:8px!important;font-size:15px!important}
+    .wellness-text-row{flex-direction:column!important}
+    .wellness-text-row input,.wellness-text-row button{width:100%!important}
+    .wellness-voice-row{display:grid!important;grid-template-columns:1fr 1fr!important}
+    .wellness-voice-row button,.wellness-voice-row select{width:100%!important;min-height:44px!important}
+    .wellness-logged-item{
+      width:100%!important;
+      flex-direction:column!important;
+      align-items:stretch!important;
+      gap:8px!important;
+    }
+    .wellness-logged-main{display:grid!important;gap:4px!important}
+    .wellness-logged-actions{display:grid!important;grid-template-columns:1fr 1fr!important;gap:8px!important}
+    .wellness-logged-actions button{width:100%!important;min-height:40px!important;padding:8px 10px!important}
+    .plan-controls{flex-direction:column!important;align-items:stretch!important}
+    .plan-controls input,.plan-controls button,.plan-textInput{width:100%!important}
+    .plan-header-row{align-items:flex-start!important}
   }
   @media(max-width:480px){
     .score-strip{grid-template-columns:1fr 1fr!important;gap:8px!important}
-    .activity-grid{grid-template-columns:repeat(3,1fr)!important}
+    .activity-grid{grid-template-columns:repeat(3,minmax(0,1fr))!important}
+    .title{font-size:24px!important}
+    .wellness-nav-home{display:none!important}
   }
   input[type=date]::-webkit-calendar-picker-indicator{filter:invert(1)}
 `;
@@ -2025,6 +2122,7 @@ const s = {
   headerRight: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   weatherPill: { display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 999, ...glass, fontSize: 13 },
   chipBtn: { border: '1px solid rgba(255,255,255,0.18)', borderRadius: 999, padding: '8px 16px', background: 'rgba(255,255,255,0.10)', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: 13 },
+  menuBtn: { width: '100%', border: 'none', borderRadius: 10, padding: '10px 12px', background: 'transparent', color: '#fff', textAlign: 'left', fontSize: 13, fontWeight: 700, cursor: 'pointer' },
   scoreStrip: { display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 10 },
   scoreCard: { display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', ...glass, borderRadius: 16, transition: 'transform .15s', cursor: 'default' },
   scoreIcon: { fontSize: 26 },

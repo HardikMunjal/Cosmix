@@ -2,9 +2,49 @@ import { useRouter } from 'next/router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import io from 'socket.io-client';
 import { logoutClientSession } from '../lib/auth-client';
+import { ChatAlbumGallery } from '../lib/ChatAlbumGallery';
+import { MobileBottomNav } from '../lib/MobileNav';
 import { useTheme } from '../lib/ThemePicker';
 
-let socket = null;
+function resolveChatSocketClient() {
+  const sharedOptions = {
+    transports: ['polling', 'websocket'],
+    reconnectionAttempts: 12,
+    reconnectionDelay: 1000,
+    timeout: 20000,
+  };
+
+  const explicitUrl = String(process.env.NEXT_PUBLIC_CHAT_SOCKET_URL || '').trim();
+  if (explicitUrl) {
+    return { url: explicitUrl, options: sharedOptions };
+  }
+
+  if (typeof window === 'undefined') {
+    return {
+      url: undefined,
+      options: { ...sharedOptions, path: '/chat-socket/socket.io' },
+    };
+  }
+
+  const { hostname, port, protocol } = window.location;
+  const isDevWeb = port === '3005' || port === '';
+  const isLoopback = hostname === 'localhost' || hostname === '127.0.0.1';
+  const isLanIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname);
+
+  // Local dev: connect straight to chat-service (Next /chat-socket rewrite returns 308 and breaks WS).
+  if (isDevWeb && (isLoopback || isLanIp)) {
+    const scheme = protocol === 'https:' ? 'https' : 'http';
+    return {
+      url: `${scheme}://${hostname}:3002`,
+      options: sharedOptions,
+    };
+  }
+
+  return {
+    url: undefined,
+    options: { ...sharedOptions, path: '/chat-socket/socket.io' },
+  };
+}
 
 function sameChat(left, right) {
   if (!left || !right) return false;
@@ -38,10 +78,29 @@ function getDefaultChat(bootstrap, currentUsername) {
 }
 
 function buildDmId(left, right) {
-  return ['' + left, '' + right]
+  const pair = ['' + left, '' + right]
     .map((value) => value.trim().toLowerCase())
-    .sort((a, b) => a.localeCompare(b))
-    .join('::');
+    .sort((a, b) => a.localeCompare(b));
+  return `dm:${pair[0]}::${pair[1]}`;
+}
+
+function normalizeDmId(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return '';
+  return raw.startsWith('dm:') ? raw : `dm:${raw.replace(/^dm:/, '')}`;
+}
+
+function chatMatchesActive(activeChat, messageChat) {
+  if (!activeChat || !messageChat || activeChat.type !== messageChat.type) return false;
+  if (activeChat.type === 'dm') {
+    const activeId = normalizeDmId(activeChat.id);
+    const messageId = normalizeDmId(messageChat.id);
+    if (activeId && messageId && activeId === messageId) return true;
+    return normalizeUsername(activeChat.name) === normalizeUsername(messageChat.name);
+  }
+  const activeKey = activeChat.id || activeChat.name;
+  const messageKey = messageChat.id || messageChat.name;
+  return activeKey === messageKey;
 }
 
 function parseCommaList(value) {
@@ -780,6 +839,9 @@ export default function ChatPage() {
   const [statusMessage, setStatusMessage] = useState('Loading chat workspace...');
   const [connectionState, setConnectionState] = useState('connecting');
   const [groupForm, setGroupForm] = useState({ name: '', description: '', parentGroupId: '', members: '', viewers: '' });
+  const [threadCoverFile, setThreadCoverFile] = useState(null);
+  const [threadCoverPreview, setThreadCoverPreview] = useState('');
+  const [creatingThread, setCreatingThread] = useState(false);
   const [visibilityForm, setVisibilityForm] = useState({ members: '', viewers: '' });
   const [imageCaption, setImageCaption] = useState('');
   const [commentDrafts, setCommentDrafts] = useState({});
@@ -815,6 +877,7 @@ export default function ChatPage() {
   const messagesContainerRef = useRef(null);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
+  const threadCoverInputRef = useRef(null);
   const composerRef = useRef(null);
   const inviteHandledRef = useRef(false);
   const activeChatRef = useRef(null);
@@ -824,10 +887,11 @@ export default function ChatPage() {
   const permissionAskedRef = useRef(false);
   const pushSubscribedRef = useRef(false);
   const callRoomRef = useRef('');
+  const socketRef = useRef(null);
+  const socketConnectErrorShownRef = useRef(false);
+  const userRef = useRef(null);
 
-  const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-  const isLocalHost = host === 'localhost' || host === '127.0.0.1';
-  const chatApiBase = isLocalHost ? `http://${host}:3002/chat` : '/chat-api/chat';
+  const chatApiBase = '/chat-api/chat';
 
   const flattenedGroups = useMemo(() => flattenGroups(bootstrap.groups), [bootstrap.groups]);
   const selectedGroup = useMemo(
@@ -845,7 +909,7 @@ export default function ChatPage() {
   const visibleMessages = useMemo(
     () => {
       if (!activeChat) return [];
-      const scoped = messages.filter((message) => message.chat?.type === activeChat.type && (message.chat?.id || message.chat?.name) === activeChat.id);
+      const scoped = messages.filter((message) => chatMatchesActive(activeChat, message.chat));
       if (!showBookmarkedOnly || activeChat.type !== 'group') return scoped;
       return scoped.filter((message) => bookmarkedMessageIds.has(message.id));
     },
@@ -1029,9 +1093,9 @@ export default function ChatPage() {
 
   async function handleLogout() {
     try {
-      if (socket) {
-        socket.disconnect();
-        socket = null;
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
       }
     } catch (_) {
       // Ignore socket teardown failures.
@@ -1139,6 +1203,7 @@ export default function ChatPage() {
     if (!user?.username) return undefined;
 
     const interval = window.setInterval(async () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
       try {
         const payload = await loadBootstrapSnapshot();
         if (!payload) return;
@@ -1154,7 +1219,7 @@ export default function ChatPage() {
       } catch (_) {
         // Background refresh failures should not interrupt the UI.
       }
-    }, 10000);
+    }, 120000);
 
     return () => window.clearInterval(interval);
   }, [chatApiBase, user?.username]);
@@ -1188,6 +1253,10 @@ export default function ChatPage() {
   }, [router]);
 
   useEffect(() => {
+    userRef.current = user;
+  }, [user]);
+
+  useEffect(() => {
     if (!user?.username) return;
     fetchBootstrap().then(() => {
       setStatusMessage('Ready');
@@ -1199,28 +1268,45 @@ export default function ChatPage() {
   useEffect(() => {
     if (!user?.username) return undefined;
 
-    const socketUrl = isLocalHost ? `http://${host}:3002` : undefined;
-    const socketOptions = isLocalHost
-      ? { transports: ['websocket', 'polling'] }
-      : { path: '/chat-socket/socket.io', transports: ['websocket', 'polling'] };
+    let active = true;
+    setConnectionState('connecting');
+    socketConnectErrorShownRef.current = false;
+    const { url: socketUrl, options: socketOptions } = resolveChatSocketClient();
+    const chatSocket = io(socketUrl, socketOptions);
+    socketRef.current = chatSocket;
 
-    socket = io(socketUrl, socketOptions);
-
-    socket.on('connect', () => {
+    chatSocket.on('connect', () => {
+      if (!active) return;
+      socketConnectErrorShownRef.current = false;
       setConnectionState('connected');
-      socket.emit('join', { username: user.username, userId: user.id || null, avatar: user.avatar || null });
-      socket.emit('call_status_snapshot');
+      const currentUser = userRef.current;
+      chatSocket.emit('join', {
+        username: currentUser?.username || user.username,
+        userId: currentUser?.id || user.id || null,
+        avatar: currentUser?.avatar || null,
+      });
+      chatSocket.emit('call_status_snapshot');
     });
 
-    socket.on('disconnect', () => {
+    chatSocket.on('disconnect', () => {
+      if (!active) return;
       setConnectionState('offline');
     });
 
-    socket.on('history', (payload) => {
+    chatSocket.on('connect_error', (error) => {
+      if (!active) return;
+      setConnectionState('offline');
+      if (!socketConnectErrorShownRef.current) {
+        socketConnectErrorShownRef.current = true;
+        reportError(error?.message || 'Could not connect to chat server. Is chat-service running on port 3002?');
+      }
+    });
+
+    chatSocket.on('history', (payload) => {
       setMessages((previous) => mergeMessages(previous, payload.messages || []));
     });
 
-    socket.on('message', (payload) => {
+    chatSocket.on('message', (payload) => {
       setMessages((previous) => mergeMessages(previous, [payload]));
 
       if (!payload?.user || payload.user === user.username) return;
@@ -1239,25 +1325,25 @@ export default function ChatPage() {
       }
     });
 
-    socket.on('online_users', (list) => {
+    chatSocket.on('online_users', (list) => {
       setOnlineUsers(Array.from(new Set((list || []).filter(Boolean))));
     });
 
-    socket.on('typing', (payload) => {
+    chatSocket.on('typing', (payload) => {
       if (!payload?.user || payload.user === user.username) return;
       setTypingUsers((previous) => (previous.includes(payload.user) ? previous : [...previous, payload.user]));
-      window.clearTimeout(socket.__typingTimer);
-      socket.__typingTimer = window.setTimeout(() => {
+      window.clearTimeout(chatSocket.__typingTimer);
+      chatSocket.__typingTimer = window.setTimeout(() => {
         setTypingUsers((previous) => previous.filter((name) => name !== payload.user));
       }, 1500);
     });
 
-    socket.on('call_presence', (payload) => {
+    chatSocket.on('call_presence', (payload) => {
       if (!payload?.room || payload.room !== callRoomRef.current) return;
       setCallParticipants(Array.isArray(payload.participants) ? payload.participants : []);
     });
 
-    socket.on('call_status', (payload) => {
+    chatSocket.on('call_status', (payload) => {
       const room = String(payload?.room || '').trim();
       if (!room.startsWith('group:')) return;
       const groupId = room.slice('group:'.length);
@@ -1268,7 +1354,7 @@ export default function ChatPage() {
       }));
     });
 
-    socket.on('call_status_snapshot', (list) => {
+    chatSocket.on('call_status_snapshot', (list) => {
       const next = {};
       (Array.isArray(list) ? list : []).forEach((entry) => {
         const room = String(entry?.room || '').trim();
@@ -1280,45 +1366,53 @@ export default function ChatPage() {
       setCallStatusByGroup(next);
     });
 
-    socket.on('chat_error', (payload) => {
+    chatSocket.on('chat_error', (payload) => {
       reportError(payload?.message || 'Chat request failed.');
     });
 
     return () => {
-      socket?.disconnect();
-      socket = null;
+      active = false;
+      chatSocket.removeAllListeners();
+      chatSocket.disconnect();
+      if (socketRef.current === chatSocket) {
+        socketRef.current = null;
+      }
     };
-  }, [host, isLocalHost, user?.avatar, user?.id, user?.username]);
+  }, [user?.username]);
 
   useEffect(() => {
-    if (!socket || connectionState !== 'connected') return;
+    const chatSocket = socketRef.current;
+    if (!chatSocket?.connected || connectionState !== 'connected') return;
     bootstrap.groups.forEach((group) => {
-      socket.emit('join_room', { room: group.id });
+      chatSocket.emit('join_room', { room: group.id });
     });
   }, [bootstrap.groups, connectionState]);
 
   useEffect(() => {
-    if (!socket || connectionState !== 'connected' || !user?.username || !activeChat) return;
-    socket.emit('open_chat', { chat: { type: activeChat.type, id: activeChat.id, name: activeChat.name } });
+    const chatSocket = socketRef.current;
+    if (!chatSocket?.connected || connectionState !== 'connected' || !user?.username || !activeChat) return;
+    chatSocket.emit('open_chat', { chat: { type: activeChat.type, id: activeChat.id, name: activeChat.name } });
   }, [activeChat, connectionState, user?.username]);
 
   useEffect(() => {
-    if (!socket || connectionState !== 'connected') return undefined;
+    const chatSocket = socketRef.current;
+    if (!chatSocket?.connected || connectionState !== 'connected') return undefined;
     if (!callPresenceRoom) {
       setCallParticipants([]);
       return undefined;
     }
-    socket.emit('call_presence_watch', { room: callPresenceRoom });
+    chatSocket.emit('call_presence_watch', { room: callPresenceRoom });
     return () => {
-      socket?.emit('call_presence_unwatch', { room: callPresenceRoom });
+      chatSocket.emit('call_presence_unwatch', { room: callPresenceRoom });
     };
   }, [callPresenceRoom, connectionState]);
 
   useEffect(() => {
     if (!joinedCallRoom) return;
     if (joinedCallRoom === callPresenceRoom) return;
-    if (socket && connectionState === 'connected') {
-      socket.emit('call_leave', { room: joinedCallRoom });
+    const chatSocket = socketRef.current;
+    if (chatSocket?.connected && connectionState === 'connected') {
+      chatSocket.emit('call_leave', { room: joinedCallRoom });
     }
     setJoinedCallRoom('');
   }, [callPresenceRoom, connectionState, joinedCallRoom]);
@@ -1466,12 +1560,29 @@ export default function ChatPage() {
     };
   }, [buddySearch, user?.username]);
 
+  async function uploadThreadMedia(file, groupId, purpose = '') {
+    const formData = new FormData();
+    formData.append('files', file);
+    formData.append('username', user.username);
+    formData.append('groupId', groupId);
+    if (purpose) formData.append('purpose', purpose);
+    const uploadResponse = await fetch('/api/chat/group-image-upload', { method: 'POST', body: formData });
+    const uploadPayload = await readJsonResponse(uploadResponse);
+    const uploads = Array.isArray(uploadPayload?.uploads) ? uploadPayload.uploads : [];
+    if (!uploads.length) throw new Error('Cover upload failed.');
+    return uploads[0];
+  }
+
   async function handleCreateGroup(event) {
     event.preventDefault();
-    if (!groupForm.name.trim() || !user?.username) return;
+    if (!groupForm.name.trim() || !user?.username) {
+      reportError('Enter a thread name and make sure you are logged in.');
+      return;
+    }
 
+    setCreatingThread(true);
     try {
-      await submitJson(
+      const payload = await submitJson(
         '/groups',
         'POST',
         {
@@ -1482,18 +1593,63 @@ export default function ChatPage() {
           memberUsernames: parseCommaList(groupForm.members),
           viewerUsernames: parseCommaList(groupForm.viewers),
         },
-        (payload) => {
-          const createdGroup = payload.groups.find((group) => group.name === groupForm.name.trim());
+        (nextPayload) => {
+          const createdGroupId = nextPayload.createdGroupId
+            || nextPayload.groups
+              ?.filter((group) => group.name === groupForm.name.trim())
+              ?.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())?.[0]?.id;
+          const createdGroup = nextPayload.groups.find((group) => group.id === createdGroupId);
           return createdGroup
             ? { type: 'group', id: createdGroup.id, name: createdGroup.name, label: createdGroup.name }
             : null;
         },
       );
+
+      const createdGroupId = payload.createdGroupId
+        || payload.groups
+          ?.filter((group) => group.name === groupForm.name.trim())
+          ?.sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())?.[0]?.id;
+
+      if (!createdGroupId) {
+        throw new Error('Thread was created but could not be opened.');
+      }
+
+      if (threadCoverFile) {
+        const uploaded = await uploadThreadMedia(threadCoverFile, createdGroupId, 'cover');
+        await submitJson(`/groups/${createdGroupId}/cover`, 'PUT', {
+          actorUsername: user.username,
+          coverImageUrl: uploaded.url,
+          coverS3Key: uploaded.key,
+          coverMediaType: uploaded.mediaType || 'image',
+        }, (nextPayload) => {
+          const createdGroup = nextPayload.groups.find((group) => group.id === createdGroupId);
+          return createdGroup
+            ? { type: 'group', id: createdGroup.id, name: createdGroup.name, label: createdGroup.name }
+            : null;
+        });
+      }
+
       setGroupForm({ name: '', description: '', parentGroupId: '', members: '', viewers: '' });
-      reportStatus('Group created.');
+      setThreadCoverFile(null);
+      setThreadCoverPreview('');
+      setSidebarPanel('');
+      setShowSidebar(false);
+      setActivePanelTab('invite');
+      reportStatus('Thread created. Copy or share the invite link!');
     } catch (error) {
-      reportError(error.message);
+      reportError(error.message || 'Unable to create thread.');
+    } finally {
+      setCreatingThread(false);
     }
+  }
+
+  function handleThreadCoverPick(event) {
+    const file = Array.from(event.target.files || [])[0];
+    if (!file) return;
+    setThreadCoverFile(file);
+    const previewUrl = URL.createObjectURL(file);
+    setThreadCoverPreview(previewUrl);
+    event.target.value = '';
   }
 
   async function handleUpdateVisibility(event) {
@@ -1568,6 +1724,7 @@ export default function ChatPage() {
           imageUrl: uploaded.url,
           s3Key: uploaded.key,
           caption: imageCaption.trim(),
+          mediaType: uploaded.mediaType || 'image',
         }, (nextPayload) => {
           const refreshed = nextPayload.groups.find((group) => group.id === selectedGroup.id);
           return refreshed ? { type: 'group', id: refreshed.id, name: refreshed.name, label: refreshed.name } : getDefaultChat(nextPayload, user?.username);
@@ -1590,7 +1747,7 @@ export default function ChatPage() {
 
       setImageCaption('');
       event.target.value = '';
-      reportStatus(`${uploads.length} image${uploads.length === 1 ? '' : 's'} uploaded.`);
+      reportStatus(`${uploads.length} file${uploads.length === 1 ? '' : 's'} uploaded.`);
     } catch (error) {
       event.target.value = '';
       reportError(error.message);
@@ -1674,7 +1831,7 @@ export default function ChatPage() {
     }
   }
 
-  async function handleCreateFolder(event) {
+  async function handleCreateFolder(event, parentFolderId = null) {
     event.preventDefault();
     if (!selectedGroup || !user?.username || !folderForm.name.trim()) return;
 
@@ -1683,12 +1840,13 @@ export default function ChatPage() {
         actorUsername: user.username,
         name: folderForm.name.trim(),
         description: folderForm.description.trim(),
+        parentFolderId: parentFolderId || null,
       }, (payload) => {
         const refreshed = payload.groups.find((group) => group.id === selectedGroup.id);
         return refreshed ? { type: 'group', id: refreshed.id, name: refreshed.name, label: refreshed.name } : getDefaultChat(payload, user?.username);
       });
       setFolderForm({ name: '', description: '' });
-      reportStatus('Folder created.');
+      reportStatus(parentFolderId ? 'Sub-album created.' : 'Album folder created.');
     } catch (error) {
       reportError(error.message);
     }
@@ -1743,12 +1901,13 @@ export default function ChatPage() {
   }
 
   function handleSendInlineReply(targetMessage) {
-    if (!socket || connectionState !== 'connected' || !activeChat) return;
+    const chatSocket = socketRef.current;
+    if (!chatSocket?.connected || !activeChat) return;
     const draft = String(replyDrafts[targetMessage.id] || '').trim();
     if (!draft) return;
 
     const replyEnvelope = `[reply:${targetMessage.id}:${targetMessage.user || 'user'}]\n${draft}`;
-    socket.emit('message', {
+    chatSocket.emit('message', {
       type: 'text',
       text: replyEnvelope,
       chat: { type: activeChat.type, id: activeChat.id, name: activeChat.name },
@@ -1773,8 +1932,9 @@ export default function ChatPage() {
   }
 
   function emitTyping() {
-    if (!socket || connectionState !== 'connected' || !user?.username || !activeChat) return;
-    socket.emit('typing', { user: user.username, chat: { type: activeChat.type, id: activeChat.id, name: activeChat.name } });
+    const chatSocket = socketRef.current;
+    if (!chatSocket?.connected || !user?.username || !activeChat) return;
+    chatSocket.emit('typing', { user: user.username, chat: { type: activeChat.type, id: activeChat.id, name: activeChat.name } });
   }
 
   function handleComposerChange(event) {
@@ -1784,12 +1944,13 @@ export default function ChatPage() {
 
   function handleSendMessage(event) {
     event.preventDefault();
-    if (!socket || connectionState !== 'connected') {
+    const chatSocket = socketRef.current;
+    if (!chatSocket?.connected) {
       reportError('Not connected to chat. Please wait while reconnecting...');
       return;
     }
     if (!activeChat || !composerText.trim()) return;
-    socket.emit('message', {
+    chatSocket.emit('message', {
       type: 'text',
       text: composerText.trim(),
       chat: { type: activeChat.type, id: activeChat.id, name: activeChat.name },
@@ -1801,7 +1962,8 @@ export default function ChatPage() {
   function openWhatsAppShare() {
     if (!selectedGroup || typeof window === 'undefined') return;
     const inviteUrl = new URL(`/j/${encodeURIComponent(String(selectedGroup.shareToken || '').trim())}`, window.location.origin).toString();
-    window.open(`https://wa.me/?text=${encodeURIComponent(inviteUrl)}`, '_blank', 'noopener,noreferrer');
+    const message = `${selectedGroup.name}${selectedGroup.description ? ` — ${selectedGroup.description}` : ''}\nJoin our thread on Cosmix:\n${inviteUrl}`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer');
   }
 
   async function updatePushPreferences(nextPartial) {
@@ -1835,13 +1997,14 @@ export default function ChatPage() {
   }
 
   function handleJoinCall(callUrl) {
-    if (!callPresenceRoom || !socket || connectionState !== 'connected') {
+    const chatSocket = socketRef.current;
+    if (!callPresenceRoom || !chatSocket?.connected) {
       if (callUrl) {
         window.open(callUrl, '_blank', 'noopener,noreferrer');
       }
       return;
     }
-    socket.emit('call_join', { room: callPresenceRoom });
+    chatSocket.emit('call_join', { room: callPresenceRoom });
     setJoinedCallRoom(callPresenceRoom);
     if (callUrl) {
       window.open(callUrl, '_blank', 'noopener,noreferrer');
@@ -1849,8 +2012,9 @@ export default function ChatPage() {
   }
 
   function handleLeaveCall() {
-    if (!joinedCallRoom || !socket || connectionState !== 'connected') return;
-    socket.emit('call_leave', { room: joinedCallRoom });
+    const chatSocket = socketRef.current;
+    if (!joinedCallRoom || !chatSocket?.connected) return;
+    chatSocket.emit('call_leave', { room: joinedCallRoom });
     setJoinedCallRoom('');
   }
 
@@ -1897,32 +2061,76 @@ export default function ChatPage() {
     );
   }
 
-  function renderFoldersPanel() {
+  function renderAlbumsPanel() {
+    const threadInviteUrl = selectedGroup?.shareToken && typeof window !== 'undefined'
+      ? new URL(`/j/${encodeURIComponent(String(selectedGroup.shareToken || '').trim())}`, window.location.origin).toString()
+      : '';
+
     return (
       <>
-        {canManageFolders ? (
-          <form style={styles.formRow} onSubmit={handleCreateFolder}>
-            <p style={styles.label}>Create Folder</p>
-            <input style={styles.input} value={folderForm.name} onChange={(e) => setFolderForm((p) => ({ ...p, name: e.target.value }))} placeholder="Folder name" />
-            <input style={styles.input} value={folderForm.description} onChange={(e) => setFolderForm((p) => ({ ...p, description: e.target.value }))} placeholder="Description (optional)" />
-            <button type="submit" style={styles.btn}>Create</button>
-          </form>
-        ) : <p style={styles.helperText}>Only admins/owner can create folders.</p>}
-        {(selectedGroup.folders || []).length ? (
-          <div style={styles.formRow}>
-            <p style={styles.label}>Folders ({selectedGroup.folders.length})</p>
-            {selectedGroup.folders.map((folder) => (
-              <div key={folder.id} style={styles.listItem}>
-                <div style={styles.listItemText}>
-                  <div style={styles.listItemTitle}>📁 {folder.name}</div>
-                  <div style={styles.listItemMeta}>{folder.description || 'No description'} · {folder.items.length} items</div>
-                </div>
-              </div>
-            ))}
+        {threadInviteUrl ? (
+          <div style={{ display: 'grid', gap: '8px', padding: '12px', borderRadius: '14px', background: `linear-gradient(135deg, ${theme.blue}22, ${theme.purple}18)`, border: `1px solid ${theme.cardBorder}` }}>
+            <div style={{ fontSize: '12px', fontWeight: 800, color: theme.textHeading }}>Share this thread</div>
+            <div style={{ fontSize: '11px', color: theme.textSecondary, lineHeight: 1.45 }}>Anyone with the link can join and browse albums.</div>
+            <button
+              type="button"
+              style={{ ...styles.btn, marginTop: '2px' }}
+              onClick={async () => {
+                try {
+                  await copyText(threadInviteUrl);
+                  reportStatus('Thread invite link copied.');
+                } catch (error) {
+                  reportError(error.message || 'Copy failed.');
+                }
+              }}
+            >
+              Copy thread join link
+            </button>
           </div>
-        ) : <p style={styles.helperText}>No folders yet.</p>}
+        ) : null}
+        <ChatAlbumGallery
+          theme={theme}
+          folders={selectedGroup?.folders || []}
+          images={selectedGroup?.images || []}
+          canManage={canManageFolders}
+          folderForm={folderForm}
+          onFolderFormChange={setFolderForm}
+          onCreateFolder={handleCreateFolder}
+          selectedUploadFolderId={selectedUploadFolderId}
+          onSelectUploadFolder={setSelectedUploadFolderId}
+          imageCaption={imageCaption}
+          onImageCaptionChange={setImageCaption}
+          onPickFiles={() => fileInputRef.current?.click()}
+          onDownloadImage={handleDownloadGroupImage}
+          onShareFolder={async (folder) => {
+            const label = folder?.name ? `Album: ${folder.name}` : 'Thread albums';
+            try {
+              if (threadInviteUrl) {
+                await copyText(`${label}\n${threadInviteUrl}`);
+              } else {
+                await copyText(label);
+              }
+              reportStatus('Album share text copied.');
+            } catch (error) {
+              reportError(error.message || 'Copy failed.');
+            }
+          }}
+          commentDrafts={commentDrafts}
+          onCommentDraftChange={(imageId, value) => setCommentDrafts((previous) => ({ ...previous, [imageId]: value }))}
+          onPostComment={handleImageComment}
+          canComment={canCommentInGroup}
+        />
+        <input ref={fileInputRef} type="file" multiple accept="image/*,video/*" style={{ display: 'none' }} onChange={handleGroupImageUpload} />
       </>
     );
+  }
+
+  function renderFoldersPanel() {
+    return renderAlbumsPanel();
+  }
+
+  function renderMediaPanel() {
+    return renderAlbumsPanel();
   }
 
   function renderBookmarksPanel() {
@@ -1949,50 +2157,6 @@ export default function ChatPage() {
     );
   }
 
-  function renderMediaPanel() {
-    return (
-      <>
-        <div style={styles.formRow}>
-          <p style={styles.label}>Upload Image</p>
-          <input style={styles.input} value={imageCaption} onChange={(e) => setImageCaption(e.target.value)} placeholder="Optional caption" />
-          <select style={styles.select} value={selectedUploadFolderId} onChange={(event) => setSelectedUploadFolderId(event.target.value)}>
-            <option value="">No folder</option>
-            {(selectedGroup.folders || []).map((folder) => (
-              <option key={folder.id} value={folder.id}>{folder.name}</option>
-            ))}
-          </select>
-          <button type="button" style={{ ...styles.btn, ...styles.btnSecondary }} onClick={() => fileInputRef.current?.click()} disabled={!canPostToGroup}>
-            📎 Choose Image(s)
-          </button>
-          <input ref={fileInputRef} type="file" multiple accept="image/*" style={{ display: 'none' }} onChange={handleGroupImageUpload} />
-          <p style={styles.helperText}>{selectedGroup.images.length} images in this group</p>
-        </div>
-        {selectedGroup.images.length > 0 && (
-          <div style={{ display: 'grid', gap: '10px' }}>
-            {selectedGroup.images.map((image) => (
-              <div key={image.id} style={{ borderRadius: '12px', overflow: 'hidden', border: `1px solid ${theme.cardBorder}` }}>
-                <img src={image.imageUrl} alt={image.caption || ''} style={{ width: '100%', aspectRatio: '4/3', objectFit: 'cover', display: 'block' }} />
-                <div style={{ padding: '8px 10px' }}>
-                  <div style={styles.listItemTitle}>{image.caption || 'Untitled'}</div>
-                  <div style={styles.listItemMeta}>by {image.uploadedBy}</div>
-                  <button type="button" style={{ ...styles.btn, ...styles.btnSecondary, marginTop: '8px' }} onClick={() => handleDownloadGroupImage(image)}>
-                    Download
-                  </button>
-                  {canCommentInGroup ? (
-                    <div style={{ display: 'grid', gap: '6px', marginTop: '8px' }}>
-                      <input style={styles.input} value={commentDrafts[image.id] || ''} onChange={(e) => setCommentDrafts((p) => ({ ...p, [image.id]: e.target.value }))} placeholder="Add comment…" />
-                      <button type="button" style={styles.btn} onClick={() => handleImageComment(image.id)}>Post</button>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </>
-    );
-  }
-
   function renderInvitePanel() {
     const inviteUrl = selectedGroup?.shareToken && typeof window !== 'undefined'
       ? new URL(`/j/${encodeURIComponent(String(selectedGroup.shareToken || '').trim())}`, window.location.origin).toString()
@@ -2002,6 +2166,16 @@ export default function ChatPage() {
       : '';
     return (
       <>
+        {selectedGroup?.coverImageUrl ? (
+          <div style={{ borderRadius: '16px', overflow: 'hidden', border: `1px solid ${theme.cardBorder}` }}>
+            {selectedGroup.coverMediaType === 'video' ? (
+              <video src={selectedGroup.coverImageUrl} style={{ width: '100%', maxHeight: '180px', objectFit: 'cover', display: 'block' }} controls playsInline />
+            ) : (
+              <img src={selectedGroup.coverImageUrl} alt={selectedGroup.name} style={{ width: '100%', maxHeight: '180px', objectFit: 'cover', display: 'block' }} />
+            )}
+            <div style={{ padding: '10px 12px', fontSize: '12px', color: theme.textSecondary }}>This cover shows when you share the thread link on WhatsApp.</div>
+          </div>
+        ) : null}
         {inviteUrl && (
           <div style={styles.formRow}>
             <p style={styles.label}>Invite Link</p>
@@ -2170,7 +2344,7 @@ export default function ChatPage() {
         </div>
 
         <div style={styles.sidebarSearch}>
-          <input style={styles.sidebarSearchInput} placeholder="Search chats…" value={sidebarFilter} onChange={(e) => setSidebarFilter(e.target.value)} />
+          <input style={styles.sidebarSearchInput} placeholder="Search threads & DMs…" value={sidebarFilter} onChange={(e) => setSidebarFilter(e.target.value)} />
         </div>
 
         <div style={styles.sidebarScroll}>
@@ -2213,14 +2387,18 @@ export default function ChatPage() {
 
           {filteredGroups.length > 0 && (
             <>
-              <p style={styles.sidebarSectionLabel}>Groups</p>
+              <p style={styles.sidebarSectionLabel}>Threads</p>
               {filteredGroups.map(({ group, depth }) => {
                 const chatKey = getChatKey({ type: 'group', id: group.id });
                 const isActive = activeChat?.type === 'group' && activeChat?.id === group.id;
                 const activeCallCount = Number(callStatusByGroup[group.id] || 0);
                 return (
                   <button key={group.id} type="button" className="sidebar-item" style={{ ...styles.sidebarItem, paddingLeft: `${14 + depth * 12}px`, ...(isActive ? styles.sidebarItemActive : {}) }} onClick={() => { selectGroup(group); setShowSidebar(false); }}>
-                    <div style={{ ...styles.sidebarItemAvatar, background: getUserColor(group.name, theme), fontSize: '15px' }}>{depth ? '↳' : '#'}</div>
+                    {group.coverImageUrl ? (
+                      <img src={group.coverImageUrl} alt="" style={{ width: '34px', height: '34px', borderRadius: '10px', objectFit: 'cover', flexShrink: 0, border: `1px solid ${theme.cardBorder}` }} />
+                    ) : (
+                      <div style={{ ...styles.sidebarItemAvatar, background: getUserColor(group.name, theme), fontSize: '15px' }}>{depth ? '↳' : '#'}</div>
+                    )}
                     <div style={styles.sidebarItemText}>
                       <div style={styles.sidebarItemName}>{group.name}</div>
                       <div style={styles.sidebarItemMeta}>{group.memberships.length} members</div>
@@ -2242,8 +2420,8 @@ export default function ChatPage() {
 
         <div style={styles.sidebarActions}>
           <button type="button" title="Add Buddy" style={{ ...styles.sidebarActionBtn, ...(sidebarPanel === 'buddy' ? styles.sidebarActionBtnActive : {}) }} onClick={() => setSidebarPanel(sidebarPanel === 'buddy' ? '' : 'buddy')}>👤</button>
-          <button type="button" title="Create Group" style={{ ...styles.sidebarActionBtn, ...(sidebarPanel === 'group' ? styles.sidebarActionBtnActive : {}) }} onClick={() => setSidebarPanel(sidebarPanel === 'group' ? '' : 'group')}>💬</button>
-          <button type="button" title="Join by Token" style={{ ...styles.sidebarActionBtn, ...(sidebarPanel === 'token' ? styles.sidebarActionBtnActive : {}) }} onClick={() => setSidebarPanel(sidebarPanel === 'token' ? '' : 'token')}>🔗</button>
+          <button type="button" title="Create Thread" style={{ ...styles.sidebarActionBtn, ...(sidebarPanel === 'group' ? styles.sidebarActionBtnActive : {}) }} onClick={() => setSidebarPanel(sidebarPanel === 'group' ? '' : 'group')}>💬</button>
+          <button type="button" title="Join Thread Link" style={{ ...styles.sidebarActionBtn, ...(sidebarPanel === 'token' ? styles.sidebarActionBtnActive : {}) }} onClick={() => setSidebarPanel(sidebarPanel === 'token' ? '' : 'token')}>🔗</button>
         </div>
 
         {sidebarPanel === 'buddy' && (
@@ -2273,24 +2451,39 @@ export default function ChatPage() {
 
         {sidebarPanel === 'group' && (
           <form style={styles.expansionPanel} onSubmit={handleCreateGroup}>
-            <p style={styles.sectionTitle}>Create Group</p>
-            <input style={styles.input} value={groupForm.name} onChange={(e) => setGroupForm((p) => ({ ...p, name: e.target.value }))} placeholder="Group name" />
-            <textarea style={{ ...styles.input, minHeight: '52px', resize: 'vertical' }} value={groupForm.description} onChange={(e) => setGroupForm((p) => ({ ...p, description: e.target.value }))} placeholder="Description (optional)" />
+            <p style={styles.sectionTitle}>Create Thread</p>
+            <button type="button" style={{ ...styles.btn, ...styles.btnSecondary, width: 'auto', padding: '10px 12px' }} onClick={() => threadCoverInputRef.current?.click()}>
+              {threadCoverPreview ? 'Change cover photo/video' : '📷 Add cover photo/video'}
+            </button>
+            <input ref={threadCoverInputRef} type="file" accept="image/*,video/*" style={{ display: 'none' }} onChange={handleThreadCoverPick} />
+            {threadCoverPreview ? (
+              <div style={{ borderRadius: '14px', overflow: 'hidden', border: `1px solid ${theme.cardBorder}` }}>
+                {threadCoverFile && threadCoverFile.type.startsWith('video/') ? (
+                  <video src={threadCoverPreview} style={{ width: '100%', maxHeight: '140px', objectFit: 'cover', display: 'block' }} muted playsInline />
+                ) : (
+                  <img src={threadCoverPreview} alt="Thread cover preview" style={{ width: '100%', maxHeight: '140px', objectFit: 'cover', display: 'block' }} />
+                )}
+              </div>
+            ) : (
+              <p style={styles.helperText}>Cover appears on the invite link when you share on WhatsApp.</p>
+            )}
+            <input style={styles.input} value={groupForm.name} onChange={(e) => setGroupForm((p) => ({ ...p, name: e.target.value }))} placeholder="Thread name (e.g. Family trips)" />
+            <textarea style={{ ...styles.input, minHeight: '52px', resize: 'vertical' }} value={groupForm.description} onChange={(e) => setGroupForm((p) => ({ ...p, description: e.target.value }))} placeholder="What is this thread about?" />
             <select style={styles.select} value={groupForm.parentGroupId} onChange={(e) => setGroupForm((p) => ({ ...p, parentGroupId: e.target.value }))}>
-              <option value="">Top-level group</option>
+              <option value="">Top-level thread</option>
               {bootstrap.groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
             </select>
             <input style={styles.input} value={groupForm.members} onChange={(e) => setGroupForm((p) => ({ ...p, members: e.target.value }))} placeholder="Members (comma separated)" />
             <input style={styles.input} value={groupForm.viewers} onChange={(e) => setGroupForm((p) => ({ ...p, viewers: e.target.value }))} placeholder="Viewers (comma separated)" />
-            <button type="submit" style={styles.btn}>Create Group</button>
+            <button type="submit" style={styles.btn} disabled={creatingThread}>{creatingThread ? 'Creating…' : 'Create Thread'}</button>
           </form>
         )}
 
         {sidebarPanel === 'token' && (
           <form style={styles.expansionPanel} onSubmit={handleJoinByToken}>
-            <p style={styles.sectionTitle}>Join by Token</p>
-            <input style={styles.input} value={inviteToken} onChange={(e) => setInviteToken(e.target.value)} placeholder="Paste group token" />
-            <button type="submit" style={styles.btn}>Join Group</button>
+            <p style={styles.sectionTitle}>Join Thread</p>
+            <input style={styles.input} value={inviteToken} onChange={(e) => setInviteToken(e.target.value)} placeholder="Paste thread invite token" />
+            <button type="submit" style={styles.btn}>Join Thread</button>
           </form>
         )}
       </aside>
@@ -2306,7 +2499,7 @@ export default function ChatPage() {
                 ? activeChat.type === 'dm'
                   ? `@${activeChat.label || activeChat.name}`
                   : `#${activeChat.label || activeChat.name}`
-                : 'Cosmix Chat'}
+                : 'Cosmix Threads'}
             </h2>
             {activeChat && (
               <p style={styles.chatMeta}>
@@ -2338,21 +2531,41 @@ export default function ChatPage() {
             <div style={{ ...styles.connDot, background: connectionState === 'connected' ? theme.green : connectionState === 'connecting' ? theme.orange : theme.red }} title={connectionState} />
             {selectedGroup && (
               <>
-                <button type="button" title="Members" style={{ ...styles.iconBtn, ...(activePanelTab === 'members' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'members' ? '' : 'members')}>👥</button>
-                <button type="button" title="Folders" style={{ ...styles.iconBtn, ...(activePanelTab === 'folders' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'folders' ? '' : 'folders')}>📁</button>
-                <button type="button" title="Bookmarks" style={{ ...styles.iconBtn, ...(activePanelTab === 'bookmarks' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'bookmarks' ? '' : 'bookmarks')}>🔖</button>
-                <button type="button" title="Media" style={{ ...styles.iconBtn, ...(activePanelTab === 'media' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'media' ? '' : 'media')}>🖼️</button>
+                <button type="button" title="Members" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(activePanelTab === 'members' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'members' ? '' : 'members')}>👥</button>
+                <button type="button" title="Albums" style={{ ...styles.iconBtn, ...(activePanelTab === 'albums' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'albums' ? '' : 'albums')}>📸</button>
+                <button type="button" title="Bookmarks" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(activePanelTab === 'bookmarks' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'bookmarks' ? '' : 'bookmarks')}>🔖</button>
                 <button type="button" title="Invite" style={{ ...styles.iconBtn, ...(activePanelTab === 'invite' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'invite' ? '' : 'invite')}>🔗</button>
-                {isGroupOwner && <button type="button" title="Settings" style={{ ...styles.iconBtn, ...(activePanelTab === 'settings' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'settings' ? '' : 'settings')}>⚙️</button>}
+                {isGroupOwner && <button type="button" title="Settings" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(activePanelTab === 'settings' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'settings' ? '' : 'settings')}>⚙️</button>}
               </>
             )}
           </div>
         </div>
 
+        {selectedGroup?.shareToken && (
+          <div className="chat-thread-strip">
+            <span className="chat-thread-strip-label">Thread link ready</span>
+            <button
+              type="button"
+              className="chat-thread-strip-btn"
+              onClick={async () => {
+                try {
+                  const inviteUrl = new URL(`/j/${encodeURIComponent(String(selectedGroup.shareToken || '').trim())}`, window.location.origin).toString();
+                  await copyText(inviteUrl);
+                  reportStatus('Thread invite link copied.');
+                } catch (error) {
+                  reportError(error.message || 'Copy failed.');
+                }
+              }}
+            >
+              Copy join link
+            </button>
+          </div>
+        )}
+
         {/* Body: messages + optional side panel */}
         <div style={styles.body}>
           {/* Messages */}
-          <div ref={messagesContainerRef} style={styles.messages}>
+          <div ref={messagesContainerRef} className="chat-messages" style={styles.messages}>
             {visibleMessages.length ? visibleMessages.map((message) => {
               const isOwn = message.user === user?.username;
               const parsed = parseReplyEnvelope(message.text || message.gif || '');
@@ -2402,10 +2615,29 @@ export default function ChatPage() {
               );
             }) : (
               <div style={styles.emptyState}>
-                <div style={{ fontSize: '40px', opacity: 0.35 }}>{activeChat ? '💬' : '🌐'}</div>
-                <p style={{ fontSize: '14px', lineHeight: 1.6, margin: 0 }}>
-                  {activeChat ? 'No messages yet — say hello! 👋' : 'Select a buddy or group to start chatting'}
-                </p>
+                {!activeChat ? (
+                  <>
+                    <div style={{ fontSize: '48px', marginBottom: '4px' }}>🧵</div>
+                    <p style={{ fontSize: '16px', fontWeight: 800, color: theme.textHeading, margin: 0 }}>Start a thread adventure</p>
+                    <p style={{ fontSize: '13px', lineHeight: 1.65, margin: '6px 0 0', maxWidth: '320px' }}>
+                      Create threads, share join links, and build nested photo albums — Family → Ooty → Day 2 hikes.
+                    </p>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center', marginTop: '14px' }}>
+                      <button type="button" style={{ ...styles.btn, width: 'auto', padding: '10px 16px' }} onClick={() => { setShowSidebar(true); setSidebarPanel('group'); }}>+ New Thread</button>
+                      <button type="button" style={{ ...styles.btn, ...styles.btnSecondary, width: 'auto', padding: '10px 16px' }} onClick={() => { setShowSidebar(true); setSidebarPanel('token'); }}>Join Link</button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize: '40px', opacity: 0.35 }}>💬</div>
+                    <p style={{ fontSize: '14px', lineHeight: 1.6, margin: 0 }}>
+                      {activeChat.type === 'group' ? 'Thread is quiet — say hello or open Albums to share memories 👋' : 'No messages yet — say hello! 👋'}
+                    </p>
+                    {activeChat.type === 'group' ? (
+                      <button type="button" style={{ ...styles.btn, width: 'auto', padding: '10px 16px', marginTop: '8px' }} onClick={() => setActivePanelTab('albums')}>Open Albums</button>
+                    ) : null}
+                  </>
+                )}
               </div>
             )}
             <div ref={messagesEndRef} />
@@ -2413,18 +2645,17 @@ export default function ChatPage() {
 
           {/* Side panel */}
           {activePanelTab && selectedGroup && (
-            <div className="side-panel" style={styles.sidePanel}>
+            <div className={`side-panel${activePanelTab === 'albums' || activePanelTab === 'folders' || activePanelTab === 'media' ? ' side-panel--albums' : ''}`} style={styles.sidePanel}>
               <div style={styles.sidePanelHeader}>
                 <p style={styles.sidePanelTitle}>
-                  {activePanelTab === 'members' ? '👥 Members' : activePanelTab === 'folders' ? '📁 Folders' : activePanelTab === 'bookmarks' ? '🔖 Bookmarks' : activePanelTab === 'media' ? '🖼️ Media' : activePanelTab === 'invite' ? '🔗 Invite' : '⚙️ Settings'}
+                  {activePanelTab === 'members' ? '👥 Members' : activePanelTab === 'albums' || activePanelTab === 'folders' || activePanelTab === 'media' ? '📸 Albums' : activePanelTab === 'bookmarks' ? '🔖 Bookmarks' : activePanelTab === 'invite' ? '🔗 Invite' : '⚙️ Settings'}
                 </p>
                 <button type="button" style={styles.sidePanelClose} onClick={() => setActivePanelTab('')}>✕</button>
               </div>
               <div style={styles.sidePanelContent}>
                 {activePanelTab === 'members' && renderMembersPanel()}
-                {activePanelTab === 'folders' && renderFoldersPanel()}
+                {(activePanelTab === 'albums' || activePanelTab === 'folders' || activePanelTab === 'media') && renderAlbumsPanel()}
                 {activePanelTab === 'bookmarks' && renderBookmarksPanel()}
-                {activePanelTab === 'media' && renderMediaPanel()}
                 {activePanelTab === 'invite' && renderInvitePanel()}
                 {activePanelTab === 'settings' && renderSettingsPanel()}
               </div>
@@ -2432,25 +2663,36 @@ export default function ChatPage() {
           )}
         </div>
 
-        {/* Typing bar */}
-        <div style={styles.typingBar}>
-          {typingUsers.length ? `${typingUsers.join(', ')} is typing…` : ''}
-        </div>
+        <div className="chat-bottom-stack">
+          {/* Typing bar */}
+          <div style={styles.typingBar}>
+            {typingUsers.length ? `${typingUsers.join(', ')} is typing…` : ''}
+          </div>
 
-        {/* Composer */}
-        <form style={styles.composer} onSubmit={handleSendMessage}>
-          <textarea
-            ref={composerRef}
-            style={styles.composerInput}
-            value={composerText}
-            onChange={handleComposerChange}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(e); } }}
-            placeholder={activeChat ? `Message ${activeChat.name}…` : 'Select a chat to start messaging'}
-            disabled={!activeChat}
-            rows={1}
-          />
-          <button type="submit" style={styles.sendBtn} disabled={!activeChat || !composerText.trim()}>➤</button>
-        </form>
+          {selectedGroup ? (
+            <div className="chat-thread-dock">
+              <button type="button" className={`chat-thread-dock-btn${!activePanelTab ? ' chat-thread-dock-btn--active' : ''}`} onClick={() => setActivePanelTab('')}>💬 Chat</button>
+              <button type="button" className={`chat-thread-dock-btn${activePanelTab === 'albums' || activePanelTab === 'folders' || activePanelTab === 'media' ? ' chat-thread-dock-btn--active' : ''}`} onClick={() => setActivePanelTab('albums')}>📸 Albums</button>
+              <button type="button" className={`chat-thread-dock-btn${activePanelTab === 'invite' ? ' chat-thread-dock-btn--active' : ''}`} onClick={() => setActivePanelTab('invite')}>🔗 Invite</button>
+              <button type="button" className={`chat-thread-dock-btn${activePanelTab === 'members' || activePanelTab === 'bookmarks' || activePanelTab === 'settings' ? ' chat-thread-dock-btn--active' : ''}`} onClick={() => setActivePanelTab(activePanelTab === 'members' ? '' : 'members')}>👥 More</button>
+            </div>
+          ) : null}
+
+          {/* Composer */}
+          <form className="chat-composer" style={styles.composer} onSubmit={handleSendMessage}>
+            <textarea
+              ref={composerRef}
+              style={styles.composerInput}
+              value={composerText}
+              onChange={handleComposerChange}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(e); } }}
+              placeholder={activeChat ? `Message ${activeChat.name}…` : 'Select a chat to start messaging'}
+              disabled={!activeChat}
+              rows={1}
+            />
+            <button type="submit" style={styles.sendBtn} disabled={!activeChat || !composerText.trim()}>➤</button>
+          </form>
+        </div>
       </main>
 
       {/* Toasts */}
@@ -2464,6 +2706,19 @@ export default function ChatPage() {
           ))}
         </div>
       )}
+
+      <MobileBottomNav
+        theme={theme}
+        activeId="chat"
+        hideSpacer
+        items={[
+          { id: 'home', label: 'Home', icon: '🏠', href: '/dashboard' },
+          { id: 'chat', label: 'Chat', icon: '💬', href: '/chat' },
+          { id: 'posts', label: 'Posts', icon: '📷', href: '/dashboard?tab=posts' },
+          { id: 'nifty', label: 'Nifty', icon: '📊', href: '/nifty-strategies' },
+          { id: 'wellness', label: 'Well', icon: '💪', href: '/wellness' },
+        ]}
+      />
 
       <style jsx>{`
         /* Mobile: sidebar slides in from left */
@@ -2512,6 +2767,85 @@ export default function ChatPage() {
             z-index: 25;
             width: min(300px, 88vw) !important;
             box-shadow: -4px 0 28px rgba(0,0,0,0.25);
+          }
+          .side-panel--albums {
+            left: 0 !important;
+            right: 0 !important;
+            width: 100% !important;
+            max-width: none !important;
+          }
+          .chat-top-icon--desktop { display: none !important; }
+          .chat-thread-dock {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 6px;
+            padding: 8px 10px;
+            border-top: 1px solid ${theme.cardBorder};
+            background: ${theme.panelBg};
+          }
+          .chat-thread-dock-btn {
+            border: 1px solid ${theme.cardBorder};
+            background: ${theme.cardBg};
+            color: ${theme.textSecondary};
+            border-radius: 12px;
+            padding: 8px 4px;
+            font-size: 10px;
+            font-weight: 800;
+            font-family: ${theme.font};
+            cursor: pointer;
+          }
+          .chat-thread-dock-btn--active {
+            background: ${theme.blue}22;
+            border-color: ${theme.blue};
+            color: ${theme.blue};
+          }
+          .chat-thread-strip {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 8px 12px;
+            border-bottom: 1px solid ${theme.cardBorder};
+            background: linear-gradient(90deg, ${theme.blue}18, ${theme.purple}12);
+          }
+          .chat-thread-strip-label {
+            font-size: 11px;
+            font-weight: 800;
+            color: ${theme.textHeading};
+          }
+          .chat-thread-strip-btn {
+            border: none;
+            border-radius: 999px;
+            padding: 7px 12px;
+            background: ${theme.blue};
+            color: #fff;
+            font-size: 10px;
+            font-weight: 800;
+            cursor: pointer;
+            font-family: ${theme.font};
+          }
+        }
+        @media (min-width: 681px) {
+          .chat-thread-dock { display: none; }
+          .chat-thread-strip { display: none; }
+        }
+        @media (max-width: 680px) {
+          .chat-thread-dock { display: grid; }
+        }
+        /* Keep composer + send above fixed mobile bottom nav */
+        @media (max-width: 720px) {
+          .chat-bottom-stack {
+            flex-shrink: 0;
+            position: relative;
+            z-index: 50;
+            padding-bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+            background: ${theme.panelBg};
+          }
+          .chat-composer {
+            padding-bottom: max(10px, env(safe-area-inset-bottom, 0px));
+          }
+          .chat-messages {
+            padding-bottom: 12px;
           }
         }
       `}</style>

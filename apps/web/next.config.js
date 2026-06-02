@@ -7,13 +7,24 @@ module.exports = {
     ignoreBuildErrors: true,
   },
   images: {
-    domains: ['example.com'], // Add your allowed image domains here
+    domains: ['example.com'],
   },
   env: {
-    API_URL: process.env.API_URL || 'http://localhost:3000', // Set your API URL
+    API_URL: process.env.API_URL || 'http://localhost:3000',
+  },
+  async rewrites() {
+    return [
+      {
+        source: '/chat-api/chat/:path*',
+        destination: 'http://127.0.0.1:3002/chat/:path*',
+      },
+      {
+        source: '/chat-socket/socket.io/:path*',
+        destination: 'http://127.0.0.1:3002/socket.io/:path*',
+      },
+    ];
   },
   webpack: (config) => {
-    // Custom webpack configuration can go here
     return config;
   },
 };

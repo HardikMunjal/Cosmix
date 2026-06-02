@@ -12,6 +12,8 @@ const args = new Set(process.argv.slice(2));
 const dryRun = args.has('--dry-run');
 const installMissing = !args.has('--no-install');
 
+const optionalServiceNames = new Set(['wellness-service']);
+
 const backendServices = [
   {
     name: 'api-gateway',
@@ -282,6 +284,10 @@ function spawnService(service) {
     }
 
     const reason = signal ? `signal ${signal}` : `code ${code}`;
+    if (optionalServiceNames.has(service.name)) {
+      logError(`${service.name} exited (${reason}). Other services keep running; wellness API may use WELLNESS_SERVICE_URL.`);
+      return;
+    }
     logError(`${service.name} exited unexpectedly with ${reason}.`);
     shutdown(code || 1);
   });

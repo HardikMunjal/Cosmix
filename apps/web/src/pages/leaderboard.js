@@ -1,6 +1,7 @@
 import { useRouter } from 'next/router';
 import { useEffect, useMemo, useState } from 'react';
 import { restoreUserSession } from '../lib/auth-client';
+import { CosmixLoader } from '../lib/CosmixLoader';
 import { useTheme } from '../lib/ThemePicker';
 import { resolveAvatarPresentation } from '../lib/avatarProfile';
 
@@ -432,7 +433,14 @@ export default function Leaderboard() {
   const leaderRow = useMemo(() => rows.find((r) => !r.isSelf) || rows[0], [rows]);
 
   if (!user) {
-    return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: theme.pageBgSolid, color: theme.textPrimary, fontFamily: theme.font }}>Loading...</div>;
+    return (
+      <CosmixLoader
+        variant="full"
+        theme={theme}
+        label="Opening leaderboard"
+        sublabel="Syncing your session and buddy network..."
+      />
+    );
   }
 
   return (
@@ -488,9 +496,13 @@ export default function Leaderboard() {
         </div>
 
         {loading ? (
-          <div style={{ padding: '48px', textAlign: 'center', color: theme.textSecondary, borderRadius: '18px', background: theme.cardBg, border: `1px solid ${theme.cardBorder}` }}>
-            Loading buddy data...
-          </div>
+          <CosmixLoader
+            variant="panel"
+            theme={theme}
+            label="Ranking your buddies"
+            sublabel="Pulling wellness scores, streaks, and sport stats..."
+            minHeight="280px"
+          />
         ) : !rows.length ? (
           <div style={{ padding: '48px', textAlign: 'center', color: theme.textSecondary, borderRadius: '18px', background: theme.cardBg, border: `1px solid ${theme.cardBorder}` }}>
             No active plans found. Add buddies and log wellness data to compete!

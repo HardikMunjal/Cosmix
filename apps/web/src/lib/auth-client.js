@@ -6,21 +6,45 @@ export function clearClientUser() {
   localStorage.removeItem('user');
 }
 
+export function getCachedClientUser() {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem('user');
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.username) return null;
+    return parsed;
+  } catch (_) {
+    return null;
+  }
+}
+
 export async function restoreUserSession(router, setUser) {
+  const cached = getCachedClientUser();
+  if (cached) {
+    setUser(cached);
+  }
+
   try {
     const response = await fetch('/api/auth/session', { cache: 'no-store' });
     const data = await response.json();
     if (!response.ok || !data.user) {
-      throw new Error(data.error || 'Session expired.');
+      clearClientUser();
+      setUser(null);
+      router.push('/');
+      return null;
     }
     persistClientUser(data.user);
     setUser(data.user);
     return data.user;
   } catch (_) {
-    clearClientUser();
-    setUser(null);
-    router.push('/');
-    return null;
+    if (!cached) {
+      clearClientUser();
+      setUser(null);
+      router.push('/');
+      return null;
+    }
+    return cached;
   }
 }
 

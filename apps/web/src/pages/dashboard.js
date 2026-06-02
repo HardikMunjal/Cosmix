@@ -1,8 +1,10 @@
 import { useRouter } from 'next/router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { resolveAvatarPresentation } from '../lib/avatarProfile';
-import { logoutClientSession, restoreUserSession } from '../lib/auth-client';
+import { getCachedClientUser, logoutClientSession, restoreUserSession } from '../lib/auth-client';
 import { useTheme } from '../lib/ThemePicker';
+import { CosmixLoader, SectionLoadingShell } from '../lib/CosmixLoader';
+import { MobileBottomNav } from '../lib/MobileNav';
 import { buildStrategySummary, formatCurrency } from '../lib/userInsights';
 import NotificationModule from '../modules/dashboard/NotificationModule';
 import PostFeedModule from '../modules/dashboard/PostFeedModule';
@@ -14,19 +16,19 @@ const tradingDeskModules = [
   { icon: 'OP', title: 'Option Pricing', desc: 'Compare expected option prices across models and expiries.', path: '/expected-option-prices', accent: '#e11d48' },
 ];
 
-const wellnessImageModules = [
-  'Running Dashboard',
-  'Leaderboard',
-  'Wellness Dashboard',
-  'Chat',
-  'Media',
+const wellnessClubModules = [
+  { title: 'Running Dashboard', path: '/running-analytics', accent: '#38bdf8' },
+  { title: 'Leaderboard', path: '/leaderboard', accent: '#f97316' },
+  { title: 'Wellness Dashboard', path: '/wellness', accent: '#22c55e' },
+  { title: 'Chat', path: '/chat', accent: '#a78bfa' },
+  { title: 'Media', path: '/media', accent: '#ec4899' },
 ];
 
-const niftyImageModules = [
-  'Nifty Tracker',
-  'Strategy History',
-  'Strategy Builder',
-  'Option Pricing',
+const niftyClubModules = [
+  { title: 'Nifty Tracker', path: '/nifty-strategies', accent: '#22c55e' },
+  { title: 'Strategy History', path: '/strategy-history', accent: '#a78bfa' },
+  { title: 'Strategy Builder', path: '/options-strategy', accent: '#2563eb' },
+  { title: 'Option Pricing', path: '/expected-option-prices', accent: '#e11d48' },
 ];
 
 function resolveWellnessUserId(user) {
@@ -232,6 +234,41 @@ function MetricGrid({ items, theme }) {
         </div>
       ))}
     </div>
+  );
+}
+
+function ClubModuleLink({ module, variant, onNavigate }) {
+  const [hovered, setHovered] = useState(false);
+
+  return (
+    <button
+      type="button"
+      className={`dashboard-club-module-link dashboard-club-module-link--${variant}`}
+      onClick={(event) => {
+        event.stopPropagation();
+        onNavigate(module.path);
+      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setHovered(true)}
+      onBlur={() => setHovered(false)}
+      style={{
+        fontSize: '10px',
+        fontWeight: 700,
+        padding: '6px 8px',
+        borderRadius: '999px',
+        textAlign: 'center',
+        cursor: 'pointer',
+        border: `1px solid ${hovered ? module.accent : 'transparent'}`,
+        background: hovered ? module.accent : 'rgba(255,255,255,0.12)',
+        color: '#fff',
+        transition: 'background 0.18s ease, border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease',
+        transform: hovered ? 'translateY(-1px)' : 'none',
+        boxShadow: hovered ? `0 8px 18px ${module.accent}55` : 'none',
+      }}
+    >
+      {module.title}
+    </button>
   );
 }
 
@@ -557,6 +594,7 @@ export default function Dashboard() {
   const router = useRouter();
   const { theme } = useTheme();
   const [user, setUser] = useState(null);
+  const [sessionReady, setSessionReady] = useState(false);
   const [strategies, setStrategies] = useState([]);
   const [wellnessData, setWellnessData] = useState({ entries: [], dailyScores: [], plans: [], plan: null });
   const [buddyTrendRows, setBuddyTrendRows] = useState([]);
@@ -566,6 +604,21 @@ export default function Dashboard() {
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [chatBootstrap, setChatBootstrap] = useState({ incomingRequests: [], groups: [] });
   const [activeTab, setActiveTab] = useState('home');
+  const [wellnessLoading, setWellnessLoading] = useState(false);
+  const [wellnessReady, setWellnessReady] = useState(false);
+  const [strategiesLoading, setStrategiesLoading] = useState(false);
+  const [strategiesReady, setStrategiesReady] = useState(false);
+  const [buddiesLoading, setBuddiesLoading] = useState(false);
+  const [buddiesReady, setBuddiesReady] = useState(false);
+  const [isNarrowScreen, setIsNarrowScreen] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const syncViewport = () => setIsNarrowScreen(window.innerWidth <= 720);
+    syncViewport();
+    window.addEventListener('resize', syncViewport);
+    return () => window.removeEventListener('resize', syncViewport);
+  }, []);
 
   const configuredWellnessApiBase = process.env.NEXT_PUBLIC_WELLNESS_API_BASE || '';
   const notificationsApiBase = '/api/notifications';
@@ -577,7 +630,19 @@ export default function Dashboard() {
     : '');
 
   useEffect(() => {
-    restoreUserSession(router, setUser);
+    const cached = getCachedClientUser();
+    if (cached) {
+      setUser(cached);
+    }
+
+    let active = true;
+    restoreUserSession(router, setUser).finally(() => {
+      if (active) setSessionReady(true);
+    });
+
+    return () => {
+      active = false;
+    };
   }, [router]);
 
   useEffect(() => {
@@ -591,6 +656,7 @@ export default function Dashboard() {
   }, [router.isReady, router.query.tab]);
 
   const loadStrategies = useCallback(async () => {
+    setStrategiesLoading(true);
     try {
       const response = await fetch('/api/options-strategies');
       const data = await response.json();
@@ -601,102 +667,35 @@ export default function Dashboard() {
       setStrategies([]);
     } catch (_) {
       setStrategies([]);
+    } finally {
+      setStrategiesLoading(false);
+      setStrategiesReady(true);
     }
   }, []);
 
   const loadWellnessData = useCallback(async () => {
     if (!user) return;
-    const baseUid = resolveWellnessUserId(user);
-    if (!baseUid) return;
+    const uid = resolveWellnessUserId(user);
+    if (!uid) return;
+    setWellnessLoading(true);
     try {
-      const normalizedUsername = String(user?.username || '').trim();
-      const legacyUsernameId = normalizedUsername ? `usr-${normalizedUsername.toLowerCase()}` : '';
-
-      const primaryCandidateIds = Array.from(new Set([
-        String(baseUid || '').trim(),
-        String(user?.id || '').trim(),
-        String(user?.email || '').trim(),
-        normalizedUsername,
-        legacyUsernameId,
-      ].filter(Boolean)));
-      const storageCandidateIds = [];
-
-      if (typeof window !== 'undefined' && window.localStorage) {
-        try {
-          for (let index = 0; index < window.localStorage.length; index += 1) {
-            const key = String(window.localStorage.key(index) || '');
-            if (!key.startsWith('cosmix-wellness-') || !key.endsWith('-entries')) continue;
-            const maybeId = key.slice('cosmix-wellness-'.length, key.length - '-entries'.length).trim();
-            if (maybeId) storageCandidateIds.push(maybeId);
-          }
-        } catch (_) {
-          // Ignore localStorage scan failures.
-        }
-      }
-
-      if (user?.username) {
-        try {
-          const lookupResponse = await fetch(`/api/chat/buddy-search?q=${encodeURIComponent(String(user.username).trim())}`);
-          const lookupData = await lookupResponse.json().catch(() => ({}));
-          const match = (Array.isArray(lookupData?.results) ? lookupData.results : [])
-            .find((entry) => String(entry?.username || '').toLowerCase() === String(user.username || '').toLowerCase());
-          const resolvedId = String(match?.id || '').trim();
-          if (resolvedId) primaryCandidateIds.unshift(resolvedId);
-        } catch (_) {
-          // Ignore lookup failures and continue with available IDs.
-        }
-      }
-
-      let selectedData = null;
-      let selectedScore = -1;
-      let lastError = null;
-      const tryCandidates = async (ids) => {
-        const uniqueCandidates = Array.from(new Set(ids.filter(Boolean)));
-
-        for (const uid of uniqueCandidates) {
-          try {
-            const response = await fetch(`${API_BASE}/wellness/data/${encodeURIComponent(uid)}`);
-            const data = await response.json().catch(() => ({}));
-            if (!response.ok) {
-              lastError = new Error(data?.message || `Unable to load wellness data for ${uid}`);
-              continue;
-            }
-
-            const score =
-              (Array.isArray(data?.dailyScores) ? data.dailyScores.length * 10 : 0)
-              + (Array.isArray(data?.entries) ? data.entries.length : 0)
-              + (data?.plan ? 5 : 0)
-              + (Array.isArray(data?.plans) ? Math.min(data.plans.length, 5) : 0);
-
-            if (score > selectedScore) {
-              selectedData = data;
-              selectedScore = score;
-            }
-          } catch (error) {
-            lastError = error;
-          }
-        }
-      };
-
-      await tryCandidates(primaryCandidateIds);
-      if (selectedScore <= 0) {
-        await tryCandidates(storageCandidateIds);
-      }
-
-      if (!selectedData && lastError) throw lastError;
-      if (!selectedData) {
+      const response = await fetch(`${API_BASE}/wellness/data/${encodeURIComponent(uid)}`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
         setWellnessData({ entries: [], dailyScores: [], plans: [], plan: null });
         return;
       }
-
       setWellnessData({
-        entries: Array.isArray(selectedData.entries) ? selectedData.entries : [],
-        dailyScores: Array.isArray(selectedData.dailyScores) ? selectedData.dailyScores : [],
-        plans: Array.isArray(selectedData.plans) ? selectedData.plans : [],
-        plan: selectedData.plan || null,
+        entries: Array.isArray(data.entries) ? data.entries : [],
+        dailyScores: Array.isArray(data.dailyScores) ? data.dailyScores : [],
+        plans: Array.isArray(data.plans) ? data.plans : [],
+        plan: data.plan || null,
       });
     } catch (_) {
       setWellnessData({ entries: [], dailyScores: [], plans: [], plan: null });
+    } finally {
+      setWellnessLoading(false);
+      setWellnessReady(true);
     }
   }, [API_BASE, user]);
 
@@ -705,14 +704,14 @@ export default function Dashboard() {
     const selfUsername = String(user?.username || '').trim();
     if (!selfUserId || !selfUsername) {
       setBuddyTrendRows([]);
+      setBuddiesLoading(false);
+      setBuddiesReady(true);
       return;
     }
 
+    setBuddiesLoading(true);
     try {
-      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-      const isLocalHost = host === 'localhost' || host === '127.0.0.1';
-      const chatBase = isLocalHost ? `http://${host}:3002/chat` : '/chat-api/chat';
-
+      const chatBase = '/chat-api/chat';
       const bootstrapResponse = await fetch(`${chatBase}/bootstrap?username=${encodeURIComponent(selfUsername)}`);
       const bootstrapData = await bootstrapResponse.json().catch(() => ({}));
       const friends = Array.isArray(bootstrapData?.friends) ? bootstrapData.friends : [];
@@ -721,56 +720,33 @@ export default function Dashboard() {
         groups: Array.isArray(bootstrapData?.groups) ? bootstrapData.groups : [],
       });
 
-      const buddyLookups = await Promise.all(friends.map(async (username) => {
-        const normalized = String(username || '').trim();
-        if (!normalized) return null;
-        try {
-          const searchResponse = await fetch(`/api/chat/buddy-search?q=${encodeURIComponent(normalized)}`);
-          const searchData = await searchResponse.json();
-          const match = (Array.isArray(searchData?.results) ? searchData.results : [])
-            .find((entry) => String(entry?.username || '').toLowerCase() === normalized.toLowerCase());
-          return {
-            username: normalized,
-            displayName: String(match?.name || match?.username || normalized).trim(),
-            userId: String(match?.id || match?.email || match?.username || normalized).trim(),
-          };
-        } catch (_) {
-          return {
-            username: normalized,
-            displayName: normalized,
-            userId: normalized,
-          };
-        }
-      }));
-
-      const participants = Array.from(new Map(
-        buddyLookups
-          .filter(Boolean)
-          .filter((entry) => String(entry.userId || '').trim().toLowerCase() !== selfUserId.toLowerCase())
-          .map((entry) => [String(entry.userId).toLowerCase(), entry]),
-      ).values());
+      const participants = friends
+        .map((username) => String(username || '').trim())
+        .filter(Boolean)
+        .filter((username) => username.toLowerCase() !== selfUsername.toLowerCase())
+        .slice(0, 8)
+        .map((username) => ({
+          username,
+          displayName: username,
+          userId: username,
+        }));
 
       const nextRows = await Promise.all(participants.map(async (participant) => {
         try {
-          const [summaryResponse, fullResponse] = await Promise.all([
-            fetch(`${API_BASE}/wellness/plan-summary/${encodeURIComponent(participant.userId)}`),
-            fetch(`${API_BASE}/wellness/data/${encodeURIComponent(participant.userId)}`),
-          ]);
+          const summaryResponse = await fetch(`${API_BASE}/wellness/plan-summary/${encodeURIComponent(participant.userId)}`);
           const data = await summaryResponse.json().catch(() => ({}));
-          const fullData = await fullResponse.json().catch(() => ({}));
           if (!summaryResponse.ok || !data?.hasActivePlan || !Array.isArray(data.series) || !data.series.length) return null;
           const series = [...data.series]
             .sort((left, right) => String(left.date || '').localeCompare(String(right.date || '')))
             .slice(-14)
             .map((point) => ({ date: String(point.date || ''), cumulative: Number(point.cumulative || 0) }));
           if (!series.length) return null;
-          const entries = Array.isArray(fullData?.entries) ? fullData.entries : [];
           return {
             id: participant.userId,
             name: participant.displayName,
             planName: String(data?.plan?.name || ''),
             current: Number(data.cumulativeTotal || series[series.length - 1]?.cumulative || 0),
-            activityTotals: entries.length ? aggregateActivityTotals(entries) : null,
+            activityTotals: null,
             series,
             isSelf: false,
           };
@@ -782,6 +758,9 @@ export default function Dashboard() {
       setBuddyTrendRows(nextRows.filter(Boolean));
     } catch (_) {
       setBuddyTrendRows([]);
+    } finally {
+      setBuddiesLoading(false);
+      setBuddiesReady(true);
     }
   }, [API_BASE, user]);
 
@@ -834,23 +813,23 @@ export default function Dashboard() {
   useEffect(() => {
     if (!user) return undefined;
     loadStrategies();
-    loadWellnessData();
-    loadBuddyTrendRows();
     loadServerNotifications();
-    loadFeedPosts();
-    const interval = setInterval(loadStrategies, 30000);
-    const wellnessInterval = setInterval(loadWellnessData, 30000);
-    const buddyInterval = setInterval(loadBuddyTrendRows, 30000);
-    const notificationsInterval = setInterval(loadServerNotifications, 30000);
-    const feedInterval = setInterval(loadFeedPosts, 30000);
-    return () => {
-      clearInterval(interval);
-      clearInterval(wellnessInterval);
-      clearInterval(buddyInterval);
-      clearInterval(notificationsInterval);
-      clearInterval(feedInterval);
-    };
-  }, [user, loadStrategies, loadWellnessData, loadBuddyTrendRows, loadServerNotifications, loadFeedPosts]);
+    return undefined;
+  }, [user, loadStrategies, loadServerNotifications]);
+
+  useEffect(() => {
+    if (!user) return undefined;
+    if (activeTab === 'home') {
+      loadWellnessData();
+    }
+    if (activeTab === 'buddies') {
+      loadBuddyTrendRows();
+    }
+    if (activeTab === 'posts') {
+      loadFeedPosts();
+    }
+    return undefined;
+  }, [user, activeTab, loadWellnessData, loadBuddyTrendRows, loadFeedPosts]);
 
   const strategySummary = useMemo(() => buildStrategySummary(strategies), [strategies]);
   const wellnessSummary = useMemo(() => {
@@ -947,7 +926,7 @@ export default function Dashboard() {
 
   const comparisonTrendRows = useMemo(() => {
     const selfSeries = buildCumulativeSeries(wellnessData.dailyScores || []).slice(-14);
-    const selfRows = selfSeries.length ? [{
+    const selfRows = selfSeries.length && user ? [{
       id: resolveWellnessUserId(user),
       name: String(user?.name || user?.username || 'You'),
       planName: String(wellnessData?.plan?.name || ''),
@@ -1124,8 +1103,19 @@ export default function Dashboard() {
 
   const notificationCount = notifications.length;
 
-  if (!user) {
-    return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: theme.pageBgSolid, color: theme.textPrimary, fontFamily: theme.font }}><div style={{ display: 'grid', gap: '10px', justifyItems: 'center' }}><div style={{ width: '76px', height: '76px', borderRadius: '999px', border: `3px solid ${theme.cardBorder}`, borderTopColor: theme.orange, borderRightColor: theme.cyan, animation: 'cosmixDashPulse 1s linear infinite' }} /><div style={{ fontSize: '13px', fontWeight: 700, color: theme.textMuted }}>Loading dashboard...</div></div></div>;
+  const showWellnessSectionLoader = wellnessLoading && !wellnessReady;
+  const showStrategiesSectionLoader = strategiesLoading && !strategiesReady;
+  const showBuddiesSectionLoader = buddiesLoading && !buddiesReady;
+
+  if (!sessionReady || !user) {
+    return (
+      <CosmixLoader
+        variant="full"
+        theme={theme}
+        label="Loading dashboard"
+        sublabel="Preparing your wellness and market cockpit..."
+      />
+    );
   }
 
   return (
@@ -1140,20 +1130,78 @@ export default function Dashboard() {
           .dashboard-profile-meta { align-content: start !important; }
         }
         @media (max-width: 720px) {
-          .dashboard-page { padding: 14px !important; }
-          .dashboard-header { flex-direction: column !important; }
-          .dashboard-header-actions { width: 100%; justify-content: space-between; order: -1; }
+          .dashboard-page { padding: 12px 12px 0 !important; }
+          .dashboard-top-shell {
+            display: grid !important;
+            gap: 10px !important;
+            padding: 12px 14px !important;
+            border-radius: 18px !important;
+            border: 1px solid rgba(148,163,184,0.18) !important;
+            background: linear-gradient(135deg, rgba(15,23,42,0.92), rgba(30,41,59,0.78)) !important;
+            box-shadow: 0 12px 32px rgba(0,0,0,0.22) !important;
+          }
+          .dashboard-header {
+            display: grid !important;
+            grid-template-columns: minmax(0, 1fr) auto !important;
+            align-items: center !important;
+            gap: 10px !important;
+            margin: 0 !important;
+          }
+          .dashboard-header-intro { min-width: 0 !important; }
+          .dashboard-header-eyebrow { margin-bottom: 4px !important; font-size: 10px !important; }
+          .dashboard-title { font-size: 22px !important; line-height: 1.1 !important; }
+          .dashboard-header-actions {
+            width: auto !important;
+            order: 0 !important;
+            gap: 8px !important;
+            flex-wrap: nowrap !important;
+          }
+          .dashboard-header-actions button {
+            min-width: 44px !important;
+            min-height: 44px !important;
+            padding: 10px !important;
+          }
+          .dashboard-tab-row {
+            position: sticky;
+            top: 0;
+            z-index: 40;
+            display: grid !important;
+            grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+            gap: 8px !important;
+            margin-top: 0 !important;
+            padding: 8px 0 10px !important;
+            background: linear-gradient(180deg, rgba(2,6,23,0.98) 70%, transparent);
+            backdrop-filter: blur(8px);
+          }
+          .dashboard-tab-row button {
+            min-width: 0 !important;
+            width: 100% !important;
+            padding: 11px 8px !important;
+            font-size: 11px !important;
+          }
           .dashboard-module-grid, .dashboard-scorecard-grid, .dashboard-market-modules { grid-template-columns: 1fr !important; }
           .dashboard-club-grid { grid-template-columns: 1fr !important; }
+          .dashboard-profile-shell {
+            grid-template-columns: 88px minmax(0, 1fr) !important;
+            gap: 12px !important;
+            align-items: start !important;
+          }
+          .dashboard-avatar-wrap {
+            min-height: 0 !important;
+            padding: 4px !important;
+            align-self: start !important;
+          }
+          .dashboard-avatar-glow { width: 72px !important; height: 72px !important; }
+          .dashboard-avatar-stage { display: none !important; }
+          .dashboard-profile-meta .dashboard-profile-name { font-size: 20px !important; }
+          .dashboard-profile-meta .dashboard-profile-quote { font-size: 12px !important; line-height: 1.45 !important; }
         }
         @media (max-width: 560px) {
-          .dashboard-page { padding: 10px !important; }
-          .dashboard-title { font-size: 24px !important; }
+          .dashboard-page { padding: 10px 10px 0 !important; }
+          .dashboard-title { font-size: 20px !important; }
           .dashboard-panel { border-radius: 18px !important; padding: 12px !important; gap: 10px !important; }
           .dashboard-profile-shell { gap: 8px !important; }
-          .dashboard-avatar-wrap { padding: 6px !important; min-height: 180px !important; }
-          .dashboard-avatar-glow { width: 120px !important; height: 120px !important; }
-          .dashboard-avatar-stage { inset: 18px 12px 0 !important; }
+          .dashboard-avatar-wrap { padding: 2px !important; }
           .dashboard-module-grid button,
           .dashboard-market-modules button {
             padding: 8px 9px !important;
@@ -1180,12 +1228,22 @@ export default function Dashboard() {
         @media (max-width: 1100px) {
           .dashboard-module-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
         }
+        .dashboard-club-module-link {
+          appearance: none;
+          font-family: inherit;
+          width: 100%;
+        }
+        .dashboard-club-module-link:focus-visible {
+          outline: 2px solid rgba(255, 255, 255, 0.85);
+          outline-offset: 2px;
+        }
       `}</style>
 
       <div style={{ maxWidth: '1320px', margin: '0 auto', display: 'grid', gap: '18px' }}>
+        <div className="dashboard-top-shell">
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '18px', flexWrap: 'wrap' }} className="dashboard-header">
-          <div>
-            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.14em', color: theme.textMuted, fontWeight: 800, marginBottom: '8px' }}>Cosmix dashboard</div>
+          <div className="dashboard-header-intro">
+            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.14em', color: theme.textMuted, fontWeight: 800, marginBottom: '8px' }} className="dashboard-header-eyebrow">Cosmix dashboard</div>
             <h1 style={{ margin: 0, fontSize: '34px', color: theme.textHeading }} className="dashboard-title">Welcome back, {user.username}</h1>
           </div>
 
@@ -1226,6 +1284,7 @@ export default function Dashboard() {
             </div>
           </div>
         </header>
+        </div>
 
         {showNotifications ? (
           <NotificationModule
@@ -1236,7 +1295,7 @@ export default function Dashboard() {
           />
         ) : null}
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '14px', marginTop: '16px' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '14px', marginTop: '16px' }} className="dashboard-tab-row">
           {['home', 'posts', 'buddies'].map((tabKey) => (
             <button
               key={tabKey}
@@ -1273,14 +1332,14 @@ export default function Dashboard() {
                 <div style={{ position: 'absolute', inset: '26px 18px 0', borderRadius: '28px 28px 0 0', background: `linear-gradient(180deg, ${theme.panelBg}, transparent)`, border: `1px solid ${theme.cardBorder}`, borderBottom: 'none', opacity: 0.75 }} className="dashboard-avatar-stage" />
                 <div style={{ position: 'absolute', width: '220px', height: '220px', borderRadius: '50%', filter: 'blur(38px)', background: `${theme.blue}44` }} className="dashboard-avatar-glow" />
                 <div style={{ position: 'absolute', bottom: '18px', width: '68%', height: '26px', borderRadius: '999px', background: 'rgba(15,23,42,0.26)', filter: 'blur(12px)' }} />
-                <Avatar user={user} size={236} theme={theme} />
+                <Avatar user={user} size={isNarrowScreen ? 88 : 236} theme={theme} />
               </div>
 
               <div style={{ display: 'grid', alignContent: 'stretch' }} className="dashboard-profile-meta">
                 <div style={{ display: 'grid', gap: '6px', marginBottom: '10px' }}>
                   <div style={{ fontSize: '12px', fontWeight: 800, letterSpacing: '0.14em', textTransform: 'uppercase', color: theme.textMuted }}>Personal cockpit</div>
-                  <div style={{ fontSize: '28px', fontWeight: 900, color: theme.textHeading, lineHeight: 1.02 }}>{user.name || user.username}</div>
-                  <div style={{ fontSize: '14px', lineHeight: 1.6, color: theme.textSecondary }}>{user.quote || 'Building better decisions, one signal at a time.'}</div>
+                  <div style={{ fontSize: '28px', fontWeight: 900, color: theme.textHeading, lineHeight: 1.02 }} className="dashboard-profile-name">{user.name || user.username}</div>
+                  <div style={{ fontSize: '14px', lineHeight: 1.6, color: theme.textSecondary }} className="dashboard-profile-quote">{user.quote || 'Building better decisions, one signal at a time.'}</div>
                 </div>
                 <MetricList items={primaryStats} theme={theme} compact />
               </div>
@@ -1301,18 +1360,20 @@ export default function Dashboard() {
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Wellness</div>
             </div>
 
-            <LineChart
-              points={wellnessSummary.trendPoints}
-              theme={theme}
-              emptyLabel="Add wellness entries to see your trend"
-              color={theme.blue}
-              gradientId="wellness-line-fill"
-              vivid
-              height={156}
-              valueAccessor={(point) => Number(point.value || 0)}
-              labelAccessor={(point) => String(point.label || '')}
-              annotationFormatter={(value) => `${value >= 0 ? '+' : ''}${Number(value || 0).toFixed(1)}`}
-            />
+            <SectionLoadingShell loading={showWellnessSectionLoader} label="Loading wellness trend..." theme={theme} height={156}>
+              <LineChart
+                points={wellnessSummary.trendPoints}
+                theme={theme}
+                emptyLabel="Add wellness entries to see your trend"
+                color={theme.blue}
+                gradientId="wellness-line-fill"
+                vivid
+                height={156}
+                valueAccessor={(point) => Number(point.value || 0)}
+                labelAccessor={(point) => String(point.label || '')}
+                annotationFormatter={(value) => `${value >= 0 ? '+' : ''}${Number(value || 0).toFixed(1)}`}
+              />
+            </SectionLoadingShell>
 
             <MetricGrid items={wellnessCards} theme={theme} />
           </div>
@@ -1339,8 +1400,8 @@ export default function Dashboard() {
               <div style={{ position: 'absolute', left: '16px', bottom: '16px', right: '16px', display: 'grid', gap: '8px', padding: '10px', borderRadius: '18px', background: 'rgba(15,23,42,0.72)' }}>
                 <div style={{ fontSize: '11px', fontWeight: 800, color: '#fff', letterSpacing: '0.08em' }}>Wellness modules</div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px' }}>
-                  {wellnessImageModules.map((item) => (
-                    <span key={item} style={{ fontSize: '10px', fontWeight: 700, color: '#fff', padding: '6px 8px', borderRadius: '999px', background: 'rgba(255,255,255,0.12)', textAlign: 'center' }}>{item}</span>
+                  {wellnessClubModules.map((item) => (
+                    <ClubModuleLink key={item.title} module={item} variant="wellness" onNavigate={(path) => router.push(path)} />
                   ))}
                 </div>
               </div>
@@ -1368,8 +1429,8 @@ export default function Dashboard() {
               <div style={{ position: 'absolute', left: '16px', bottom: '16px', right: '16px', display: 'grid', gap: '8px', padding: '10px', borderRadius: '18px', background: 'rgba(15,23,42,0.72)' }}>
                 <div style={{ fontSize: '11px', fontWeight: 800, color: '#fff', letterSpacing: '0.08em' }}>Nifty modules</div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px' }}>
-                  {niftyImageModules.map((item) => (
-                    <span key={item} style={{ fontSize: '10px', fontWeight: 700, color: '#fff', padding: '6px 8px', borderRadius: '999px', background: 'rgba(255,255,255,0.12)', textAlign: 'center' }}>{item}</span>
+                  {niftyClubModules.map((item) => (
+                    <ClubModuleLink key={item.title} module={item} variant="nifty" onNavigate={(path) => router.push(path)} />
                   ))}
                 </div>
               </div>
@@ -1398,7 +1459,9 @@ export default function Dashboard() {
 
           <div style={{ fontSize: '12px', color: theme.textSecondary, lineHeight: 1.55 }}>Fight mode: each line keeps a fixed color, rank badges (1,2,3...) are stamped at the finish, and legend chips map rank to plan and player.</div>
 
-          <ComparisonTrendChart rows={comparisonTrendRows} theme={theme} emptyLabel="Add wellness activity and active buddies to start the score sprint" />
+          <SectionLoadingShell loading={showBuddiesSectionLoader} label="Loading buddy race..." theme={theme} height={210}>
+            <ComparisonTrendChart rows={comparisonTrendRows} theme={theme} emptyLabel="Add wellness activity and active buddies to start the score sprint" />
+          </SectionLoadingShell>
         </section>
 
         <section style={{ display: activeTab === 'buddies' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '18px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '14px' }} className="dashboard-panel">
@@ -1458,7 +1521,9 @@ export default function Dashboard() {
 
           <div style={{ borderRadius: '24px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px' }}>
             <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textHeading, marginBottom: '12px' }}>Shared performance comparison</div>
-            <ComparisonTrendChart rows={displayedBuddyRows.slice(0, 6)} theme={theme} emptyLabel="Add buddies to unlock shared trend comparisons" />
+            <SectionLoadingShell loading={showBuddiesSectionLoader} label="Loading buddy trends..." theme={theme} height={210}>
+              <ComparisonTrendChart rows={displayedBuddyRows.slice(0, 6)} theme={theme} emptyLabel="Add buddies to unlock shared trend comparisons" />
+            </SectionLoadingShell>
           </div>
         </section>
 
@@ -1488,7 +1553,9 @@ export default function Dashboard() {
             ))}
           </div>
 
-          <ActivityFaceoffChart rows={activityShowdownRows} theme={theme} emptyLabel="Add activity minutes for you and your buddies to unlock the duel board" />
+          <SectionLoadingShell loading={showBuddiesSectionLoader} label="Loading activity duel..." theme={theme} height={320}>
+            <ActivityFaceoffChart rows={activityShowdownRows} theme={theme} emptyLabel="Add activity minutes for you and your buddies to unlock the duel board" />
+          </SectionLoadingShell>
         </section>
 
         <section style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '12px' }} className="dashboard-market-grid">
@@ -1510,13 +1577,28 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <LineChart points={strategySummary.profitTrend} theme={theme} emptyLabel="Close trades to surface your daily P/L trend" color={theme.emerald} valueAccessor={(point) => Number(point.value || 0)} labelAccessor={(point) => String(point.label || '')} gradientId="strategy-line-fill" vivid height={144} annotationFormatter={(value) => formatCurrency(value)} />
+            <SectionLoadingShell loading={showStrategiesSectionLoader} label="Loading market trend..." theme={theme} height={144}>
+              <LineChart points={strategySummary.profitTrend} theme={theme} emptyLabel="Close trades to surface your daily P/L trend" color={theme.emerald} valueAccessor={(point) => Number(point.value || 0)} labelAccessor={(point) => String(point.label || '')} gradientId="strategy-line-fill" vivid height={144} annotationFormatter={(value) => formatCurrency(value)} />
+            </SectionLoadingShell>
 
             <MetricGrid items={marketCards} theme={theme} />
           </div>
         </section>
 
       </div>
+
+      <MobileBottomNav
+        theme={theme}
+        activeId={activeTab}
+        items={[
+          { id: 'home', label: 'Home', icon: '🏠', onClick: () => { setActiveTab('home'); if (router.isReady) router.push({ pathname: '/dashboard', query: { tab: 'home' } }, undefined, { shallow: true }); } },
+          { id: 'chat', label: 'Chat', icon: '💬', href: '/chat' },
+          { id: 'posts', label: 'Posts', icon: '📷', onClick: () => { setActiveTab('posts'); if (router.isReady) router.push({ pathname: '/dashboard', query: { tab: 'posts' } }, undefined, { shallow: true }); } },
+          { id: 'buddies', label: 'Buddies', icon: '👥', onClick: () => { setActiveTab('buddies'); if (router.isReady) router.push({ pathname: '/dashboard', query: { tab: 'buddies' } }, undefined, { shallow: true }); } },
+          { id: 'nifty', label: 'Nifty', icon: '📊', href: '/nifty-strategies' },
+          { id: 'wellness', label: 'Well', icon: '💪', href: '/wellness' },
+        ]}
+      />
     </div>
   );
 }

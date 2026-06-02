@@ -131,6 +131,63 @@ export default function App({ Component, pageProps }) {
             font-size: 14px;
           }
         }
+        .cosmix-mobile-nav-spacer { height: 72px; }
+        .cosmix-mobile-nav {
+          display: none;
+          position: fixed;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          z-index: 900;
+          padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+          background: linear-gradient(180deg, transparent, rgba(2,6,23,0.35) 12%, rgba(2,6,23,0.92) 40%);
+          backdrop-filter: blur(14px);
+          -webkit-backdrop-filter: blur(14px);
+        }
+        .cosmix-mobile-nav-inner {
+          display: grid;
+          grid-auto-flow: column;
+          grid-auto-columns: 1fr;
+          gap: 6px;
+          max-width: 520px;
+          margin: 0 auto;
+          padding: 6px;
+          border-radius: 18px;
+          border: 1px solid rgba(148,163,184,0.22);
+          background: rgba(15,23,42,0.94);
+          box-shadow: 0 -8px 32px rgba(0,0,0,0.35);
+        }
+        .cosmix-mobile-nav-btn {
+          appearance: none;
+          border: none;
+          background: transparent;
+          color: var(--cosmix-nav-muted, #94a3b8);
+          font-family: inherit;
+          display: grid;
+          gap: 3px;
+          justify-items: center;
+          padding: 8px 4px;
+          border-radius: 12px;
+          cursor: pointer;
+          min-height: 48px;
+          transition: background 0.15s ease, color 0.15s ease;
+        }
+        .cosmix-mobile-nav-btn.is-active,
+        .cosmix-mobile-nav-btn[aria-current="page"] {
+          background: rgba(59,130,246,0.18);
+          color: var(--cosmix-nav-active, #38bdf8);
+        }
+        .cosmix-mobile-nav-icon { font-size: 18px; line-height: 1; }
+        .cosmix-mobile-nav-label {
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
+          line-height: 1.1;
+        }
+        @media (max-width: 720px) {
+          .cosmix-mobile-nav { display: block; }
+        }
       `}</style>
       <RouteLoader active={routeLoading} />
       <Component {...pageProps} />

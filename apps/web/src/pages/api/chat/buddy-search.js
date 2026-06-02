@@ -20,6 +20,7 @@ export default async function handler(req, res) {
     const results = await searchUsers(query, user.id);
     return res.status(200).json({ results });
   } catch (error) {
-    return res.status(400).json({ error: error.message || 'Unable to search users.' });
+    console.error('buddy-search failed:', error);
+    return res.status(200).json({ results: [] });
   }
 }

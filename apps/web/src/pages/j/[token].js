@@ -1,13 +1,7 @@
-export default function JoinLinkAliasPage() {
-  return null;
-}
+import JoinGroupPage, { getServerSideProps as joinGroupGetServerSideProps } from '../join-group/[token]';
+
+export default JoinGroupPage;
 
 export async function getServerSideProps(context) {
-  const token = String(context.params?.token || '').trim();
-  return {
-    redirect: {
-      destination: `/join-group/${encodeURIComponent(token)}`,
-      permanent: false,
-    },
-  };
+  return joinGroupGetServerSideProps(context);
 }

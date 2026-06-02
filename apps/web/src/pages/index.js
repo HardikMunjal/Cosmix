@@ -1,9 +1,10 @@
 import { useRouter } from 'next/router';
 import { useEffect, useState } from 'react';
-import { clearClientUser, persistClientUser } from '../lib/auth-client';
+import { clearClientUser, getCachedClientUser, persistClientUser } from '../lib/auth-client';
 
 export default function Home() {
   const router = useRouter();
+  const [sessionState, setSessionState] = useState('checking');
   const [showSignup, setShowSignup] = useState(false);
   const [signupUsername, setSignupUsername] = useState('');
   const [signupPassword, setSignupPassword] = useState('');
@@ -14,6 +15,11 @@ export default function Home() {
 
   useEffect(() => {
     let active = true;
+    const cached = getCachedClientUser();
+
+    if (cached) {
+      router.replace('/dashboard');
+    }
 
     (async () => {
       try {
@@ -22,7 +28,7 @@ export default function Home() {
         if (!active) return;
         if (response.ok && data.user) {
           persistClientUser(data.user);
-          router.push('/dashboard');
+          router.replace('/dashboard');
           return;
         }
       } catch (_) {
@@ -31,6 +37,7 @@ export default function Home() {
 
       if (active) {
         clearClientUser();
+        setSessionState('login');
       }
     })();
 
@@ -102,6 +109,22 @@ export default function Home() {
       setLoading(false);
     }
   };
+
+  if (sessionState === 'checking') {
+    return (
+      <div style={styles.checkingPage}>
+        <div style={styles.checkingCard}>
+          <div style={styles.checkingSpinner} aria-hidden="true" />
+          <p style={styles.checkingText}>Signing you in…</p>
+        </div>
+        <style>{`
+          @keyframes loginSpin {
+            to { transform: rotate(360deg); }
+          }
+        `}</style>
+      </div>
+    );
+  }
 
   return (
     <div style={styles.page}>
@@ -351,6 +374,37 @@ export default function Home() {
 }
 
 const styles = {
+  checkingPage: {
+    minHeight: '100dvh',
+    display: 'grid',
+    placeItems: 'center',
+    background: 'linear-gradient(165deg, #f2f6ff 0%, #f8fbff 50%, #fff5eb 100%)',
+    fontFamily: "'Segoe UI', 'Trebuchet MS', Tahoma, sans-serif",
+  },
+  checkingCard: {
+    display: 'grid',
+    gap: '12px',
+    justifyItems: 'center',
+    padding: '24px',
+    borderRadius: '16px',
+    background: '#fff',
+    border: '1px solid rgba(133,152,185,0.22)',
+    boxShadow: '0 20px 48px rgba(26,39,67,0.10)',
+  },
+  checkingSpinner: {
+    width: '34px',
+    height: '34px',
+    borderRadius: '50%',
+    border: '3px solid rgba(47,99,200,0.18)',
+    borderTopColor: '#2f63c8',
+    animation: 'loginSpin 0.8s linear infinite',
+  },
+  checkingText: {
+    margin: 0,
+    fontSize: '14px',
+    fontWeight: 700,
+    color: '#425574',
+  },
   page: {
     minHeight: '100dvh',
     display: 'flex',

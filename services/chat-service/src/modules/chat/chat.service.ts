@@ -28,6 +28,7 @@ type GroupSettingsRecord = {
 type GroupFolderRecord = {
     id: string;
     groupId: string;
+    parentFolderId: string | null;
     name: string;
     description: string;
     createdBy: string;
@@ -96,6 +97,9 @@ type GroupRecord = {
     parentGroupId: string | null;
     createdBy: string;
     shareToken: string;
+    coverImageUrl: string | null;
+    coverS3Key: string | null;
+    coverMediaType: 'image' | 'video' | null;
     createdAt: string;
     updatedAt: string;
 };
@@ -119,6 +123,7 @@ type GroupImageRecord = {
     imageUrl: string;
     s3Key: string;
     caption: string;
+    mediaType: 'image' | 'video';
     uploadedBy: string;
     createdAt: string;
     updatedAt: string;
@@ -173,6 +178,9 @@ type GroupView = {
     parentGroupId: string | null;
     createdBy: string;
     shareToken: string;
+    coverImageUrl: string | null;
+    coverS3Key: string | null;
+    coverMediaType: 'image' | 'video' | null;
     createdAt: string;
     memberships: GroupMembershipView[];
     images: GroupImageView[];
@@ -234,6 +242,9 @@ type GroupRow = {
     parent_group_id: string | null;
     created_by: string;
     share_token: string;
+    cover_image_url: string | null;
+    cover_s3_key: string | null;
+    cover_media_type: string | null;
     created_at: Date;
     updated_at: Date;
 };
@@ -257,6 +268,7 @@ type GroupImageRow = {
     image_url: string;
     s3_key: string;
     caption: string;
+    media_type: string | null;
     uploaded_by: string;
     created_at: Date;
     updated_at: Date;
@@ -288,6 +300,7 @@ type GroupSettingsRow = {
 type GroupFolderRow = {
     id: string;
     group_id: string;
+    parent_folder_id: string | null;
     name: string;
     description: string;
     created_by: string;
@@ -758,6 +771,9 @@ export class ChatService {
             parentGroupId: group.parentGroupId,
             createdBy: group.createdBy,
             shareToken: group.shareToken,
+            coverImageUrl: group.coverImageUrl ?? null,
+            coverS3Key: group.coverS3Key ?? null,
+            coverMediaType: group.coverMediaType ?? null,
             createdAt: group.createdAt,
             memberships: memberships
                 .slice()
@@ -779,6 +795,7 @@ export class ChatService {
                     imageUrl: image.imageUrl,
                     s3Key: image.s3Key,
                     caption: image.caption,
+                    mediaType: image.mediaType || 'image',
                     uploadedBy: image.uploadedBy,
                     createdAt: image.createdAt,
                     comments: commentsByImageId.get(image.id) || [],
@@ -794,6 +811,7 @@ export class ChatService {
                 .sort((left, right) => left.name.localeCompare(right.name))
                 .map((folder) => ({
                     id: folder.id,
+                    parentFolderId: folder.parentFolderId ?? null,
                     name: folder.name,
                     description: folder.description,
                     createdBy: folder.createdBy,
@@ -872,9 +890,16 @@ export class ChatService {
                     parent_group_id TEXT,
                     created_by TEXT NOT NULL,
                     share_token TEXT NOT NULL UNIQUE,
+                    cover_image_url TEXT,
+                    cover_s3_key TEXT,
+                    cover_media_type TEXT,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
+
+                ALTER TABLE chat_groups ADD COLUMN IF NOT EXISTS cover_image_url TEXT;
+                ALTER TABLE chat_groups ADD COLUMN IF NOT EXISTS cover_s3_key TEXT;
+                ALTER TABLE chat_groups ADD COLUMN IF NOT EXISTS cover_media_type TEXT;
 
                 CREATE INDEX IF NOT EXISTS idx_chat_groups_parent ON chat_groups(parent_group_id);
                 CREATE INDEX IF NOT EXISTS idx_chat_groups_created_by ON chat_groups(created_by);
@@ -902,10 +927,13 @@ export class ChatService {
                     image_url TEXT NOT NULL,
                     s3_key TEXT NOT NULL,
                     caption TEXT NOT NULL DEFAULT '',
+                    media_type TEXT NOT NULL DEFAULT 'image',
                     uploaded_by TEXT NOT NULL,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
+
+                ALTER TABLE chat_group_images ADD COLUMN IF NOT EXISTS media_type TEXT NOT NULL DEFAULT 'image';
 
                 CREATE INDEX IF NOT EXISTS idx_chat_group_images_group ON chat_group_images(group_id, created_at DESC);
 
@@ -939,13 +967,18 @@ export class ChatService {
                 CREATE TABLE IF NOT EXISTS chat_group_folders (
                     id TEXT PRIMARY KEY,
                     group_id TEXT NOT NULL,
+                    parent_folder_id TEXT,
                     name TEXT NOT NULL,
                     description TEXT NOT NULL DEFAULT '',
                     created_by TEXT NOT NULL,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    UNIQUE(group_id, name)
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
+
+                ALTER TABLE chat_group_folders ADD COLUMN IF NOT EXISTS parent_folder_id TEXT;
+                ALTER TABLE chat_group_folders DROP CONSTRAINT IF EXISTS chat_group_folders_group_id_name_key;
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_group_folders_path_name
+                    ON chat_group_folders (group_id, COALESCE(parent_folder_id, ''), name);
 
                 CREATE INDEX IF NOT EXISTS idx_chat_group_folders_group ON chat_group_folders(group_id, created_at DESC);
 
@@ -1128,6 +1161,9 @@ export class ChatService {
                         parentGroupId: groupRow.parent_group_id,
                         createdBy: groupRow.created_by,
                         shareToken: groupRow.share_token,
+                        coverImageUrl: groupRow.cover_image_url ?? null,
+                        coverS3Key: groupRow.cover_s3_key ?? null,
+                        coverMediaType: (groupRow.cover_media_type === 'video' ? 'video' : groupRow.cover_media_type === 'image' ? 'image' : null),
                         createdAt: groupRow.created_at.toISOString(),
                         updatedAt: groupRow.updated_at.toISOString(),
                     },
@@ -1149,6 +1185,7 @@ export class ChatService {
                         imageUrl: imageRow.image_url,
                         s3Key: imageRow.s3_key,
                         caption: imageRow.caption,
+                        mediaType: imageRow.media_type === 'video' ? 'video' : 'image',
                         uploadedBy: imageRow.uploaded_by,
                         createdAt: imageRow.created_at.toISOString(),
                         updatedAt: imageRow.updated_at.toISOString(),
@@ -1181,6 +1218,7 @@ export class ChatService {
                     folderRows.filter((folderRow) => folderRow.group_id === groupRow.id).map((folderRow) => ({
                         id: folderRow.id,
                         groupId: folderRow.group_id,
+                        parentFolderId: folderRow.parent_folder_id ?? null,
                         name: folderRow.name,
                         description: folderRow.description,
                         createdBy: folderRow.created_by,
@@ -1564,7 +1602,16 @@ export class ChatService {
 
     async createGroup(
         actorUsername: string,
-        payload: { name: string; description?: string; parentGroupId?: string | null; memberUsernames?: string[]; viewerUsernames?: string[] },
+        payload: {
+            name: string;
+            description?: string;
+            parentGroupId?: string | null;
+            memberUsernames?: string[];
+            viewerUsernames?: string[];
+            coverImageUrl?: string | null;
+            coverS3Key?: string | null;
+            coverMediaType?: 'image' | 'video' | null;
+        },
     ) {
         const actor = this.normalizeUsername(actorUsername);
         const name = String(payload.name || '').trim();
@@ -1574,6 +1621,11 @@ export class ChatService {
         const now = this.nowIso();
         const groupId = this.buildId('group');
         const parentGroupId = payload.parentGroupId ? String(payload.parentGroupId) : null;
+        const coverImageUrl = String(payload.coverImageUrl || '').trim() || null;
+        const coverS3Key = String(payload.coverS3Key || '').trim() || null;
+        const coverMediaType = coverImageUrl
+            ? (payload.coverMediaType === 'video' ? 'video' : 'image')
+            : null;
 
         if (parentGroupId) {
             await this.assertGroupPermission(actor, parentGroupId, 'invite');
@@ -1589,6 +1641,9 @@ export class ChatService {
             parentGroupId,
             createdBy: actor,
             shareToken: this.buildShareToken(),
+            coverImageUrl,
+            coverS3Key,
+            coverMediaType,
             createdAt: now,
             updatedAt: now,
         };
@@ -1603,9 +1658,23 @@ export class ChatService {
         if (this.hasDatabase()) {
             const pool = await this.ensureSchema();
             await pool?.query(
-                `INSERT INTO chat_groups (id, name, slug, description, parent_group_id, created_by, share_token, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
-                [groupRecord.id, groupRecord.name, groupRecord.slug, groupRecord.description, groupRecord.parentGroupId, groupRecord.createdBy, groupRecord.shareToken, groupRecord.createdAt],
+                `INSERT INTO chat_groups (
+                    id, name, slug, description, parent_group_id, created_by, share_token,
+                    cover_image_url, cover_s3_key, cover_media_type, created_at, updated_at
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)`,
+                [
+                    groupRecord.id,
+                    groupRecord.name,
+                    groupRecord.slug,
+                    groupRecord.description,
+                    groupRecord.parentGroupId,
+                    groupRecord.createdBy,
+                    groupRecord.shareToken,
+                    groupRecord.coverImageUrl,
+                    groupRecord.coverS3Key,
+                    groupRecord.coverMediaType,
+                    groupRecord.createdAt,
+                ],
             );
             for (const membership of membershipRecords) {
                 await pool?.query(
@@ -1639,13 +1708,54 @@ export class ChatService {
                     defaultSettings.createdAt,
                 ],
             );
-            return this.getBootstrap(actor);
+            const bootstrap = await this.getBootstrap(actor);
+            return { ...bootstrap, createdGroupId: groupId };
         }
 
         this.groups.push(groupRecord);
         this.memberships.push(...membershipRecords);
         this.groupSettings.push(defaultSettings);
-        return this.getBootstrap(actor);
+        const bootstrap = await this.getBootstrap(actor);
+        return { ...bootstrap, createdGroupId: groupId };
+    }
+
+    async updateGroupCover(
+        actorUsername: string,
+        groupId: string,
+        payload: { coverImageUrl: string; coverS3Key: string; coverMediaType?: 'image' | 'video' | null },
+    ) {
+        const actor = this.normalizeUsername(actorUsername);
+        await this.assertGroupPermission(actor, groupId, 'invite');
+        const coverImageUrl = String(payload.coverImageUrl || '').trim();
+        const coverS3Key = String(payload.coverS3Key || '').trim();
+        if (!coverImageUrl || !coverS3Key) {
+            throw new BadRequestException('Cover image URL and S3 key are required.');
+        }
+        const coverMediaType = payload.coverMediaType === 'video' ? 'video' : 'image';
+        const now = this.nowIso();
+
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            await pool?.query(
+                `UPDATE chat_groups
+                 SET cover_image_url = $1, cover_s3_key = $2, cover_media_type = $3, updated_at = $4
+                 WHERE id = $5`,
+                [coverImageUrl, coverS3Key, coverMediaType, now, groupId],
+            );
+            const bootstrap = await this.getBootstrap(actor);
+            return { ...bootstrap, updatedGroupId: groupId };
+        }
+
+        const group = this.groups.find((entry) => entry.id === groupId);
+        if (!group) {
+            throw new NotFoundException('Group not found.');
+        }
+        group.coverImageUrl = coverImageUrl;
+        group.coverS3Key = coverS3Key;
+        group.coverMediaType = coverMediaType;
+        group.updatedAt = now;
+        const bootstrap = await this.getBootstrap(actor);
+        return { ...bootstrap, updatedGroupId: groupId };
     }
 
     async updateGroupAccess(
@@ -1738,6 +1848,7 @@ export class ChatService {
             const pool = await this.ensureSchema();
             const result = await pool?.query(
                 `SELECT g.id, g.name, g.description, g.share_token,
+                        g.cover_image_url, g.cover_s3_key, g.cover_media_type,
                         COALESCE(s.allow_join_by_link, TRUE) AS allow_join_by_link
                  FROM chat_groups g
                  LEFT JOIN chat_group_settings s ON s.group_id = g.id
@@ -1754,6 +1865,9 @@ export class ChatService {
                 name: row.name,
                 description: row.description || '',
                 shareToken: row.share_token,
+                coverImageUrl: row.cover_image_url || null,
+                coverS3Key: row.cover_s3_key || null,
+                coverMediaType: row.cover_media_type === 'video' ? 'video' : row.cover_media_type === 'image' ? 'image' : null,
                 allowJoinByLink: row.allow_join_by_link !== false,
             };
         }
@@ -1768,6 +1882,9 @@ export class ChatService {
             name: group.name,
             description: group.description,
             shareToken: group.shareToken,
+            coverImageUrl: group.coverImageUrl ?? null,
+            coverS3Key: group.coverS3Key ?? null,
+            coverMediaType: group.coverMediaType ?? null,
             allowJoinByLink: settings?.allowJoinByLink !== false,
         };
     }
@@ -1912,17 +2029,37 @@ export class ChatService {
         return this.getBootstrap(actor);
     }
 
-    async createGroupFolder(actorUsername: string, groupId: string, payload: { name: string; description?: string }) {
+    async createGroupFolder(
+        actorUsername: string,
+        groupId: string,
+        payload: { name: string; description?: string; parentFolderId?: string | null },
+    ) {
         const actor = this.normalizeUsername(actorUsername);
         await this.assertGroupManagementPermission(actor, groupId, 'folder');
         const name = String(payload.name || '').trim();
         if (!name) {
             throw new BadRequestException('Folder name is required.');
         }
+        const parentFolderId = payload.parentFolderId ? String(payload.parentFolderId).trim() : null;
+        if (parentFolderId) {
+            if (this.hasDatabase()) {
+                const pool = await this.ensureSchema();
+                const parentResult = await pool?.query(
+                    'SELECT id FROM chat_group_folders WHERE id = $1 AND group_id = $2 LIMIT 1',
+                    [parentFolderId, groupId],
+                );
+                if (!parentResult?.rows?.length) {
+                    throw new BadRequestException('Parent folder not found in this thread.');
+                }
+            } else if (!this.folders.some((entry) => entry.id === parentFolderId && entry.groupId === groupId)) {
+                throw new BadRequestException('Parent folder not found in this thread.');
+            }
+        }
         const now = this.nowIso();
         const folder: GroupFolderRecord = {
             id: this.buildId('folder'),
             groupId,
+            parentFolderId,
             name,
             description: String(payload.description || '').trim(),
             createdBy: actor,
@@ -1933,9 +2070,9 @@ export class ChatService {
         if (this.hasDatabase()) {
             const pool = await this.ensureSchema();
             await pool?.query(
-                `INSERT INTO chat_group_folders (id, group_id, name, description, created_by, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $6)`,
-                [folder.id, folder.groupId, folder.name, folder.description, folder.createdBy, folder.createdAt],
+                `INSERT INTO chat_group_folders (id, group_id, parent_folder_id, name, description, created_by, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
+                [folder.id, folder.groupId, folder.parentFolderId, folder.name, folder.description, folder.createdBy, folder.createdAt],
             );
             return this.getBootstrap(actor);
         }
@@ -2053,7 +2190,7 @@ export class ChatService {
     async addGroupImage(
         actorUsername: string,
         groupId: string,
-        payload: { imageUrl: string; s3Key: string; caption?: string },
+        payload: { imageUrl: string; s3Key: string; caption?: string; mediaType?: 'image' | 'video' | null },
     ) {
         const actor = this.normalizeUsername(actorUsername);
         await this.assertGroupPermission(actor, groupId, 'post');
@@ -2062,6 +2199,9 @@ export class ChatService {
         if (!imageUrl || !s3Key) {
             throw new BadRequestException('Image URL and S3 key are required.');
         }
+        const mediaType = payload.mediaType === 'video' || /\.(mp4|webm|mov|m4v)(\?|$)/i.test(`${imageUrl} ${s3Key}`)
+            ? 'video'
+            : 'image';
         const now = this.nowIso();
         const imageRecord: GroupImageRecord = {
             id: this.buildId('image'),
@@ -2069,6 +2209,7 @@ export class ChatService {
             imageUrl,
             s3Key,
             caption: String(payload.caption || '').trim(),
+            mediaType,
             uploadedBy: actor,
             createdAt: now,
             updatedAt: now,
@@ -2077,9 +2218,9 @@ export class ChatService {
         if (this.hasDatabase()) {
             const pool = await this.ensureSchema();
             await pool?.query(
-                `INSERT INTO chat_group_images (id, group_id, image_url, s3_key, caption, uploaded_by, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`,
-                [imageRecord.id, imageRecord.groupId, imageRecord.imageUrl, imageRecord.s3Key, imageRecord.caption, imageRecord.uploadedBy, imageRecord.createdAt],
+                `INSERT INTO chat_group_images (id, group_id, image_url, s3_key, caption, media_type, uploaded_by, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
+                [imageRecord.id, imageRecord.groupId, imageRecord.imageUrl, imageRecord.s3Key, imageRecord.caption, imageRecord.mediaType, imageRecord.uploadedBy, imageRecord.createdAt],
             );
             return this.getBootstrap(actor);
         }

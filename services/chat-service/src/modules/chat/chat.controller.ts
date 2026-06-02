@@ -64,9 +64,26 @@ export class ChatController {
       parentGroupId?: string | null;
       memberUsernames?: string[];
       viewerUsernames?: string[];
+      coverImageUrl?: string | null;
+      coverS3Key?: string | null;
+      coverMediaType?: 'image' | 'video' | null;
     },
   ) {
     return this.chatService.createGroup(body.actorUsername, body);
+  }
+
+  @Put('groups/:groupId/cover')
+  updateGroupCover(
+    @Param('groupId') groupId: string,
+    @Body()
+    body: {
+      actorUsername: string;
+      coverImageUrl: string;
+      coverS3Key: string;
+      coverMediaType?: 'image' | 'video' | null;
+    },
+  ) {
+    return this.chatService.updateGroupCover(body.actorUsername, groupId, body);
   }
 
   @Put('groups/:groupId/access')
@@ -122,7 +139,7 @@ export class ChatController {
   @Post('groups/:groupId/folders')
   createGroupFolder(
     @Param('groupId') groupId: string,
-    @Body() body: { actorUsername: string; name: string; description?: string },
+    @Body() body: { actorUsername: string; name: string; description?: string; parentFolderId?: string | null },
   ) {
     return this.chatService.createGroupFolder(body.actorUsername, groupId, body);
   }
@@ -147,7 +164,7 @@ export class ChatController {
   @Post('groups/:groupId/images')
   addGroupImage(
     @Param('groupId') groupId: string,
-    @Body() body: { actorUsername: string; imageUrl: string; s3Key: string; caption?: string },
+    @Body() body: { actorUsername: string; imageUrl: string; s3Key: string; caption?: string; mediaType?: 'image' | 'video' | null },
   ) {
     return this.chatService.addGroupImage(body.actorUsername, groupId, body);
   }

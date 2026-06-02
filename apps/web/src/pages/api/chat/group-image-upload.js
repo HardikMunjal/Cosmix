@@ -3,6 +3,18 @@ import formidable from 'formidable';
 import fs from 'fs';
 
 const MAX_IMAGE_UPLOAD_BYTES = 15 * 1024 * 1024;
+const MAX_VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024;
+
+function detectMediaType(mimetype, filename) {
+  const mime = String(mimetype || '').toLowerCase();
+  const name = String(filename || '').toLowerCase();
+  if (mime.startsWith('video/') || /\.(mp4|webm|mov|m4v)$/.test(name)) return 'video';
+  return 'image';
+}
+
+function maxBytesForFile(mimetype, filename) {
+  return detectMediaType(mimetype, filename) === 'video' ? MAX_VIDEO_UPLOAD_BYTES : MAX_IMAGE_UPLOAD_BYTES;
+}
 
 export const config = {
   api: {
@@ -41,8 +53,8 @@ export default async function handler(req, res) {
     const form = formidable({
       multiples: true,
       maxFiles: 25,
-      maxFileSize: MAX_IMAGE_UPLOAD_BYTES,
-      maxTotalFileSize: MAX_IMAGE_UPLOAD_BYTES * 25,
+      maxFileSize: MAX_VIDEO_UPLOAD_BYTES,
+      maxTotalFileSize: MAX_VIDEO_UPLOAD_BYTES * 10,
     });
 
     form.parse(req, async (error, fields, files) => {
@@ -53,11 +65,15 @@ export default async function handler(req, res) {
       const username = fields.username?.[0] || 'unknown';
       const groupId = fields.groupId?.[0] || 'general';
       const folderNameRaw = fields.folderName?.[0] || '';
-      const folderName = String(folderNameRaw)
-        .trim()
-        .replace(/[^a-zA-Z0-9-_ ]/g, '')
-        .replace(/\s+/g, '-')
-        .slice(0, 80);
+      const purposeRaw = fields.purpose?.[0] || '';
+      const purpose = String(purposeRaw).trim().toLowerCase();
+      const folderName = purpose === 'cover'
+        ? 'cover'
+        : String(folderNameRaw)
+          .trim()
+          .replace(/[^a-zA-Z0-9-_ ]/g, '')
+          .replace(/\s+/g, '-')
+          .slice(0, 80);
 
       let file = files.files || files.file;
 
@@ -84,7 +100,13 @@ export default async function handler(req, res) {
         for (const uploadedFile of file) {
           if (!uploadedFile?.filepath) continue;
           const originalName = uploadedFile.originalFilename || uploadedFile.filename || 'group-image';
-          const extension = originalName.includes('.') ? originalName.slice(originalName.lastIndexOf('.')) : '.jpg';
+          const mediaType = detectMediaType(uploadedFile.mimetype, originalName);
+          const fileLimit = maxBytesForFile(uploadedFile.mimetype, originalName);
+          const fileSize = Number(uploadedFile.size || 0);
+          if (fileSize > fileLimit) {
+            throw new Error(`${mediaType === 'video' ? 'Video' : 'Image'} exceeds size limit.`);
+          }
+          const extension = originalName.includes('.') ? originalName.slice(originalName.lastIndexOf('.')) : (mediaType === 'video' ? '.mp4' : '.jpg');
           const folderSegment = folderName ? `${folderName}/` : '';
           const key = `chat-groups/${groupId}/${folderSegment}${username}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}${extension}`;
 
@@ -92,12 +114,13 @@ export default async function handler(req, res) {
             Bucket: awsConfig.bucket,
             Key: key,
             Body: fs.createReadStream(uploadedFile.filepath),
-            ContentType: uploadedFile.mimetype || 'image/jpeg',
+            ContentType: uploadedFile.mimetype || (mediaType === 'video' ? 'video/mp4' : 'image/jpeg'),
           }).promise();
 
           uploads.push({
             key,
             url: `https://${awsConfig.bucket}.s3.${awsConfig.region}.amazonaws.com/${key}`,
+            mediaType,
           });
 
           try {

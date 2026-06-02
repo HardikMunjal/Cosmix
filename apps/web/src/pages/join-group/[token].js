@@ -2,19 +2,29 @@ import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { useEffect, useMemo, useState } from 'react';
 
-export default function JoinGroupPage({ siteOrigin }) {
+async function fetchPublicGroup(token) {
+  const url = `http://127.0.0.1:3002/chat/groups/public/${encodeURIComponent(token)}`;
+  const response = await fetch(url);
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.message || payload.error || 'Invite link not valid.');
+  }
+  return payload;
+}
+
+export default function JoinGroupPage({ siteOrigin, initialGroupInfo = null }) {
   const router = useRouter();
-  const token = String(router.query.token || router.query.t || '').trim();
+  const token = String(router.query.token || router.query.t || initialGroupInfo?.shareToken || '').trim();
   const [sessionUser, setSessionUser] = useState(null);
-  const [groupInfo, setGroupInfo] = useState(null);
+  const [groupInfo, setGroupInfo] = useState(initialGroupInfo);
   const [username, setUsername] = useState('');
   const [usernameValidation, setUsernameValidation] = useState({ status: 'idle', message: '' });
   const [createdCredentials, setCreatedCredentials] = useState(null);
-  const [status, setStatus] = useState('Loading invite...');
+  const [status, setStatus] = useState(initialGroupInfo ? 'Invite ready.' : 'Loading invite...');
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token || initialGroupInfo) return;
 
     fetch(`/api/chat/group-public?token=${encodeURIComponent(token)}`)
       .then(async (response) => {
@@ -22,7 +32,7 @@ export default function JoinGroupPage({ siteOrigin }) {
         if (!response.ok) throw new Error(payload.error || payload.message || 'Invite link not valid.');
         setGroupInfo(payload);
         if (payload.allowJoinByLink === false) {
-          setStatus('Group owner has disabled joining by link.');
+          setStatus('Thread owner has disabled joining by link.');
         } else {
           setStatus('Invite ready.');
         }
@@ -30,7 +40,9 @@ export default function JoinGroupPage({ siteOrigin }) {
       .catch((error) => {
         setStatus(error.message || 'Invite link not valid.');
       });
+  }, [token, initialGroupInfo]);
 
+  useEffect(() => {
     fetch('/api/auth/session', { cache: 'no-store' })
       .then(async (response) => {
         const payload = await response.json().catch(() => ({}));
@@ -38,7 +50,7 @@ export default function JoinGroupPage({ siteOrigin }) {
         setSessionUser(payload.user);
       })
       .catch(() => {});
-  }, [token]);
+  }, []);
 
   const canJoin = useMemo(() => Boolean(groupInfo && groupInfo.allowJoinByLink !== false), [groupInfo]);
 
@@ -102,7 +114,7 @@ export default function JoinGroupPage({ siteOrigin }) {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || payload.message || 'Unable to create account.');
       setCreatedCredentials({ username: payload?.user?.username || username.trim(), password: payload?.temporaryPassword || '123' });
-      setStatus('Account created. You can log in later with password 123. Opening group chat...');
+      setStatus('Account created. Opening thread chat...');
       window.setTimeout(() => {
         router.replace(`/chat?groupInvite=${encodeURIComponent(token)}`);
       }, 1200);
@@ -117,36 +129,43 @@ export default function JoinGroupPage({ siteOrigin }) {
     router.replace(`/chat?groupInvite=${encodeURIComponent(token)}`);
   }
 
-  const imageUrl = `${siteOrigin || ''}/cosmix-share-logo.png`;
+  const shareTitle = groupInfo?.name ? `Join ${groupInfo.name} on Cosmix` : 'Join Thread on Cosmix';
+  const shareDescription = groupInfo?.description || 'Join this Cosmix thread to chat, browse family albums, and share trip photos.';
+  const imageUrl = groupInfo?.coverImageUrl || `${siteOrigin || ''}/cosmix-share-logo.png`;
   const canonicalUrl = token
     ? `${siteOrigin || ''}/join-group/${encodeURIComponent(token)}`
     : `${siteOrigin || ''}/join-group`;
+  const coverIsVideo = groupInfo?.coverMediaType === 'video';
 
   return (
     <>
       <Head>
-        <title>Join Group on Cosmix</title>
-        <meta property="og:title" content="Join Group on Cosmix" />
-        <meta property="og:description" content="Join your Cosmix group chat with one tap." />
+        <title>{shareTitle}</title>
+        <meta property="og:title" content={shareTitle} />
+        <meta property="og:description" content={shareDescription} />
         <meta property="og:type" content="website" />
         <meta property="og:url" content={canonicalUrl} />
         <meta property="og:image" content={imageUrl} />
-        <meta property="og:image:type" content="image/png" />
-        <meta property="og:image:width" content="1200" />
-        <meta property="og:image:height" content="630" />
-        <meta property="og:image:alt" content="Cosmix app invite" />
+        <meta property="og:image:alt" content={groupInfo?.name || 'Cosmix thread invite'} />
         <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content="Join Group on Cosmix" />
-        <meta name="twitter:description" content="Join your Cosmix group chat with one tap." />
+        <meta name="twitter:title" content={shareTitle} />
+        <meta name="twitter:description" content={shareDescription} />
         <meta name="twitter:image" content={imageUrl} />
-        <meta name="twitter:image:alt" content="Cosmix app invite" />
       </Head>
 
       <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: 'linear-gradient(160deg, #020617, #1d4ed8)', color: '#e2e8f0', padding: 16, fontFamily: 'Verdana, Geneva, sans-serif' }}>
         <section style={{ width: '100%', maxWidth: 560, borderRadius: 24, padding: 24, border: '1px solid rgba(148,163,184,0.35)', background: 'rgba(15,23,42,0.86)', boxShadow: '0 22px 56px rgba(2,6,23,0.45)', display: 'grid', gap: 14 }}>
-          <img src="/cosmix-share-logo.png" alt="Cosmix" style={{ width: '100%', borderRadius: 18, border: '1px solid rgba(148,163,184,0.3)' }} />
-          <h1 style={{ margin: 0, fontSize: 30, lineHeight: 1.2 }}>{groupInfo ? `Join ${groupInfo.name}` : 'Join Group on Cosmix'}</h1>
-          <p style={{ margin: 0, color: '#bfdbfe' }}>{groupInfo?.description || 'Use this invite to join the group chat, folders, and bookmarks.'}</p>
+          {groupInfo?.coverImageUrl ? (
+            coverIsVideo ? (
+              <video src={groupInfo.coverImageUrl} style={{ width: '100%', borderRadius: 18, border: '1px solid rgba(148,163,184,0.3)', maxHeight: 280, objectFit: 'cover' }} autoPlay muted loop playsInline />
+            ) : (
+              <img src={groupInfo.coverImageUrl} alt={groupInfo.name || 'Thread cover'} style={{ width: '100%', borderRadius: 18, border: '1px solid rgba(148,163,184,0.3)', maxHeight: 280, objectFit: 'cover' }} />
+            )
+          ) : (
+            <img src="/cosmix-share-logo.png" alt="Cosmix" style={{ width: '100%', borderRadius: 18, border: '1px solid rgba(148,163,184,0.3)' }} />
+          )}
+          <h1 style={{ margin: 0, fontSize: 30, lineHeight: 1.2 }}>{groupInfo ? `Join ${groupInfo.name}` : 'Join Thread on Cosmix'}</h1>
+          <p style={{ margin: 0, color: '#bfdbfe' }}>{groupInfo?.description || 'Chat, browse albums, comment on photos, and download memories together.'}</p>
           <p style={{ margin: 0, color: '#cbd5e1' }}>{status}</p>
 
           {sessionUser ? (
@@ -195,9 +214,22 @@ export async function getServerSideProps(context) {
   const host = String(context.req.headers.host || 'localhost:3005');
   const forwardedProto = String(context.req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
   const protocol = forwardedProto || (host.includes('localhost') ? 'http' : 'https');
+  const siteOrigin = `${protocol}://${host}`;
+  const token = String(context.params?.token || '').trim();
+  let initialGroupInfo = null;
+
+  if (token) {
+    try {
+      initialGroupInfo = await fetchPublicGroup(token);
+    } catch {
+      initialGroupInfo = null;
+    }
+  }
+
   return {
     props: {
-      siteOrigin: `${protocol}://${host}`,
+      siteOrigin,
+      initialGroupInfo,
     },
   };
 }
