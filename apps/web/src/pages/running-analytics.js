@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/router';
 import { restoreUserSession } from '../lib/auth-client';
+import { MarathonGoalModal, MarathonRaceHub } from '../lib/MarathonRaceHub';
+import { MobileBottomNav } from '../lib/MobileNav';
 import { useTheme } from '../lib/ThemePicker';
 import { computeRunningStats, computeWellnessStats, buildWellnessSummary } from '../lib/userInsights';
 
@@ -166,6 +168,221 @@ function PaceTrendChart({ runRows, theme }) {
   );
 }
 
+function buildRunningInsights(runRows = []) {
+  const rows = [...runRows]
+    .filter((r) => r.distance > 0 && r.minutes > 0)
+    .map((r) => ({
+      ...r,
+      pace: r.minutes / r.distance,
+      speed: r.distance / (r.minutes / 60),
+    }))
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+
+  const today = new Date();
+  const dayMs = 86400000;
+  const cutoff7 = new Date(today.getTime() - 7 * dayMs).toISOString().slice(0, 10);
+  const cutoff30 = new Date(today.getTime() - 30 * dayMs).toISOString().slice(0, 10);
+
+  const last7 = rows.filter((r) => r.date >= cutoff7);
+  const last30 = rows.filter((r) => r.date >= cutoff30);
+
+  const avgPace = (list) => (list.length ? list.reduce((s, r) => s + r.pace, 0) / list.length : null);
+  const totalKm = (list) => list.reduce((s, r) => s + r.distance, 0);
+
+  const weekdayKm = Array.from({ length: 7 }, () => 0);
+  const weekdayRuns = Array.from({ length: 7 }, () => 0);
+  rows.forEach((r) => {
+    const dow = new Date(`${r.date}T12:00:00`).getDay();
+    weekdayKm[dow] += r.distance;
+    weekdayRuns[dow] += 1;
+  });
+  const weekdayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  const monthMap = {};
+  rows.forEach((r) => {
+    const key = String(r.date).slice(0, 7);
+    if (!monthMap[key]) monthMap[key] = { month: key, km: 0, runs: 0, longest: 0 };
+    monthMap[key].km += r.distance;
+    monthMap[key].runs += 1;
+    monthMap[key].longest = Math.max(monthMap[key].longest, r.distance);
+  });
+  const months = Object.values(monthMap).sort((a, b) => a.month.localeCompare(b.month)).slice(-6);
+
+  const recentRuns = rows.slice(0, 8);
+
+  return {
+    avgPace7: avgPace(last7),
+    avgPace30: avgPace(last30),
+    km7: totalKm(last7),
+    km30: totalKm(last30),
+    runs7: last7.length,
+    runs30: last30.length,
+    weekdayKm,
+    weekdayRuns,
+    weekdayLabels,
+    months,
+    recentRuns,
+  };
+}
+
+function MiniStat({ label, value, sub, accent, theme }) {
+  return (
+    <div style={{ padding: '12px 14px', borderRadius: 14, background: `${accent}12`, border: `1px solid ${accent}33` }}>
+      <div style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', color: theme.textMuted }}>{label}</div>
+      <div style={{ fontSize: 18, fontWeight: 900, color: accent, marginTop: 4 }}>{value}</div>
+      {sub ? <div style={{ fontSize: 11, color: theme.textSecondary, marginTop: 2 }}>{sub}</div> : null}
+    </div>
+  );
+}
+
+function RecentRunsChart({ runs, theme }) {
+  if (!runs?.length) return null;
+  const ordered = [...runs].reverse();
+  const maxKm = Math.max(...ordered.map((r) => r.distance), 1);
+  const W = 360;
+  const H = 88;
+  const colW = W / ordered.length;
+  const barW = Math.max(10, colW * 0.55);
+  return (
+    <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 16, padding: '14px 16px' }}>
+      <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, marginBottom: 10 }}>Recent runs — distance (km)</div>
+      <svg viewBox={`0 0 ${W} ${H + 18}`} style={{ width: '100%', height: H + 18 }}>
+        {ordered.map((r, i) => {
+          const cx = i * colW + colW / 2;
+          const barH = Math.max(4, (r.distance / maxKm) * (H - 8));
+          const y = H - barH;
+          return (
+            <g key={r.date}>
+              <rect x={cx - barW / 2} y={y} width={barW} height={barH} rx="4" fill={theme.green} opacity={0.85} />
+              <text x={cx} y={y - 3} textAnchor="middle" fill={theme.green} fontSize="8" fontWeight="700">{r.distance.toFixed(1)}</text>
+              <text x={cx} y={H + 12} textAnchor="middle" fill={theme.textMuted} fontSize="7">{String(r.date).slice(5)}</text>
+            </g>
+          );
+        })}
+        <line x1="0" x2={W} y1={H} y2={H} stroke={theme.cardBorder} />
+      </svg>
+    </div>
+  );
+}
+
+function MonthlyVolumeChart({ months, theme }) {
+  if (!months?.length) return null;
+  const maxKm = Math.max(...months.map((m) => m.km), 1);
+  const W = 360;
+  const H = 88;
+  const colW = W / months.length;
+  const barW = Math.max(14, colW * 0.5);
+  return (
+    <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 16, padding: '14px 16px' }}>
+      <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, marginBottom: 10 }}>Monthly volume — km</div>
+      <svg viewBox={`0 0 ${W} ${H + 18}`} style={{ width: '100%', height: H + 18 }}>
+        {months.map((m, i) => {
+          const cx = i * colW + colW / 2;
+          const barH = Math.max(4, (m.km / maxKm) * (H - 8));
+          const y = H - barH;
+          return (
+            <g key={m.month}>
+              <rect x={cx - barW / 2} y={y} width={barW} height={barH} rx="4" fill={theme.blue} opacity={i === months.length - 1 ? 1 : 0.7} />
+              <text x={cx} y={y - 3} textAnchor="middle" fill={theme.blue} fontSize="8" fontWeight="700">{m.km.toFixed(0)}</text>
+              <text x={cx} y={H + 12} textAnchor="middle" fill={theme.textMuted} fontSize="7">{m.month.slice(5)}</text>
+            </g>
+          );
+        })}
+        <line x1="0" x2={W} y1={H} y2={H} stroke={theme.cardBorder} />
+      </svg>
+    </div>
+  );
+}
+
+function LongRunTrendChart({ months, theme }) {
+  if (!months?.length) return null;
+  const maxLong = Math.max(...months.map((m) => m.longest), 1);
+  const W = 360;
+  const H = 88;
+  const pts = months.map((m, i) => {
+    const x = months.length === 1 ? W / 2 : (i / (months.length - 1)) * W;
+    const y = H - (m.longest / maxLong) * (H - 16) - 8;
+    return `${x},${y}`;
+  }).join(' ');
+  return (
+    <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 16, padding: '14px 16px' }}>
+      <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, marginBottom: 10 }}>Longest run per month — km</div>
+      <svg viewBox={`0 0 ${W} ${H + 18}`} style={{ width: '100%', height: H + 18 }}>
+        <polyline fill="none" stroke={theme.purple} strokeWidth="2.5" points={pts} />
+        {months.map((m, i) => {
+          const x = months.length === 1 ? W / 2 : (i / (months.length - 1)) * W;
+          const y = H - (m.longest / maxLong) * (H - 16) - 8;
+          return (
+            <g key={m.month}>
+              <circle cx={x} cy={y} r="4" fill={theme.purple} />
+              <text x={x} y={H + 12} textAnchor="middle" fill={theme.textMuted} fontSize="7">{m.month.slice(5)}</text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function WeekdayPatternChart({ weekdayKm, weekdayLabels, theme }) {
+  const max = Math.max(...weekdayKm, 0.1);
+  const W = 280;
+  const H = 72;
+  const colW = W / 7;
+  const barW = colW * 0.55;
+  return (
+    <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 16, padding: '14px 16px' }}>
+      <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, marginBottom: 10 }}>Runs by weekday — total km</div>
+      <svg viewBox={`0 0 ${W} ${H + 16}`} style={{ width: '100%', height: H + 16 }}>
+        {weekdayLabels.map((label, i) => {
+          const cx = i * colW + colW / 2;
+          const barH = Math.max(2, (weekdayKm[i] / max) * (H - 4));
+          const y = H - barH;
+          return (
+            <g key={label}>
+              <rect x={cx - barW / 2} y={y} width={barW} height={barH} rx="3" fill={theme.orange} opacity={weekdayKm[i] > 0 ? 0.9 : 0.2} />
+              <text x={cx} y={H + 11} textAnchor="middle" fill={theme.textMuted} fontSize="8">{label}</text>
+            </g>
+          );
+        })}
+        <line x1="0" x2={W} y1={H} y2={H} stroke={theme.cardBorder} />
+      </svg>
+    </div>
+  );
+}
+
+function SpeedTrendChart({ runRows, theme }) {
+  const data = [...(runRows || [])]
+    .filter((r) => r.distance > 0 && r.minutes > 0)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+    .slice(-12)
+    .map((r) => ({ date: r.date, speed: r.distance / (r.minutes / 60) }));
+  if (data.length < 2) return null;
+  const W = 360;
+  const H = 88;
+  const minS = Math.min(...data.map((d) => d.speed));
+  const maxS = Math.max(...data.map((d) => d.speed));
+  const range = Math.max(0.5, maxS - minS);
+  const pts = data.map((d, i) => {
+    const x = (i / (data.length - 1)) * W;
+    const y = H - ((d.speed - minS) / range) * (H - 16) - 8;
+    return `${x},${y}`;
+  }).join(' ');
+  return (
+    <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 16, padding: '14px 16px' }}>
+      <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, marginBottom: 10 }}>Speed trend — km/h</div>
+      <svg viewBox={`0 0 ${W} ${H + 18}`} style={{ width: '100%', height: H + 18 }}>
+        <polyline fill="none" stroke={theme.green} strokeWidth="2.5" points={pts} />
+        {data.map((d, i) => {
+          const x = (i / (data.length - 1)) * W;
+          const y = H - ((d.speed - minS) / range) * (H - 16) - 8;
+          return <circle key={d.date} cx={x} cy={y} r="3.5" fill={theme.green} />;
+        })}
+      </svg>
+    </div>
+  );
+}
+
 function WeeklyMileageChart({ runRows, theme }) {
   const weekMap = {};
   (runRows || []).forEach((r) => {
@@ -211,38 +428,98 @@ function WeeklyMileageChart({ runRows, theme }) {
 }
 
 // ─── sport tab panels ──────────────────────────────────────
-function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows }) {
-  const noData = !runStats || runStats.totalRuns === 0;
-  if (noData) return <EmptyState sport="Running" theme={theme} />;
+function CollapsibleBlock({ title, children, theme, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
-    <div style={{ display: 'grid', gap: '20px' }}>
-      <div className="sport-4col" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: '14px' }}>
+    <div style={{ borderRadius: 16, border: `1px solid ${theme.cardBorder}`, background: theme.cardBg, overflow: 'hidden' }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          width: '100%',
+          border: 'none',
+          background: 'transparent',
+          color: theme.textHeading,
+          padding: '12px 16px',
+          fontWeight: 800,
+          fontSize: 13,
+          cursor: 'pointer',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}
+      >
+        <span>{title}</span>
+        <span style={{ opacity: 0.6 }}>{open ? '▲' : '▼'}</span>
+      </button>
+      {open ? <div style={{ padding: '0 14px 14px' }}>{children}</div> : null}
+    </div>
+  );
+}
+
+function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, userId, onOpenMarathonPlan, goalRefreshKey }) {
+  const noData = !runStats || runStats.totalRuns === 0;
+  const insights = useMemo(() => buildRunningInsights(runRows), [runRows]);
+  const paceDelta = insights.avgPace7 && insights.avgPace30
+    ? insights.avgPace7 - insights.avgPace30
+    : null;
+
+  return (
+    <div style={{ display: 'grid', gap: '14px' }}>
+      <MarathonRaceHub userId={userId} runRows={runRows} theme={theme} onOpenPlan={onOpenMarathonPlan} refreshKey={goalRefreshKey} compact />
+      {noData ? <EmptyState sport="Running" theme={theme} /> : (
+      <>
+      <CollapsibleBlock title="Performance dashboards" theme={theme} defaultOpen>
+        <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
+          <div className="run-dash-mini-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 8 }}>
+            <MiniStat label="7-day km" value={`${insights.km7.toFixed(1)} km`} sub={`${insights.runs7} runs`} accent={theme.orange} theme={theme} />
+            <MiniStat label="30-day km" value={`${insights.km30.toFixed(1)} km`} sub={`${insights.runs30} runs`} accent={theme.blue} theme={theme} />
+            <MiniStat label="Pace (7d)" value={insights.avgPace7 ? fmtPace(insights.avgPace7) : '--'} sub={paceDelta != null ? `${paceDelta < 0 ? 'Faster' : 'Slower'} vs 30d` : '—'} accent={paceDelta != null && paceDelta < 0 ? theme.green : theme.cyan} theme={theme} />
+            <MiniStat label="Pace (30d)" value={insights.avgPace30 ? fmtPace(insights.avgPace30) : '--'} sub="rolling average" accent={theme.purple} theme={theme} />
+          </div>
+          <div className="run-dash-charts-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <RecentRunsChart runs={insights.recentRuns} theme={theme} />
+            <MonthlyVolumeChart months={insights.months} theme={theme} />
+          </div>
+          {runRows.length > 1 && (
+            <div className="run-dash-charts-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <PaceTrendChart runRows={runRows} theme={theme} />
+              <WeeklyMileageChart runRows={runRows} theme={theme} />
+            </div>
+          )}
+          <div className="run-dash-charts-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <SpeedTrendChart runRows={runRows} theme={theme} />
+            <LongRunTrendChart months={insights.months} theme={theme} />
+          </div>
+          <WeekdayPatternChart weekdayKm={insights.weekdayKm} weekdayLabels={insights.weekdayLabels} theme={theme} />
+        </div>
+      </CollapsibleBlock>
+
+      <CollapsibleBlock title="Key run metrics" theme={theme} defaultOpen>
+      <div className="sport-4col" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: '10px', marginTop: 4 }}>
         <HeroStat label="Total Distance" value={`${runStats.totalDistance} km`} sub={`${runStats.totalRuns} runs`} accent={theme.blue} theme={theme} />
         <HeroStat label="Fastest Speed" value={`${runStats.fastestSpeed ?? '--'} km/h`} sub={runStats.fastestSpeedRun ? `${runStats.fastestSpeedRun.distance} km · ${fmtDate(runStats.fastestSpeedRun.date)}` : null} accent={theme.green} theme={theme} />
         <HeroStat label="Average Speed" value={`${runStats.averageSpeed} km/h`} sub={runStats.averagePace ? `Pace: ${fmtPace(runStats.averagePace)}` : null} accent={theme.cyan} theme={theme} />
         <HeroStat label="Best Wellness" value={wellStats?.highestScore ? `${wellStats.highestScore.score.toFixed(0)} pts` : '--'} sub={wellStats?.highestScore ? fmtDate(wellStats.highestScore.date) : null} accent={theme.orange} theme={theme} />
       </div>
+      </CollapsibleBlock>
 
-      <div>
-        <SectionLabel theme={theme}>Personal Records</SectionLabel>
-        <div className="sport-3col" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0,1fr))', gap: '14px' }}>
+      <CollapsibleBlock title="Records & streaks" theme={theme} defaultOpen>
+        <div className="sport-3col" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: '10px', marginTop: 4 }}>
           <RecordCard label="Fastest Speed" value={runStats.fastestSpeedRun ? `${runStats.fastestSpeedRun.speed} km/h` : null} detail1={runStats.fastestSpeedRun ? `${runStats.fastestSpeedRun.distance} km in ${runStats.fastestSpeedRun.time}` : null} detail2={runStats.fastestSpeedRun ? fmtDate(runStats.fastestSpeedRun.date) : null} accent={theme.green} theme={theme} />
           <RecordCard label="Longest Run" value={runStats.longestDistanceRun ? `${runStats.longestDistanceRun.distance} km` : null} detail1={runStats.longestDistanceRun ? `${runStats.longestDistanceRun.time} · ${runStats.longestDistanceRun.speed} km/h` : null} detail2={runStats.longestDistanceRun ? fmtDate(runStats.longestDistanceRun.date) : null} accent={theme.blue} theme={theme} />
           <RecordCard label="Best Pace" value={runStats.fastestSpeedRun ? fmtPace(60 / runStats.fastestSpeedRun.speed) : null} detail1={runStats.fastestSpeedRun ? `${runStats.fastestSpeedRun.speed} km/h on ${fmtDate(runStats.fastestSpeedRun.date)}` : null} detail2="Pace = minutes per km" accent={theme.cyan} theme={theme} />
         </div>
-      </div>
+        {wellSummary && (
+          <div style={{ display: 'grid', gap: 10, marginTop: 10 }}>
+            <RecordCard label={`${name}'s streak`} value={`${wellSummary.runningStreak} days`} detail1={`Best ${wellSummary.longestRunningStreak} days`} accent={theme.orange} theme={theme} />
+            <RecordCard label="Week km" value={wellSummary.dashboardStats?.weeklyRunningKm ? `${Number(wellSummary.dashboardStats.weeklyRunningKm).toFixed(1)} km` : '--'} detail1={`Total ${runStats.totalDistance} km`} accent={theme.emerald} theme={theme} />
+          </div>
+        )}
+      </CollapsibleBlock>
 
-      {wellSummary && (
-        <div className="sport-3col" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0,1fr))', gap: '14px' }}>
-          <RecordCard label={`${name}'s Running Streak`} value={`${wellSummary.runningStreak} day${wellSummary.runningStreak === 1 ? '' : 's'}`} detail1={wellSummary.longestRunningStreak > wellSummary.runningStreak ? `Best ever: ${wellSummary.longestRunningStreak} days` : 'All-time best!'} accent={theme.orange} theme={theme} />
-          <RecordCard label="Weekly Distance" value={wellSummary.dashboardStats?.weeklyRunningKm ? `${Number(wellSummary.dashboardStats.weeklyRunningKm).toFixed(1)} km` : '--'} detail1={wellSummary.dashboardStats?.activeDays ? `${wellSummary.dashboardStats.activeDays} active days` : null} detail2={`All-time: ${runStats.totalDistance} km`} accent={theme.emerald} theme={theme} />
-          <RecordCard label="Current Wellness" value={wellSummary.currentWellnessScore ? `${wellSummary.currentWellnessScore.toFixed(0)} pts` : '--'} detail1={wellSummary.weeklyAverageWellnessScore ? `7-day avg: ${wellSummary.weeklyAverageWellnessScore.toFixed(0)} pts` : null} detail2={wellSummary.maxWellnessScore ? `Peak: ${wellSummary.maxWellnessScore.toFixed(0)} pts` : null} accent={theme.purple} theme={theme} />
-        </div>
-      )}
-
-      <div>
-        <SectionLabel theme={theme}>Top Runs</SectionLabel>
-        <div className="sport-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
+      <CollapsibleBlock title="Top runs & history" theme={theme} defaultOpen>
+        <div className="sport-2col" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px', marginTop: 4 }}>
           <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: '18px', overflow: 'hidden' }}>
             <div style={{ padding: '14px 18px', fontWeight: 800, fontSize: '14px', color: theme.textHeading, borderBottom: `1px solid ${theme.cardBorder}` }}>{name}&apos;s Fastest Runs (min 2 km)</div>
             {(runStats.topSpeeds || []).slice(0, 7).map((e, i) => (
@@ -266,16 +543,8 @@ function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows }) 
             ))}
           </div>
         </div>
-      </div>
-
-      {runRows && runRows.length > 1 && (
-        <div>
-          <SectionLabel theme={theme}>Performance Charts</SectionLabel>
-          <div className="sport-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-            <PaceTrendChart runRows={runRows} theme={theme} />
-            <WeeklyMileageChart runRows={runRows} theme={theme} />
-          </div>
-        </div>
+      </CollapsibleBlock>
+      </>
       )}
     </div>
   );
@@ -407,9 +676,11 @@ function EmptyState({ sport, theme }) {
 }
 
 // ─── main page ─────────────────────────────────────────────
-const SPORT_TABS = [
-  { id: 'overview', label: 'Overview', emoji: '📊' },
+const PRIMARY_TABS = [
   { id: 'running', label: 'Running', emoji: '🏃' },
+  { id: 'overview', label: 'Overview', emoji: '📊' },
+];
+const MORE_SPORT_TABS = [
   { id: 'badminton', label: 'Badminton', emoji: '🏸' },
   { id: 'cycling', label: 'Cycling', emoji: '🚴' },
   { id: 'walking', label: 'Walking', emoji: '🚶' },
@@ -421,10 +692,18 @@ export default function RunningAnalytics() {
   const { theme } = useTheme();
   const [user, setUser] = useState(null);
   const [activeTab, setActiveTab] = useState('running');
+  const [showMarathonModal, setShowMarathonModal] = useState(false);
+  const [goalRefreshKey, setGoalRefreshKey] = useState(0);
+  const [showOtherSports, setShowOtherSports] = useState(false);
 
   useEffect(() => {
     restoreUserSession(router, setUser);
   }, [router]);
+
+  useEffect(() => {
+    if (!router.isReady || !user?.id) return;
+    if (router.query.setup === '1') setShowMarathonModal(true);
+  }, [router.isReady, router.query.setup, user?.id]);
 
   const runStats = useMemo(() => (user?.id ? computeRunningStats(user.id) : null), [user?.id]);
   const wellStats = useMemo(() => (user?.id ? computeWellnessStats(user.id) : null), [user?.id]);
@@ -447,71 +726,148 @@ export default function RunningAnalytics() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: theme.pageBg, color: theme.textPrimary, padding: '24px', fontFamily: theme.font }}>
+    <div style={{ minHeight: '100vh', background: theme.pageBg, color: theme.textPrimary, padding: '24px 24px 0', fontFamily: theme.font }} className="running-analytics-page">
       <style>{`
         * { box-sizing: border-box; }
         html, body, #__next { min-height: 100%; margin: 0; }
+        .running-analytics-page { padding-bottom: 0; }
+        .sport-tab-strip {
+          display: flex;
+          gap: 6px;
+          padding: 6px;
+          border-radius: 16px;
+          background: rgba(15,23,42,0.35);
+          border: 1px solid rgba(148,163,184,0.18);
+          overflow-x: auto;
+        }
+        .sport-tab-btn {
+          appearance: none;
+          border: 1px solid transparent;
+          border-radius: 12px;
+          background: transparent;
+          padding: 10px 14px;
+          cursor: pointer;
+          font-weight: 700;
+          font-size: 13px;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          white-space: nowrap;
+          transition: background 0.15s, border-color 0.15s;
+        }
+        .sport-tab-btn.is-active {
+          box-shadow: 0 8px 20px rgba(249,115,22,0.15);
+        }
         @media (max-width: 900px) {
           .sport-4col { grid-template-columns: 1fr 1fr !important; }
           .sport-3col { grid-template-columns: 1fr 1fr !important; }
           .sport-2col { grid-template-columns: 1fr !important; }
+          .marathon-hero-grid { grid-template-columns: 1fr !important; justify-items: center !important; }
+          .marathon-metric-grid { grid-template-columns: 1fr 1fr !important; width: 100% !important; }
+          .marathon-readiness-block { grid-template-columns: 1fr !important; justify-items: center !important; }
+          .marathon-score-grid { grid-template-columns: 1fr !important; }
+          .marathon-goal-inputs { grid-template-columns: 1fr !important; }
+    .run-dash-charts-2 { grid-template-columns: 1fr !important; }
+    .run-dash-mini-grid { grid-template-columns: 1fr 1fr !important; }
         }
         @media (max-width: 560px) {
+          .running-analytics-page { padding: 12px 12px 0 !important; }
           .sport-4col { grid-template-columns: 1fr !important; }
           .sport-3col { grid-template-columns: 1fr !important; }
-          .sport-tab-strip { flex-wrap: nowrap !important; overflow-x: auto !important; padding-bottom: 4px !important; }
-          .sport-tab-strip button { flex: 0 0 auto; min-width: max-content; }
+          .marathon-metric-grid { grid-template-columns: 1fr !important; }
+          .sport-tab-strip { flex-wrap: nowrap !important; }
+          .sport-tab-btn { flex: 0 0 auto; }
+          .marathon-modal-backdrop { align-items: flex-end !important; }
         }
       `}</style>
 
       <div style={{ maxWidth: '1200px', margin: '0 auto', display: 'grid', gap: '20px' }}>
 
-        {/* ── Header ── */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '16px', flexWrap: 'wrap', padding: '22px 24px', borderRadius: '24px', background: theme.panelBg || theme.cardBg, border: `1px solid ${theme.cardBorder}` }}>
-          <div>
-            <div style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.14em', color: theme.textMuted, marginBottom: '6px' }}>Fitness Analytics</div>
-            <h1 style={{ margin: 0, fontSize: '28px', fontWeight: 900, color: theme.textHeading, lineHeight: 1.1 }}>{name}&apos;s Sports Stats</h1>
-            <p style={{ margin: '6px 0 0', fontSize: '13px', color: theme.textSecondary }}>
-              {runStats?.totalRuns || 0} runs · {allSportStats.badminton?.count || 0} badminton · {allSportStats.cycling?.count || 0} cycling sessions
-            </p>
+        <div className="run-page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', padding: '16px', borderRadius: '20px', background: `linear-gradient(135deg, ${theme.orange}14, ${theme.cyan}10, ${theme.cardBg})`, border: `1px solid ${theme.cardBorder}` }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted }}>Running</div>
+            <h1 style={{ margin: '4px 0 0', fontSize: 'clamp(20px,4vw,26px)', fontWeight: 900, color: theme.textHeading, lineHeight: 1.1 }}>Race cockpit</h1>
+            <p style={{ margin: '6px 0 0', fontSize: '12px', color: theme.textSecondary }}>{runStats?.totalRuns || 0} runs · goal-based plan</p>
           </div>
-          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-            <button onClick={() => router.push('/leaderboard')} style={{ background: theme.btnSecondaryBg || theme.cardBg, color: theme.btnSecondaryText || theme.textPrimary, border: `1px solid ${theme.cardBorder}`, borderRadius: '12px', padding: '9px 15px', cursor: 'pointer', fontWeight: 700, fontSize: '13px' }}>Leaderboard</button>
-            <button onClick={() => router.push('/wellness')} style={{ background: theme.btnSecondaryBg || theme.cardBg, color: theme.btnSecondaryText || theme.textPrimary, border: `1px solid ${theme.cardBorder}`, borderRadius: '12px', padding: '9px 15px', cursor: 'pointer', fontWeight: 700, fontSize: '13px' }}>Log Activity</button>
-            <button onClick={() => router.push('/dashboard')} style={{ background: theme.orange, color: '#fff', border: 'none', borderRadius: '12px', padding: '9px 15px', cursor: 'pointer', fontWeight: 700, fontSize: '13px' }}>Dashboard</button>
-          </div>
+          <button type="button" onClick={() => setShowMarathonModal(true)} style={{ border: 'none', background: theme.orange, color: '#fff', borderRadius: '12px', padding: '10px 14px', cursor: 'pointer', fontWeight: 800, fontSize: '12px', whiteSpace: 'nowrap', flexShrink: 0 }}>🏁 Goal</button>
         </div>
 
-        {/* ── Sport Tabs ── */}
-        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }} className="sport-tab-strip">
-          {SPORT_TABS.map((tab) => {
+        <div className="sport-tab-strip" role="tablist" aria-label="Sport analytics">
+          {PRIMARY_TABS.map((tab) => {
             const isActive = activeTab === tab.id;
             return (
               <button
                 key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                className={`sport-tab-btn${isActive ? ' is-active' : ''}`}
                 onClick={() => setActiveTab(tab.id)}
                 style={{
-                  padding: '10px 18px', borderRadius: '14px', cursor: 'pointer', fontWeight: 700, fontSize: '13px',
-                  border: isActive ? `1px solid ${theme.orange}` : `1px solid ${theme.cardBorder}`,
-                  background: isActive ? `${theme.orange}18` : theme.cardBg,
+                  border: isActive ? `1px solid ${theme.orange}` : '1px solid transparent',
+                  background: isActive ? `${theme.orange}18` : 'transparent',
                   color: isActive ? theme.orange : theme.textSecondary,
-                  display: 'flex', alignItems: 'center', gap: '6px',
-                  transition: 'all 0.15s',
                 }}
               >
-                <span>{tab.emoji}</span>
+                <span aria-hidden="true">{tab.emoji}</span>
                 <span>{tab.label}</span>
               </button>
             );
           })}
+          <button
+            type="button"
+            className={`sport-tab-btn sport-tab-btn--other${showOtherSports ? ' is-active' : ''}`}
+            onClick={() => setShowOtherSports((v) => !v)}
+            style={{
+              border: showOtherSports ? `1px solid ${theme.cyan}` : '1px solid transparent',
+              background: showOtherSports ? `${theme.cyan}18` : 'transparent',
+              color: showOtherSports ? theme.cyan : theme.textSecondary,
+            }}
+          >
+            <span aria-hidden="true">🏸</span>
+            <span>Other sports</span>
+          </button>
         </div>
+        {showOtherSports && (
+          <div className="sport-tab-strip sport-tab-strip--other">
+            {MORE_SPORT_TABS.map((tab) => {
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  className={`sport-tab-btn${isActive ? ' is-active' : ''}`}
+                  onClick={() => setActiveTab(tab.id)}
+                  style={{
+                    border: isActive ? `1px solid ${theme.cyan}` : '1px solid transparent',
+                    background: isActive ? `${theme.cyan}18` : 'transparent',
+                    color: isActive ? theme.cyan : theme.textSecondary,
+                  }}
+                >
+                  <span>{tab.emoji}</span>
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         {/* ── Tab Content ── */}
         {activeTab === 'overview' && (
           <OverviewTab wellStats={wellStats} wellSummary={wellSummary} allSportStats={allSportStats} name={name} theme={theme} />
         )}
         {activeTab === 'running' && (
-          <RunningTab runStats={runStats} wellStats={wellStats} wellSummary={wellSummary} name={name} theme={theme} runRows={allSportStats.running?.rows || []} />
+          <RunningTab
+            runStats={runStats}
+            wellStats={wellStats}
+            wellSummary={wellSummary}
+            name={name}
+            theme={theme}
+            runRows={allSportStats.running?.rows || []}
+            userId={user?.id}
+            onOpenMarathonPlan={() => setShowMarathonModal(true)}
+            goalRefreshKey={goalRefreshKey}
+          />
         )}
         {activeTab === 'badminton' && (
           <SimpleSportTab stats={allSportStats.badminton} name={name} sportLabel="Badminton" minKey="badmintonMinutes" showDistance={false} accent={theme.yellow || '#eab308'} theme={theme} />
@@ -526,6 +882,30 @@ export default function RunningAnalytics() {
           <SimpleSportTab stats={allSportStats.swimming} name={name} sportLabel="Swimming" minKey="swimmingMinutes" showDistance={false} accent={theme.purple} theme={theme} />
         )}
       </div>
+
+      <MarathonGoalModal
+        open={showMarathonModal}
+        onClose={() => setShowMarathonModal(false)}
+        userId={user?.id}
+        runRows={allSportStats.running?.rows || []}
+        theme={theme}
+        onSaved={() => {
+          setGoalRefreshKey((k) => k + 1);
+          if (router.query.setup) router.replace('/running-analytics', undefined, { shallow: true });
+        }}
+        initialTab={router.query.setup ? 'goal' : 'plan'}
+      />
+
+      <MobileBottomNav
+        theme={theme}
+        activeId="stats"
+        items={[
+          { id: 'home', label: 'Home', icon: '🏠', href: '/dashboard' },
+          { id: 'wellness', label: 'Henna', icon: '🌿', href: '/wellness' },
+          { id: 'stats', label: 'Running', icon: '🏃', href: '/running-analytics' },
+          { id: 'board', label: 'Ranks', icon: '🏆', href: '/leaderboard' },
+        ]}
+      />
     </div>
   );
 }

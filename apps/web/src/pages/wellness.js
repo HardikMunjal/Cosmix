@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
-import { logoutClientSession, restoreUserSession } from '../lib/auth-client';
+import { restoreUserSession } from '../lib/auth-client';
+import { MoreIcon, SettingsIcon } from '../lib/appIcons';
+import { RaceGoalBanner } from '../lib/RaceGoalBanner';
 
 import {
   DEFAULT_FORM,
@@ -401,8 +403,10 @@ export default function WellnessPage() {
   const buddyLoadKeyRef = useRef('');
   const buddyLoadedKeyRef = useRef('');
   const buddyLoadInFlightRef = useRef(false);
+  const moreMenuRef = useRef(null);
 
   const [user, setUser] = useState(null);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [loading, setLoading] = useState(true);
   const [entries, setEntries] = useState([]);
   const [form, setForm] = useState(DEFAULT_FORM);
@@ -440,6 +444,32 @@ export default function WellnessPage() {
   const [serverHydrated, setServerHydrated] = useState(false);
 
   const showMicSecurityWarning = typeof window !== 'undefined' && !window.isSecureContext && window.location.hostname !== 'localhost';
+
+  useEffect(() => {
+    if (!showMoreMenu) return undefined;
+    function handlePointerDown(event) {
+      if (moreMenuRef.current && !moreMenuRef.current.contains(event.target)) {
+        setShowMoreMenu(false);
+      }
+    }
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('touchstart', handlePointerDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('touchstart', handlePointerDown);
+    };
+  }, [showMoreMenu]);
+
+  function navigateFromMore(path) {
+    setShowMoreMenu(false);
+    setShowAddActivityModal(false);
+    router.push(path);
+  }
+
+  function toggleMoreMenu() {
+    setShowAddActivityModal(false);
+    setShowMoreMenu((current) => !current);
+  }
 
   const configuredWellnessApiBase = process.env.NEXT_PUBLIC_WELLNESS_API_BASE || '';
   const API_BASE = configuredWellnessApiBase || (typeof window !== 'undefined'
@@ -919,6 +949,7 @@ export default function WellnessPage() {
   }
 
   function openAddActivityModal(prefillActivityId = '') {
+    setShowMoreMenu(false);
     setInputMode('dropdown');
     setCommandInput('');
     if (prefillActivityId) {
@@ -1256,21 +1287,51 @@ export default function WellnessPage() {
       <div style={s.page} className="henna-page">
         {/* header */}
         <div style={s.header} className="wellness-header">
-          <div className="wellness-header-brand" style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div className="wellness-header-avatar-slot"><AvatarChip user={user} size={52} /></div>
-            <div style={{ minWidth: 0 }}>
-              <div style={s.eyebrow}>Wellness</div>
-              <h1 style={s.title}>Henna</h1>
-              {weather && (
-                <div style={s.weatherInline} className="wellness-weather-inline">
-                  <span>{weather.icon}</span>
-                  <span>{weather.temp}°C</span>
-                  <span style={{ opacity: 0.75 }}>{weather.city}</span>
+          <div className="wellness-header-row">
+            <div className="wellness-header-brand">
+              <div className="wellness-header-avatar-slot"><AvatarChip user={user} size={52} /></div>
+              <div className="wellness-header-title-block">
+                <div style={s.eyebrow}>Wellness</div>
+                <h1 style={s.title}>Henna</h1>
+                {weather && (
+                  <div style={s.weatherInline} className="wellness-weather-inline">
+                    <span>{weather.icon}</span>
+                    <span>{weather.temp}°C</span>
+                    <span style={{ opacity: 0.75 }}>{weather.city}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div ref={moreMenuRef} className="wellness-more-wrap">
+              <button
+                type="button"
+                onClick={toggleMoreMenu}
+                style={s.moreMenuBtn}
+                className="wellness-more-btn"
+                aria-expanded={showMoreMenu}
+                aria-haspopup="menu"
+                aria-label="Menu"
+                title="Menu"
+              >
+                <MoreIcon color="#fff" size={20} />
+              </button>
+              {showMoreMenu ? (
+                <div role="menu" className="wellness-more-panel" style={s.moreMenuPanel}>
+                  <button type="button" role="menuitem" onClick={() => navigateFromMore('/dashboard')} style={s.menuBtnItem}>🏠 Home</button>
+                  <button type="button" role="menuitem" onClick={() => navigateFromMore('/running-analytics')} style={s.menuBtnItem}>🏃 Running stats</button>
+                  <button type="button" role="menuitem" onClick={() => navigateFromMore('/leaderboard')} style={s.menuBtnItem}>🏆 Leaderboard</button>
+                  <button type="button" role="menuitem" onClick={() => navigateFromMore('/settings')} style={s.menuBtnItem}>
+                    <span style={s.menuBtnIcon}><SettingsIcon color="#fff" size={16} /></span>
+                    Settings
+                  </button>
+                  {canManageScoringRules ? (
+                    <button type="button" role="menuitem" onClick={() => navigateFromMore('/wellness-admin')} style={s.menuBtnItem}>🛠️ Scoring admin</button>
+                  ) : null}
                 </div>
-              )}
+              ) : null}
             </div>
           </div>
-          <div style={s.headerRight} className="wellness-header-actions">
+          <div className="wellness-header-desktop">
             <div style={s.weatherPill} className="wellness-weather-pill">
               {weather ? (
                 <>
@@ -1282,20 +1343,18 @@ export default function WellnessPage() {
                 <span style={{ fontSize: 11, opacity: 0.65 }}>Weather loading…</span>
               )}
             </div>
-            <div className="wellness-header-mobile-actions">
-              {canManageScoringRules && (
-                <button type="button" onClick={() => router.push('/wellness-admin')} style={s.chipBtn} className="wellness-mobile-admin-btn">⚙️ Admin</button>
-              )}
-              <button type="button" onClick={() => logoutClientSession(router)} style={{ ...s.chipBtn, color: '#fecaca' }} className="wellness-mobile-logout-btn">Sign out</button>
-            </div>
-            <div className="wellness-header-desktop">
-              {canManageScoringRules && <button type="button" onClick={() => router.push('/wellness-admin')} style={s.chipBtn}>Scoring Admin</button>}
-              <button type="button" onClick={() => router.push('/leaderboard')} style={s.chipBtn}>Leaderboard</button>
-              <button type="button" onClick={() => router.push('/running-analytics')} style={s.chipBtn}>Analytics</button>
-              <button type="button" onClick={() => router.push('/dashboard')} style={s.chipBtn}>Dashboard</button>
-              <button type="button" onClick={() => logoutClientSession(router)} style={s.chipBtn}>Logout</button>
-            </div>
+            {canManageScoringRules && <button type="button" onClick={() => router.push('/wellness-admin')} style={s.chipBtn}>Scoring Admin</button>}
+            <button type="button" onClick={() => router.push('/leaderboard')} style={s.chipBtn}>Leaderboard</button>
+            <button type="button" onClick={() => router.push('/running-analytics')} style={s.chipBtn}>Running</button>
+            <button type="button" onClick={() => router.push('/dashboard')} style={s.chipBtn}>Dashboard</button>
+            <button type="button" onClick={() => router.push('/settings')} style={s.iconOnlyBtn} aria-label="Settings" title="Settings">
+              <SettingsIcon color="#fff" size={18} />
+            </button>
           </div>
+        </div>
+
+        <div style={{ marginBottom: 12 }}>
+          <RaceGoalBanner userId={userIdRef.current || user?.id} entries={entries} />
         </div>
 
         {/* main grid */}
@@ -2104,7 +2163,7 @@ export default function WellnessPage() {
             { id: 'home', label: 'Home', icon: '🏠', href: '/dashboard' },
             { id: 'wellness', label: 'Henna', icon: '🌿', href: '/wellness' },
             { id: 'board', label: 'Ranks', icon: '🏆', href: '/leaderboard' },
-            { id: 'stats', label: 'Stats', icon: '📊', href: '/running-analytics' },
+            { id: 'running', label: 'Running', icon: '🏃', href: '/running-analytics' },
           ]}
         />
       </div>
@@ -2120,8 +2179,54 @@ const pageKeyframes = `
   .henna-page button{transition:transform .12s,box-shadow .15s}
   .henna-page button:hover{transform:translateY(-1px)}
   .henna-page button:active{transform:scale(0.97)}
-  .wellness-header-desktop { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .wellness-header-mobile-actions { display: none; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .wellness-header-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+  }
+  .wellness-header-brand {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .wellness-header-title-block { min-width: 0; flex: 1; }
+  .wellness-more-wrap {
+    display: none;
+    position: relative;
+    z-index: 90;
+    flex-shrink: 0;
+    align-self: flex-start;
+    margin-top: 14px;
+  }
+  .wellness-header-desktop {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255,255,255,0.08);
+  }
+  .wellness-more-panel {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 8px);
+    min-width: 200px;
+    padding: 6px;
+    border-radius: 14px;
+    background: rgba(29,18,44,0.98);
+    border: 1px solid rgba(255,255,255,0.14);
+    backdrop-filter: blur(18px);
+    display: grid;
+    gap: 4px;
+    z-index: 95;
+    box-shadow: 0 14px 40px rgba(0,0,0,0.35);
+  }
+  @media(max-width:840px){
   .wellness-weather-inline { display: none; }
   .wellness-date-past {
     font-size: 10px;
@@ -2132,21 +2237,25 @@ const pageKeyframes = `
     font-weight: 700;
     border: 1px solid rgba(251,191,36,0.3);
   }
+  @media(min-width:841px){
+    .wellness-header-desktop{display:flex!important}
+  }
   @media(max-width:840px){
+    .wellness-more-wrap{display:flex!important}
     .main-grid{grid-template-columns:1fr!important}
     .score-strip{grid-template-columns:1fr 1fr!important}
     .dash-grid{grid-template-columns:1fr!important}
     .activity-grid{grid-template-columns:repeat(4,1fr)!important}
     .field-row{flex-direction:column!important;align-items:stretch!important}
     .plan-stats-grid{grid-template-columns:1fr 1fr!important}
-    .wellness-header-desktop{display:none!important}
-    .wellness-header-mobile-actions{display:flex!important}
-    .wellness-header-actions{width:100%;justify-content:flex-end}
-    .wellness-header{flex-direction:column;align-items:stretch;gap:8px}
-    .wellness-header-brand{width:100%}
-    .wellness-header-actions{justify-content:space-between}
     .wellness-weather-pill{display:none!important}
     .wellness-weather-inline{display:flex!important;align-items:center;gap:6px;margin-top:4px;font-size:12px;font-weight:700;opacity:0.88}
+    .wellness-more-wrap{margin-top:14px}
+    .wellness-more-panel{
+      position:fixed;
+      right:12px;
+      top:58px;
+    }
   }
   @media(max-width:720px){
     .henna-page{padding:12px 12px 0!important}
@@ -2250,6 +2359,63 @@ const s = {
   headerRight: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   weatherPill: { display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 999, ...glass, fontSize: 13 },
   chipBtn: { border: '1px solid rgba(255,255,255,0.18)', borderRadius: 999, padding: '8px 16px', background: 'rgba(255,255,255,0.10)', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: 13 },
+  moreMenuBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 42,
+    height: 42,
+    border: '1px solid rgba(255,255,255,0.18)',
+    borderRadius: 12,
+    padding: 0,
+    background: 'rgba(255,255,255,0.10)',
+    color: '#fff',
+    cursor: 'pointer',
+  },
+  iconOnlyBtn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 42,
+    height: 42,
+    border: '1px solid rgba(255,255,255,0.18)',
+    borderRadius: 12,
+    padding: 0,
+    background: 'rgba(255,255,255,0.10)',
+    color: '#fff',
+    cursor: 'pointer',
+  },
+  moreMenuPanel: {
+    position: 'absolute',
+    right: 0,
+    top: 'calc(100% + 8px)',
+    minWidth: 200,
+    padding: 6,
+    borderRadius: 14,
+    background: 'rgba(29,18,44,0.96)',
+    border: '1px solid rgba(255,255,255,0.12)',
+    backdropFilter: 'blur(18px)',
+    display: 'grid',
+    gap: 4,
+    zIndex: 40,
+    boxShadow: '0 14px 40px rgba(0,0,0,0.28)',
+  },
+  menuBtnItem: {
+    width: '100%',
+    border: 'none',
+    borderRadius: 10,
+    padding: '10px 12px',
+    background: 'transparent',
+    color: '#fff',
+    textAlign: 'left',
+    fontSize: 13,
+    fontWeight: 700,
+    cursor: 'pointer',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 8,
+  },
+  menuBtnIcon: { display: 'inline-flex', width: 18, justifyContent: 'center' },
   menuBtn: { width: '100%', border: 'none', borderRadius: 10, padding: '10px 12px', background: 'transparent', color: '#fff', textAlign: 'left', fontSize: 13, fontWeight: 700, cursor: 'pointer' },
   scoreStrip: { display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 10 },
   scoreCard: { display: 'flex', alignItems: 'center', gap: 10, padding: '14px 16px', ...glass, borderRadius: 16, transition: 'transform .15s', cursor: 'default' },

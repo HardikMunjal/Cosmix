@@ -1,7 +1,7 @@
 import { useRouter } from 'next/router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { resolveAvatarPresentation } from '../lib/avatarProfile';
-import { getCachedClientUser, logoutClientSession, restoreUserSession } from '../lib/auth-client';
+import { getCachedClientUser, restoreUserSession } from '../lib/auth-client';
 import { useTheme } from '../lib/ThemePicker';
 import { CosmixLoader, SectionLoadingShell } from '../lib/CosmixLoader';
 import { MobileBottomNav } from '../lib/MobileNav';
@@ -104,25 +104,6 @@ function BellIcon({ color }) {
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M15 17h5l-1.4-1.6a2 2 0 0 1-.5-1.3V10a6 6 0 1 0-12 0v4.1a2 2 0 0 1-.5 1.3L4 17h5" />
       <path d="M9.5 17a2.5 2.5 0 0 0 5 0" />
-    </svg>
-  );
-}
-
-function ProfileIcon({ color }) {
-  return (
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="12" cy="8" r="3.2" />
-      <path d="M5 19c1.4-3 3.8-4.6 7-4.6s5.6 1.6 7 4.6" />
-    </svg>
-  );
-}
-
-function LogoutIcon({ color }) {
-  return (
-    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M10 6V4a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2h-6a2 2 0 0 1-2-2v-2" />
-      <path d="M15 12H3" />
-      <path d="m8 8-4 4 4 4" />
     </svg>
   );
 }
@@ -601,7 +582,6 @@ export default function Dashboard() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [serverNotifications, setServerNotifications] = useState([]);
   const [feedPosts, setFeedPosts] = useState([]);
-  const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [chatBootstrap, setChatBootstrap] = useState({ incomingRequests: [], groups: [] });
   const [activeTab, setActiveTab] = useState('home');
   const [wellnessLoading, setWellnessLoading] = useState(false);
@@ -1123,6 +1103,40 @@ export default function Dashboard() {
       <style>{`
         * { box-sizing: border-box; }
         html, body, #__next { min-height: 100%; margin: 0; }
+        .dashboard-tab-row {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 8px;
+          margin-top: 16px;
+          padding: 6px;
+          border-radius: 18px;
+          background: rgba(15,23,42,0.42);
+          border: 1px solid rgba(148,163,184,0.2);
+        }
+        .dashboard-tab-btn {
+          appearance: none;
+          border: 1px solid transparent;
+          border-radius: 14px;
+          background: transparent;
+          color: inherit;
+          padding: 11px 12px;
+          cursor: pointer;
+          font-size: 12px;
+          font-weight: 800;
+          display: inline-flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 4px;
+          transition: background 0.15s, border-color 0.15s, transform 0.12s;
+        }
+        .dashboard-tab-btn.is-active {
+          background: rgba(59,130,246,0.2);
+          border-color: rgba(59,130,246,0.45);
+          box-shadow: 0 8px 20px rgba(59,130,246,0.18);
+        }
+        .dashboard-tab-icon { font-size: 18px; line-height: 1; }
+        .dashboard-tab-label { letter-spacing: 0.04em; }
         @media (max-width: 1024px) {
           .dashboard-top-grid, .dashboard-market-grid, .dashboard-lower-grid { grid-template-columns: 1fr !important; }
           .dashboard-header { align-items: flex-start !important; }
@@ -1167,18 +1181,21 @@ export default function Dashboard() {
             z-index: 40;
             display: grid !important;
             grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
-            gap: 8px !important;
+            gap: 6px !important;
             margin-top: 0 !important;
-            padding: 8px 0 10px !important;
-            background: linear-gradient(180deg, rgba(2,6,23,0.98) 70%, transparent);
-            backdrop-filter: blur(8px);
+            padding: 6px !important;
+            border-radius: 16px !important;
+            background: rgba(15,23,42,0.55) !important;
+            border: 1px solid rgba(148,163,184,0.18) !important;
+            backdrop-filter: blur(10px);
           }
-          .dashboard-tab-row button {
+          .dashboard-tab-btn {
             min-width: 0 !important;
             width: 100% !important;
-            padding: 11px 8px !important;
+            padding: 10px 6px !important;
             font-size: 11px !important;
           }
+          .dashboard-tab-icon { font-size: 16px !important; }
           .dashboard-module-grid, .dashboard-scorecard-grid, .dashboard-market-modules { grid-template-columns: 1fr !important; }
           .dashboard-club-grid { grid-template-columns: 1fr !important; }
           .dashboard-profile-shell {
@@ -1252,7 +1269,7 @@ export default function Dashboard() {
             <div style={{ position: 'relative' }}>
               <button
                 type="button"
-                onClick={() => { setShowNotifications((v) => !v); setShowSettingsMenu(false); }}
+                onClick={() => setShowNotifications((v) => !v)}
                 style={{ display: 'inline-flex', alignItems: 'center', gap: '10px', borderRadius: '999px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, color: theme.textHeading, padding: '10px 14px', cursor: 'pointer', fontSize: '12px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.09em', boxShadow: `0 4px 14px ${theme.shadow}` }}
               >
                 <BellIcon color={theme.textHeading} />
@@ -1261,27 +1278,16 @@ export default function Dashboard() {
             </div>
 
             {/* Settings — separate standalone pill */}
-            <div style={{ position: 'relative' }}>
-              <button
-                type="button"
-                onClick={() => { setShowSettingsMenu((v) => !v); setShowNotifications(false); }}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: '0', borderRadius: '999px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, color: theme.textHeading, padding: '10px 14px', cursor: 'pointer', fontSize: '12px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.09em', boxShadow: `0 4px 14px ${theme.shadow}` }}
-              >
-                <SettingsIcon color={theme.textHeading} />
-              </button>
-              {showSettingsMenu ? (
-                <div style={{ position: 'absolute', right: 0, top: '52px', width: '220px', borderRadius: '14px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, boxShadow: `0 18px 36px ${theme.shadow}`, padding: '8px', display: 'grid', gap: '6px', zIndex: 10 }}>
-                  <button type="button" onClick={() => { setShowSettingsMenu(false); router.push('/profile'); }} style={{ borderRadius: '10px', border: 'none', background: `${theme.blue}12`, color: theme.textHeading, padding: '10px 12px', textAlign: 'left', fontSize: '12px', fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                    <ProfileIcon color={theme.textHeading} />
-                    Open Profile
-                  </button>
-                  <button type="button" onClick={() => { setShowSettingsMenu(false); logoutClientSession(router); }} style={{ borderRadius: '10px', border: 'none', background: 'rgba(239,68,68,0.12)', color: '#b91c1c', padding: '10px 12px', textAlign: 'left', fontSize: '12px', fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                    <LogoutIcon color="#b91c1c" />
-                    Logout
-                  </button>
-                </div>
-              ) : null}
-            </div>
+            <button
+              type="button"
+              onClick={() => { setShowNotifications(false); router.push('/settings'); }}
+              aria-label="Open settings"
+              title="Settings"
+              className="dashboard-settings-icon-btn"
+              style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '44px', height: '44px', borderRadius: '14px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, color: theme.textHeading, padding: 0, cursor: 'pointer', boxShadow: `0 4px 14px ${theme.shadow}` }}
+            >
+              <SettingsIcon color={theme.textHeading} />
+            </button>
           </div>
         </header>
         </div>
@@ -1295,34 +1301,32 @@ export default function Dashboard() {
           />
         ) : null}
 
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '14px', marginTop: '16px' }} className="dashboard-tab-row">
-          {['home', 'posts', 'buddies'].map((tabKey) => (
-            <button
-              key={tabKey}
-              type="button"
-              onClick={() => {
-                setActiveTab(tabKey);
-                if (router.isReady) {
-                  router.push({ pathname: '/dashboard', query: { ...router.query, tab: tabKey } }, undefined, { shallow: true });
-                }
-              }}
-              style={{
-                borderRadius: '999px',
-                border: `1px solid ${activeTab === tabKey ? theme.blue : theme.cardBorder}`,
-                background: activeTab === tabKey ? theme.blue : theme.panelBg,
-                color: activeTab === tabKey ? '#fff' : theme.textPrimary,
-                padding: '10px 18px',
-                cursor: 'pointer',
-                fontSize: '12px',
-                fontWeight: 800,
-                minWidth: '100px',
-                textTransform: 'uppercase',
-                letterSpacing: '0.08em',
-              }}
-            >
-              {tabKey === 'home' ? 'Home' : tabKey === 'posts' ? 'Fitstagram' : 'Buddies'}
-            </button>
-          ))}
+        <div className="dashboard-tab-row" role="tablist" aria-label="Dashboard sections">
+          {[
+            { id: 'home', label: 'Home', icon: '🏠' },
+            { id: 'posts', label: 'Fitstagram', icon: '📷' },
+            { id: 'buddies', label: 'Buddies', icon: '👥' },
+          ].map((tab) => {
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                className={`dashboard-tab-btn${isActive ? ' is-active' : ''}`}
+                onClick={() => {
+                  setActiveTab(tab.id);
+                  if (router.isReady) {
+                    router.push({ pathname: '/dashboard', query: { ...router.query, tab: tab.id } }, undefined, { shallow: true });
+                  }
+                }}
+              >
+                <span className="dashboard-tab-icon" aria-hidden="true">{tab.icon}</span>
+                <span className="dashboard-tab-label">{tab.label}</span>
+              </button>
+            );
+          })}
         </div>
 
         <section style={{ display: activeTab === 'home' ? 'grid' : 'none', gridTemplateColumns: 'minmax(0, 1.12fr) minmax(320px, 0.88fr)', gap: '16px' }} className="dashboard-top-grid">
