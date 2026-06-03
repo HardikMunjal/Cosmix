@@ -736,4 +736,44 @@ export async function searchUsers(query, excludeUserId = '') {
     .slice(0, 12);
 }
 
+export async function resolveUsersByUsernames(usernames, excludeUserId = '') {
+  const normalizedList = Array.from(new Set(
+    (Array.isArray(usernames) ? usernames : [])
+      .map((value) => String(value || '').trim().toLowerCase())
+      .filter(Boolean),
+  ));
+  if (!normalizedList.length) return [];
+
+  if (hasPostgresStorage()) {
+    await ensureSeededUser();
+    const pool = getWebPool();
+    const result = await pool.query(
+      `SELECT id, username, COALESCE(name, username) AS name, avatar
+       FROM app_users
+       WHERE id <> $1
+         AND LOWER(username) = ANY($2::text[])`,
+      [String(excludeUserId || ''), normalizedList],
+    );
+    return result.rows.map((row) => ({
+      id: row.id,
+      username: row.username,
+      name: row.name || row.username,
+      avatar: row.avatar || '',
+    }));
+  }
+
+  const { users } = await getStores();
+  const userDocs = await users.findAsync({}).execAsync();
+  const wanted = new Set(normalizedList);
+  return userDocs
+    .filter((user) => user.id !== String(excludeUserId || ''))
+    .map((user) => ({
+      id: user.id,
+      username: user.username,
+      name: normalizeName(user.name || user.username),
+      avatar: user.avatar || '',
+    }))
+    .filter((user) => wanted.has(String(user.username || '').trim().toLowerCase()));
+}
+
 export { SESSION_COOKIE_NAME, USERS_DB_FILE, SESSIONS_DB_FILE };

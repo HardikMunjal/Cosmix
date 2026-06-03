@@ -33,6 +33,105 @@ function formatDisplayDate(value) {
   return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+function shiftIsoDate(isoDate, deltaDays) {
+  const date = new Date(`${String(isoDate || todayDate()).slice(0, 10)}T12:00:00`);
+  date.setDate(date.getDate() + deltaDays);
+  return date.toISOString().slice(0, 10);
+}
+
+async function fetchBuddyParticipants(friends, selfUserId) {
+  const normalizedFriends = Array.from(new Set(
+    (Array.isArray(friends) ? friends : [])
+      .map((username) => String(username || '').trim())
+      .filter(Boolean),
+  ));
+  if (!normalizedFriends.length) return [];
+
+  try {
+    const response = await fetch('/api/chat/buddy-batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ usernames: normalizedFriends }),
+    });
+    const data = await response.json().catch(() => ({}));
+    const resolved = new Map(
+      (Array.isArray(data?.results) ? data.results : []).map((entry) => [
+        String(entry?.username || '').trim().toLowerCase(),
+        entry,
+      ]),
+    );
+
+    return normalizedFriends.map((username) => {
+      const key = username.toLowerCase();
+      const match = resolved.get(key);
+      const buddyUserId = String(match?.id || match?.email || username).trim();
+      if (!buddyUserId || buddyUserId.toLowerCase() === selfUserId.toLowerCase()) return null;
+      return {
+        username,
+        displayName: String(match?.name || match?.username || username).trim(),
+        userId: buddyUserId,
+        avatar: String(match?.avatar || ''),
+        isSelf: false,
+      };
+    }).filter(Boolean);
+  } catch (_) {
+    return normalizedFriends
+      .filter((username) => username.toLowerCase() !== selfUserId.toLowerCase())
+      .map((username) => ({
+        username,
+        displayName: username,
+        userId: username,
+        avatar: '',
+        isSelf: false,
+      }));
+  }
+}
+
+async function fetchPlanSummaryRow(API_BASE, participant, hasActivePlanFallback = true) {
+  try {
+    const response = await fetch(`${API_BASE}/wellness/plan-summary/${encodeURIComponent(participant.userId)}`);
+    const data = await response.json();
+    const hasActivePlan = response.ok && data?.hasActivePlan && data?.plan;
+    const planName = hasActivePlan ? String(data.plan.name || 'Active plan') : 'No active plan';
+    const cumulativeTotal = hasActivePlan ? Number(data.cumulativeTotal || 0) : 0;
+    const lastDayScore = hasActivePlan ? Number(data.lastDayScore || 0) : 0;
+    const days = hasActivePlan ? Math.max(1, Number(data.days || 0)) : 1;
+    const rawSeries = hasActivePlan && Array.isArray(data.series) && data.series.length > 0
+      ? [...data.series]
+        .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')))
+        .map((point) => ({ date: point.date, cumulative: Number(point.cumulative || 0) }))
+      : [{ date: todayDate(), cumulative: 0 }];
+    return {
+      id: participant.userId,
+      name: participant.displayName,
+      username: participant.username,
+      avatar: participant.avatar || '',
+      isSelf: !!participant.isSelf,
+      planName,
+      planStartDate: hasActivePlan ? (data.plan.startDate || '') : '',
+      cumulativeTotal,
+      lastDayScore,
+      days,
+      series: rawSeries,
+    };
+  } catch (_) {
+    if (!hasActivePlanFallback) return null;
+    return {
+      id: participant.userId,
+      name: participant.displayName,
+      username: participant.username,
+      avatar: participant.avatar || '',
+      isSelf: !!participant.isSelf,
+      planName: 'No active plan',
+      planStartDate: '',
+      cumulativeTotal: 0,
+      lastDayScore: 0,
+      days: 1,
+      series: [{ date: todayDate(), cumulative: 0 }],
+    };
+  }
+}
+
 function summarizeAddedActivities(selectedDate, activityNames, updates) {
   const uniqueActivityNames = Array.from(new Set(activityNames.filter(Boolean)));
   const activityLabel = uniqueActivityNames.length ? uniqueActivityNames.join(', ') : 'Activity';
@@ -299,6 +398,9 @@ export default function WellnessPage() {
   const initDoneRef = useRef(false);
   const userIdRef = useRef(null);
   const transactionLogsRef = useRef(null);
+  const buddyLoadKeyRef = useRef('');
+  const buddyLoadedKeyRef = useRef('');
+  const buddyLoadInFlightRef = useRef(false);
 
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -315,6 +417,7 @@ export default function WellnessPage() {
   const [voiceLanguage, setVoiceLanguage] = useState('hi-IN');
   const [weather, setWeather] = useState(null);
   const [inputMode, setInputMode] = useState('dropdown');
+  const [showAddActivityModal, setShowAddActivityModal] = useState(false);
   const [stravaConnected, setStravaConnected] = useState(false);
   const [stravaLoading, setStravaLoading] = useState(false);
   const [stravaMsg, setStravaMsg] = useState('');
@@ -484,42 +587,33 @@ export default function WellnessPage() {
         return;
       }
 
+      const loadKey = `${selfUserId}:${selfUsername}:${planInfo?.id || 'none'}`;
+      if (buddyLoadedKeyRef.current === loadKey) {
+        if (!cancelled) setBuddyPlanLoading(false);
+        return;
+      }
+      if (buddyLoadInFlightRef.current && buddyLoadKeyRef.current === loadKey) return;
+      buddyLoadInFlightRef.current = true;
+      buddyLoadKeyRef.current = loadKey;
       setBuddyPlanLoading(true);
-      try {
-        const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-        const isLocalHost = host === 'localhost' || host === '127.0.0.1';
-        const chatApiBase = isLocalHost ? `http://${host}:3002/chat` : '/chat-api/chat';
 
+      try {
+        const chatApiBase = '/chat-api/chat';
         const bootstrapResponse = await fetch(`${chatApiBase}/bootstrap?username=${encodeURIComponent(selfUsername)}`);
         const bootstrapData = await bootstrapResponse.json().catch(() => ({}));
         const friends = Array.isArray(bootstrapData?.friends) ? bootstrapData.friends : [];
-
-        const buddyLookups = await Promise.all(friends.map(async (username) => {
-          const normalized = String(username || '').trim();
-          if (!normalized) return null;
-          try {
-            const searchResponse = await fetch(`/api/chat/buddy-search?q=${encodeURIComponent(normalized)}`);
-            const searchData = await searchResponse.json();
-            const match = (Array.isArray(searchData?.results) ? searchData.results : [])
-              .find((entry) => String(entry?.username || '').toLowerCase() === normalized.toLowerCase());
-            const buddyUserId = String(match?.id || match?.email || match?.username || normalized).trim();
-            return { username: normalized, displayName: String(match?.name || match?.username || normalized).trim(), userId: buddyUserId, avatar: String(match?.avatar || '') };
-          } catch (_) {
-            return { username: normalized, displayName: normalized, userId: normalized, avatar: '' };
-          }
-        }));
+        const buddyParticipants = await fetchBuddyParticipants(friends, selfUserId);
 
         const selfSortedScores = sortDailyScoresByDate(dailyScores || []);
         const selfSeries = selfSortedScores.length ? buildCumulativeSeries(selfSortedScores) : [{ date: todayDate(), cumulative: 0 }];
         const selfLatest = selfSortedScores[selfSortedScores.length - 1] || { totalScore: 0 };
-        const selfPlanName = planInfo?.status === 'active' ? String(planInfo?.name || 'Active plan') : 'No active plan';
         const selfRow = {
           id: selfUserId,
           name: String(user?.name || user?.username || 'You'),
           username: selfUsername,
           avatar: String(user?.avatar || ''),
           isSelf: true,
-          planName: selfPlanName,
+          planName: planInfo?.status === 'active' ? String(planInfo?.name || 'Active plan') : 'No active plan',
           planStartDate: String(planInfo?.startDate || ''),
           cumulativeTotal: computeLatestCumulativeScore(selfSortedScores),
           lastDayScore: Number(selfLatest?.totalScore || 0),
@@ -527,75 +621,52 @@ export default function WellnessPage() {
           series: selfSeries.map((score) => ({ date: score.date, cumulative: Number(score.cumulative || 0) })),
         };
 
-        const buddyParticipants = Array.from(new Map(
-          buddyLookups
-            .filter(Boolean)
-            .filter((entry) => String(entry.userId || '').trim().toLowerCase() !== selfUserId.toLowerCase())
-            .map((entry) => [String(entry.userId).toLowerCase(), { ...entry, isSelf: false }]),
-        ).values());
-
-        const buddyRows = await Promise.all(buddyParticipants.map(async (participant) => {
-          try {
-            const response = await fetch(`${API_BASE}/wellness/plan-summary/${encodeURIComponent(participant.userId)}`);
-            const data = await response.json();
-            const hasActivePlan = response.ok && data?.hasActivePlan && data?.plan;
-            const planName = hasActivePlan ? String(data.plan.name || 'Active plan') : 'No active plan';
-            const planStartDate = hasActivePlan ? (data.plan.startDate || '') : '';
-            const cumulativeTotal = hasActivePlan ? Number(data.cumulativeTotal || 0) : 0;
-            const lastDayScore = hasActivePlan ? Number(data.lastDayScore || 0) : 0;
-            const days = hasActivePlan ? Math.max(1, Number(data.days || 0)) : 1;
-            // Use pre-computed series directly from plan-summary (already cumulative { date, cumulative })
-            const rawSeries = hasActivePlan && Array.isArray(data.series) && data.series.length > 0
-              ? [...data.series]
-                  .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')))
-                  .map((point) => ({ date: point.date, cumulative: Number(point.cumulative || 0) }))
-              : [{ date: todayDate(), cumulative: 0 }];
-            return {
-              id: participant.userId,
-              name: participant.displayName,
-              username: participant.username,
-              avatar: participant.avatar || '',
-              isSelf: false,
-              planName,
-              planStartDate,
-              cumulativeTotal,
-              lastDayScore,
-              days,
-              series: rawSeries,
-            };
-          } catch (_) {
-            // Still return a row with zero data
-            return {
-              id: participant.userId,
-              name: participant.displayName,
-              username: participant.username,
-              avatar: participant.avatar || '',
-              isSelf: false,
-              planName: 'No active plan',
-              planStartDate: '',
-              cumulativeTotal: 0,
-              lastDayScore: 0,
-              days: 1,
-              series: [{ date: todayDate(), cumulative: 0 }],
-            };
-          }
-        }));
+        const buddyRows = await Promise.all(
+          buddyParticipants.map((participant) => fetchPlanSummaryRow(API_BASE, participant)),
+        );
 
         const ranked = [selfRow, ...buddyRows]
           .filter(Boolean)
           .sort((left, right) => Number(right.cumulativeTotal || 0) - Number(left.cumulativeTotal || 0));
 
-        if (!cancelled) setBuddyPlanRows(ranked);
+        if (!cancelled) {
+          setBuddyPlanRows(ranked);
+          buddyLoadedKeyRef.current = loadKey;
+        }
       } catch (_) {
         if (!cancelled) setBuddyPlanRows([]);
       } finally {
+        buddyLoadInFlightRef.current = false;
         if (!cancelled) setBuddyPlanLoading(false);
       }
     }
 
     loadBuddyLeaderboard();
     return () => { cancelled = true; };
-  }, [API_BASE, user?.id, user?.email, user?.username, planInfo?.id, planInfo?.status, planInfo?.name, planInfo?.startDate, dailyScores, serverHydrated]);
+  }, [API_BASE, user?.username, user?.id, planInfo?.id, planInfo?.status, planInfo?.startDate, serverHydrated]);
+
+  useEffect(() => {
+    setBuddyPlanRows((rows) => {
+      if (!rows.length) return rows;
+      const selfUserId = String(userIdRef.current || '').trim().toLowerCase();
+      const selfSortedScores = sortDailyScoresByDate(dailyScores || []);
+      const selfSeries = selfSortedScores.length ? buildCumulativeSeries(selfSortedScores) : [{ date: todayDate(), cumulative: 0 }];
+      const selfLatest = selfSortedScores[selfSortedScores.length - 1] || { totalScore: 0 };
+      return rows.map((row) => {
+        const isSelf = row.isSelf || String(row.id || '').toLowerCase() === selfUserId;
+        if (!isSelf) return row;
+        return {
+          ...row,
+          planName: planInfo?.status === 'active' ? String(planInfo?.name || 'Active plan') : 'No active plan',
+          planStartDate: String(planInfo?.startDate || ''),
+          cumulativeTotal: computeLatestCumulativeScore(selfSortedScores),
+          lastDayScore: Number(selfLatest?.totalScore || 0),
+          days: selfSortedScores.length || 1,
+          series: selfSeries.map((score) => ({ date: score.date, cumulative: Number(score.cumulative || 0) })),
+        };
+      });
+    });
+  }, [dailyScores, planInfo?.id, planInfo?.status, planInfo?.name, planInfo?.startDate]);
 
   /* ---- sync to server (debounced) ---- */
   function syncToServer(newEntries, newForm) {
@@ -847,12 +918,29 @@ export default function WellnessPage() {
     return entry;
   }
 
+  function openAddActivityModal(prefillActivityId = '') {
+    setInputMode('dropdown');
+    setCommandInput('');
+    if (prefillActivityId) {
+      setSelectedActivity(prefillActivityId);
+      setFieldValues(buildActivityFieldValues(prefillActivityId, form));
+    } else {
+      setSelectedActivity('');
+      setFieldValues({});
+    }
+    setShowAddActivityModal(true);
+  }
+
+  function closeAddActivityModal() {
+    setShowAddActivityModal(false);
+    setSelectedActivity('');
+    setFieldValues({});
+  }
+
   function openActivityEditor(activityId) {
     const actCfg = activityOptions.find((activity) => activity.id === activityId);
     if (!actCfg) return;
-    setInputMode('dropdown');
-    setSelectedActivity(activityId);
-    setFieldValues(buildActivityFieldValues(activityId, form));
+    openAddActivityModal(activityId);
   }
 
   function handleDeleteActivity(activityId) {
@@ -923,6 +1011,7 @@ export default function WellnessPage() {
     saveEntry(next);
     setAssistantReply(`${selectedDateEntry ? 'Updated' : 'Added'}: ${formatUpdateList(updates)}`);
     setFieldValues({});
+    closeAddActivityModal();
     // Optimistically update daily scores so plan totals reflect the new activity immediately
     const newDayScores = computeEntryScores(next, scoringRules);
     setDailyScores((prev) => {
@@ -947,6 +1036,7 @@ export default function WellnessPage() {
     setAssistantReply(summarizeAddedActivities(selectedDate, inferActivityNamesFromUpdates(updates), updates));
     setCommandInput('');
     if (source === 'voice') setTranscript(trimmed);
+    closeAddActivityModal();
     // Optimistically update daily scores so plan totals reflect the new activity immediately
     const parsedDayScores = computeEntryScores(savedEntry, scoringRules);
     setDailyScores((prev) => {
@@ -1050,6 +1140,12 @@ export default function WellnessPage() {
   const hasAnyActiveData = hasActivePlan || entries.some((entry) => hasScorableData(entry)) || formHasScorableData;
   const selectedDateIsToday = selectedDate === todayDate();
   const selectedDateCardLabel = selectedDateIsToday ? 'Today' : formatDisplayDate(selectedDate);
+  const addActivityMotivation = useMemo(() => {
+    if (selectedDateIsToday) {
+      return 'You showed up — that matters. Log your movement, sleep, or recovery and keep your momentum going.';
+    }
+    return `Backfilling ${formatDisplayDate(selectedDate)}? Stay honest — every logged day keeps your plan accurate and motivating.`;
+  }, [selectedDate, selectedDateIsToday]);
   const displayScores = !hasAnyActiveData
     ? { physical: 0, mental: 0, total: 0 }
     : hasActivePlan
@@ -1161,30 +1257,37 @@ export default function WellnessPage() {
         {/* header */}
         <div style={s.header} className="wellness-header">
           <div className="wellness-header-brand" style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 12 }}>
-            <AvatarChip user={user} size={52} />
+            <div className="wellness-header-avatar-slot"><AvatarChip user={user} size={52} /></div>
             <div style={{ minWidth: 0 }}>
-              <div style={s.eyebrow}>Wellness Tracker</div>
+              <div style={s.eyebrow}>Wellness</div>
               <h1 style={s.title}>Henna</h1>
+              {weather && (
+                <div style={s.weatherInline} className="wellness-weather-inline">
+                  <span>{weather.icon}</span>
+                  <span>{weather.temp}°C</span>
+                  <span style={{ opacity: 0.75 }}>{weather.city}</span>
+                </div>
+              )}
             </div>
           </div>
           <div style={s.headerRight} className="wellness-header-actions">
-            {weather && (
-              <div style={s.weatherPill} className="wellness-weather-pill">
-                <span>{weather.icon}</span>
-                <span style={{ fontWeight: 800 }}>{weather.temp}°C</span>
-                <span style={{ fontSize: 11, opacity: 0.8 }}>{weather.city}</span>
-              </div>
-            )}
-            <button type="button" onClick={() => router.push('/dashboard')} style={s.chipBtn} className="wellness-nav-home">Home</button>
-            <details className="wellness-more-menu">
-              <summary style={s.chipBtn}>More</summary>
-              <div className="wellness-more-panel">
-                {canManageScoringRules && <button type="button" onClick={() => router.push('/wellness-admin')} style={s.menuBtn}>Scoring Admin</button>}
-                <button type="button" onClick={() => router.push('/leaderboard')} style={s.menuBtn}>Leaderboard</button>
-                <button type="button" onClick={() => router.push('/running-analytics')} style={s.menuBtn}>Analytics</button>
-                <button type="button" onClick={() => logoutClientSession(router)} style={{ ...s.menuBtn, color: '#fecaca' }}>Logout</button>
-              </div>
-            </details>
+            <div style={s.weatherPill} className="wellness-weather-pill">
+              {weather ? (
+                <>
+                  <span>{weather.icon}</span>
+                  <span style={{ fontWeight: 800 }}>{weather.temp}°C</span>
+                  <span style={{ fontSize: 11, opacity: 0.8 }}>{weather.city}</span>
+                </>
+              ) : (
+                <span style={{ fontSize: 11, opacity: 0.65 }}>Weather loading…</span>
+              )}
+            </div>
+            <div className="wellness-header-mobile-actions">
+              {canManageScoringRules && (
+                <button type="button" onClick={() => router.push('/wellness-admin')} style={s.chipBtn} className="wellness-mobile-admin-btn">⚙️ Admin</button>
+              )}
+              <button type="button" onClick={() => logoutClientSession(router)} style={{ ...s.chipBtn, color: '#fecaca' }} className="wellness-mobile-logout-btn">Sign out</button>
+            </div>
             <div className="wellness-header-desktop">
               {canManageScoringRules && <button type="button" onClick={() => router.push('/wellness-admin')} style={s.chipBtn}>Scoring Admin</button>}
               <button type="button" onClick={() => router.push('/leaderboard')} style={s.chipBtn}>Leaderboard</button>
@@ -1195,75 +1298,23 @@ export default function WellnessPage() {
           </div>
         </div>
 
-        {/* scores on top */}
-        {planInfo && <div style={s.scoreStrip} className="score-strip">
-          <div style={s.scoreCard}>
-            <div style={s.scoreIcon}>🏋️</div>
-            <div>
-              <div style={s.scoreLabel}>Physical</div>
-              <div style={s.scoreNum}>{formatMetric(displayedPhysicalScore)}</div>
-            </div>
-          </div>
-          <div style={s.scoreCard}>
-            <div style={s.scoreIcon}>🧠</div>
-            <div>
-              <div style={s.scoreLabel}>Mental</div>
-              <div style={s.scoreNum}>{formatMetric(displayedMentalScore)}</div>
-            </div>
-          </div>
-          <div style={s.scoreCard}>
-            <div style={s.scoreIcon}>⚡</div>
-            <div>
-              <div style={s.scoreLabel}>Total</div>
-              <div style={s.scoreNum}>{formatMetric(displayedTotalScore)}</div>
-            </div>
-          </div>
-          <div style={s.scoreCard}>
-            <div style={s.scoreIcon}>📅</div>
-            <div>
-              <div style={s.scoreLabel}>{selectedDateCardLabel}</div>
-              <div style={s.scoreNum}>{formatMetric(visibleTodayScores.totalScore)}</div>
-            </div>
-          </div>
-        </div>}
-
-        {/* weekly summary bar */}
-        {planInfo && <div style={s.weeklySummary} className="score-strip">
-          <div style={s.weeklyItem}>
-            <span style={s.weeklyIcon}>🔥</span>
-            <span style={s.weeklyLabel}>Active days</span>
-            <span style={s.weeklyVal}>{stats.activeDays}<span style={{ opacity: 0.5, fontWeight: 400 }}>/7</span></span>
-          </div>
-          <div style={s.weeklyItem}>
-            <span style={s.weeklyIcon}>⏱️</span>
-            <span style={s.weeklyLabel}>Weekly mins</span>
-            <span style={s.weeklyVal}>{formatMetric(stats.weeklyWorkoutMinutes)}</span>
-          </div>
-          <div style={s.weeklyItem}>
-            <span style={s.weeklyIcon}>🏃</span>
-            <span style={s.weeklyLabel}>Weekly km</span>
-            <span style={s.weeklyVal}>{formatMetric(stats.weeklyRunningKm)}</span>
-          </div>
-          <div style={s.weeklyItem}>
-            <span style={s.weeklyIcon}>📈</span>
-            <span style={s.weeklyLabel}>Avg pace</span>
-            <span style={s.weeklyVal}>{stats.averagePace == null ? '--' : `${formatMetric(stats.averagePace)}`}<span style={{ opacity: 0.5, fontWeight: 400, fontSize: 11 }}>{stats.averagePace != null ? ' min/km' : ''}</span></span>
-          </div>
-        </div>}
-
         {/* main grid */}
         <div style={s.mainGrid} className="main-grid">
           {/* left: add activity */}
           <div style={s.card}>
             <div style={s.cardHead}>
-              <span style={s.cardTitle}>Add Activity</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <span style={s.cardTitle}><span style={s.cardTitleIcon} aria-hidden="true">📋</span> Today&apos;s activities</span>
+                <p style={s.cardMotivate}>Consistency beats perfection — log a win whenever you move, rest, or recover.</p>
+              </div>
+              <button type="button" onClick={() => openAddActivityModal()} style={s.addActivityOpenBtn} className="wellness-add-open-btn">✏️ Log activity</button>
             </div>
 
-            <div style={s.planCard}>
+            <div style={s.planCard} className="wellness-plan-card">
               <div style={s.planHeaderRow}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={s.planTitle}>{planInfo ? 'Active Plan' : 'Wellness Plan'}</div>
-                  {planInfo?.name && (
+                  <div style={s.planTitle}>{planInfo ? 'Active plan' : 'Start a plan'}</div>
+                  {planInfo?.name ? (
                     <button
                       type="button"
                       onClick={handlePlanNameClick}
@@ -1271,11 +1322,13 @@ export default function WellnessPage() {
                       style={s.planNameBtn}
                       title="Double-click to rename"
                     >{planInfo.name}</button>
+                  ) : (
+                    <div style={{ marginTop: 4, fontSize: 13, opacity: 0.82 }}>Track daily wellness with one quick log.</div>
                   )}
                   <div style={s.planCopy}>
                     {planInfo?.startDate
-                      ? `Active since ${formatDisplayDate(planInfo.startDate)} · ${totalPlanDays} day${totalPlanDays === 1 ? '' : 's'} · ${loggedPlanDays} logged`
-                      : 'No active plan. Pick a start date below to begin tracking.'}
+                      ? `Day ${totalPlanDays} · ${loggedPlanDays} logged`
+                      : 'Set a start date to begin.'}
                   </div>
                 </div>
                 {planInfo?.id && (
@@ -1305,121 +1358,57 @@ export default function WellnessPage() {
                 </div>
               )}
               {planInfo && (
-                <div style={s.planStatsGrid} className="plan-stats-grid">
-                  <div style={s.planStatCard}><span style={s.planStatLabel}>Plan days</span><span style={s.planStatValue}>{totalPlanDays}</span></div>
+                <div style={s.planStatsGrid} className="plan-stats-grid wellness-plan-stats-grid">
+                  <div style={s.planStatCard}><span style={s.planStatLabel}>Days</span><span style={s.planStatValue}>{totalPlanDays}</span></div>
                   <div style={s.planStatCard}><span style={s.planStatLabel}>Physical</span><span style={s.planStatValue}>{formatMetric(planTotals.physical)}</span></div>
                   <div style={s.planStatCard}><span style={s.planStatLabel}>Mental</span><span style={s.planStatValue}>{formatMetric(planTotals.mental)}</span></div>
                   <div style={s.planStatCard}><span style={s.planStatLabel}>Total</span><span style={{ ...s.planStatValue, color: planTotals.total >= 0 ? '#4ade80' : '#f87171' }}>{formatMetric(planTotals.total)}</span></div>
                 </div>
               )}
-              {planInfo && latestPlanScore && (
-                <div style={s.planMeta}>
-                  Latest: {formatMetric(latestPlanScore.totalScore)} pts on {formatDisplayDate(latestPlanScore.date)} · Cumulative: {formatMetric(latestPlanScore.cumulativeTotalScore || 0)} pts · Double-click plan name to rename.
-                </div>
+            </div>
+
+            <div style={s.viewDateBar} className="wellness-view-date-bar">
+              <button type="button" onClick={() => setSelectedDate((current) => shiftIsoDate(current, -1))} style={s.viewDateNavBtn} aria-label="View previous day">←</button>
+              <div style={s.viewDateText}>
+                <span style={s.viewDateLabel}>Viewing</span>
+                <span style={s.viewDateValue}>{formatDisplayDate(selectedDate)}</span>
+                {selectedDateIsToday ? <span style={s.viewDateChipToday}>Today</span> : <span className="wellness-date-past">Past</span>}
+              </div>
+              <button type="button" onClick={() => setSelectedDate((current) => shiftIsoDate(current, 1))} style={s.viewDateNavBtn} disabled={selectedDateIsToday} aria-label="View next day">→</button>
+              {!selectedDateIsToday && (
+                <button type="button" onClick={() => setSelectedDate(todayDate())} style={s.viewDateTodayBtn}>Jump to today</button>
               )}
             </div>
 
-            {planInfo ? (<>
-            <div className="wellness-date-row" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, padding: '10px 14px', borderRadius: 14, background: 'rgba(251,113,133,0.10)', border: '1px solid rgba(251,113,133,0.22)', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 18 }}>📅</span>
-              <span style={{ fontWeight: 800, fontSize: 13, opacity: 0.9 }}>Logging for:</span>
-              <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} style={{ ...s.dateInput, flex: '1 1 160px', minWidth: 0 }} max={todayDate()} />
-              <span style={{ fontSize: 14, fontWeight: 700, color: '#fde68a' }}>{formatDisplayDate(selectedDate)}</span>
-              {!selectedDateIsToday && <span style={{ fontSize: 11, padding: '3px 9px', borderRadius: 999, background: 'rgba(251,191,36,0.18)', color: '#fbbf24', fontWeight: 700, border: '1px solid rgba(251,191,36,0.3)' }}>Past date</span>}
-            </div>
-            <div style={s.toggleRow} className="wellness-toggle-row">
-              <button type="button" onClick={() => setInputMode('dropdown')} style={inputMode === 'dropdown' ? s.toggleActive : s.toggleBtn}>Form</button>
-              <button type="button" onClick={() => setInputMode('text')} style={inputMode === 'text' ? s.toggleActive : s.toggleBtn}>Quick text</button>
-            </div>
-            {inputMode === 'dropdown' ? (
-              <>
-                <div style={s.activityGrid} className="activity-grid">
-                  {activityOptions.map((a) => (
-                    <button
-                      key={a.id}
-                      type="button"
-                      className={selectedActivity === a.id ? 'wellness-act-btn wellness-act-btn-active' : 'wellness-act-btn'}
-                      onClick={() => { setSelectedActivity(a.id); setFieldValues({}); }}
-                      style={selectedActivity === a.id ? s.actBtnActive : s.actBtn}
-                    >
-                      <span style={{ fontSize: 20 }}>{a.icon}</span>
-                      <span style={{ fontSize: 11, fontWeight: 600 }}>{a.label}</span>
-                    </button>
+            <div style={s.loggedSection} className="wellness-activities-section">
+              <div style={s.loggedTitle}>Activities for {formatDisplayDate(selectedDate)}</div>
+              {todayActivities.length > 0 ? (
+                <div style={s.loggedList}>
+                  {todayActivities.map((a) => (
+                    <div key={a.label} style={s.loggedItem} className="wellness-logged-item">
+                      <div className="wellness-logged-main">
+                        <span>{a.icon}</span>
+                        <span style={{ fontWeight: 700 }}>{a.label}</span>
+                        <span style={{ opacity: 0.8, fontSize: 13 }}>{a.detail}</span>
+                      </div>
+                      <div className="wellness-logged-actions">
+                        <button type="button" onClick={() => openActivityEditor(a.id)} style={s.smallChipBtn}>Edit</button>
+                        <button type="button" onClick={() => handleDeleteActivity(a.id)} style={{ ...s.smallChipBtn, borderColor: 'rgba(248,113,113,0.4)', color: '#fecaca', background: 'rgba(248,113,113,0.14)' }}>Delete</button>
+                      </div>
+                    </div>
                   ))}
                 </div>
-
-                {selectedActivityConfig && (
-                  selectedActivity === 'headache' ? (
-                    <div className="wellness-activity-form" style={{ marginTop: 14, animation: 'fadeIn .2s ease-out' }}>
-                      <div className="wellness-field-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 14px', marginBottom: 12 }}>
-                        {selectedActivityConfig.fields.map((f) => (
-                          <div key={f.key} style={f.input === 'textarea' ? { gridColumn: '1 / -1' } : {}}>
-                            <label style={s.fieldLabel}>{f.unit ? `${f.label} (${f.unit})` : f.label}</label>
-                            {f.input === 'select' ? (
-                              <select value={fieldValues[f.key] || ''} onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))} style={s.fieldInput}>
-                                <option value="">Select</option>
-                                {(f.options || []).map((option) => <option key={`${f.key}-${option.value}`} value={option.value}>{option.label}</option>)}
-                              </select>
-                            ) : f.input === 'textarea' ? (
-                              <textarea value={fieldValues[f.key] || ''} onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))} placeholder={f.placeholder || ''} style={{ ...s.fieldInput, minHeight: 72, resize: 'vertical' }} />
-                            ) : (
-                              <input type="number" min="0" step={f.step} value={fieldValues[f.key] || ''} onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))} placeholder="0" style={s.fieldInput} />
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                      <button type="button" onClick={handleDropdownSave} style={s.addBtn} className="wellness-add-btn">+ Add Headache</button>
-                    </div>
-                  ) : (
-                    <div style={s.fieldRow} className="field-row wellness-activity-form">
-                      {selectedActivityConfig.fields.map((f) => (
-                        <div key={f.key} style={s.fieldGroup}>
-                          <label style={s.fieldLabel}>{f.unit ? `${f.label} (${f.unit})` : f.label}</label>
-                          {f.input === 'select' ? (
-                            <select value={fieldValues[f.key] || ''} onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))} style={s.fieldInput}>
-                              <option value="">Select</option>
-                              {(f.options || []).map((option) => <option key={`${f.key}-${option.value}`} value={option.value}>{option.label}</option>)}
-                            </select>
-                          ) : f.input === 'textarea' ? (
-                            <textarea value={fieldValues[f.key] || ''} onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))} placeholder={f.placeholder || ''} style={{ ...s.fieldInput, minHeight: 86, resize: 'vertical' }} />
-                          ) : (
-                            <input type="number" min="0" step={f.step} value={fieldValues[f.key] || ''} onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))} placeholder="0" style={s.fieldInput} />
-                          )}
-                        </div>
-                      ))}
-                      <button type="button" onClick={handleDropdownSave} style={s.addBtn} className="wellness-add-btn">+ Add activity</button>
-                    </div>
-                  )
-                )}
-              </>
-            ) : (
-              <div className="wellness-quick-entry" style={{ marginTop: 12 }}>
-                <div style={s.textRow} className="wellness-text-row">
-                  <input
-                    value={commandInput}
-                    onChange={(e) => setCommandInput(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') handleParsedMessage(commandInput, 'text'); }}
-                    placeholder="e.g. running 5 km 30 min"
-                    style={s.textInput}
-                  />
-                  <button type="button" onClick={() => handleParsedMessage(commandInput, 'text')} style={s.addBtn} className="wellness-add-btn">Add</button>
+              ) : (
+                <div style={s.emptyActivities}>
+                  <strong>Your next win starts here.</strong> Tap <strong>Log activity</strong> to record running, sleep, yoga, or anything that moved you forward.
                 </div>
-                <div style={s.voiceRow} className="wellness-voice-row">
-                  <button onClick={startVoiceInput} style={listening ? s.micActive : s.micBtn}>
-                    {listening ? '🔴 Listening...' : '🎙️ Voice'}
-                  </button>
-                  <select value={voiceLanguage} onChange={(e) => setVoiceLanguage(e.target.value)} style={s.langSelect}>
-                    {LANGUAGE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                  </select>
-                  <span style={{ fontSize: 12, opacity: 0.7 }}>{voiceStatus}</span>
-                </div>
-                {showMicSecurityWarning && <div style={s.warnText}>Mic needs HTTPS or localhost.</div>}
-                {transcript && <div style={s.metaText}>Heard: {transcript}</div>}
-              </div>
-            )}
+              )}
+              {selectedDateEntry && todayActivities.length > 0 && (
+                <div style={s.metaText}>Editing {formatDisplayDate(selectedDate)}. Save again in the modal to update this day.</div>
+              )}
+            </div>
 
             {assistantReply && <div style={s.replyBubble}>{assistantReply}</div>}
-            <div style={s.warnText}>⚠️ Daily drain: -{DAILY_PENALTY.physical} physical (body decay), -{DAILY_PENALTY.mental} mental (office/life)</div>
 
             {/* Strava integration */}
             <div style={{ marginTop: 14, padding: '10px 14px', background: 'rgba(252,82,0,0.12)', borderRadius: 10, border: '1px solid rgba(252,82,0,0.25)' }}>
@@ -1446,31 +1435,8 @@ export default function WellnessPage() {
               {!stravaConnected && <div style={{ fontSize: 11, marginTop: 4, opacity: 0.6 }}>Auto-import running, walking & workouts from Strava</div>}
             </div>
 
-            {todayActivities.length > 0 && (
-              <div style={s.loggedSection}>
-                <div style={s.loggedTitle}>Activities for {formatDisplayDate(selectedDate)}</div>
-                <div style={s.loggedList}>
-                  {todayActivities.map((a) => (
-                    <div key={a.label} style={s.loggedItem} className="wellness-logged-item">
-                      <div className="wellness-logged-main">
-                        <span>{a.icon}</span>
-                        <span style={{ fontWeight: 700 }}>{a.label}</span>
-                        <span style={{ opacity: 0.8, fontSize: 13 }}>{a.detail}</span>
-                      </div>
-                      <div className="wellness-logged-actions">
-                        <button type="button" onClick={() => openActivityEditor(a.id)} style={s.smallChipBtn}>Edit</button>
-                        <button type="button" onClick={() => handleDeleteActivity(a.id)} style={{ ...s.smallChipBtn, borderColor: 'rgba(248,113,113,0.4)', color: '#fecaca', background: 'rgba(248,113,113,0.14)' }}>Delete</button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                    {selectedDateEntry && (
-                      <div style={s.metaText}>Editing {formatDisplayDate(selectedDate)}. Save again to update this day instead of adding a new one.</div>
-                    )}
-              </div>
-            )}
-            </>) : (
-              <div style={s.noPlanMsg}>☝️ Create the plan above to start logging your daily activities.</div>
+            {!planInfo && (
+              <div style={{ ...s.noPlanMsg, marginTop: 10 }}>Start a plan above to unlock plan scores and buddy charts.</div>
             )}
           </div>
 
@@ -1994,12 +1960,149 @@ export default function WellnessPage() {
           )}
         </div>
 
+        {showAddActivityModal && (
+          <div className="wellness-modal-backdrop" style={s.modalBackdrop} onClick={closeAddActivityModal} role="presentation">
+            <div
+              className="wellness-modal"
+              style={s.modalPanel}
+              onClick={(event) => event.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="wellness-add-activity-title"
+            >
+              <div style={s.modalHead}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div id="wellness-add-activity-title" style={s.modalTitle}><span aria-hidden="true">✏️</span> Log activity</div>
+                  <p style={s.modalMotivate}>{addActivityMotivation}</p>
+                </div>
+                <button type="button" onClick={closeAddActivityModal} style={s.modalCloseBtn} aria-label="Close">✕</button>
+              </div>
+
+              <div style={s.modalDateBlock} className="wellness-modal-date-block">
+                <div style={s.modalDateEyebrow}>Logging for this date</div>
+                <div style={s.modalDateHero}>{formatDisplayDate(selectedDate)}</div>
+                <div style={s.modalDateBadgeRow}>
+                  <span style={selectedDateIsToday ? s.modalDateBadgeToday : s.modalDateBadgePast}>
+                    {selectedDateIsToday ? 'Today' : 'Past date — double-check before saving'}
+                  </span>
+                </div>
+                <div className="wellness-date-row wellness-modal-date-controls" style={s.modalDateControls}>
+                  <div className="wellness-date-controls">
+                    <button type="button" onClick={() => setSelectedDate((current) => shiftIsoDate(current, -1))} style={s.dateNavBtn} aria-label="Previous day">←</button>
+                    <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} style={s.dateInputCompact} max={todayDate()} aria-label="Choose log date" />
+                    <button type="button" onClick={() => setSelectedDate((current) => shiftIsoDate(current, 1))} style={s.dateNavBtn} disabled={selectedDateIsToday} aria-label="Next day">→</button>
+                  </div>
+                  <button type="button" onClick={() => setSelectedDate(todayDate())} style={selectedDateIsToday ? s.dateTodayActive : s.dateTodayBtn}>Today</button>
+                </div>
+                <div style={s.modalDateConfirm}>
+                  Saves to <strong>{selectedDate}</strong> ({formatDisplayDate(selectedDate)}) — change the date above if this is not the day you mean.
+                </div>
+              </div>
+
+              <div style={s.toggleRow} className="wellness-toggle-row">
+                <button type="button" onClick={() => setInputMode('dropdown')} style={inputMode === 'dropdown' ? s.toggleActive : s.toggleBtn}>Activities</button>
+                <button type="button" onClick={() => setInputMode('text')} style={inputMode === 'text' ? s.toggleActive : s.toggleBtn}>Text / Voice</button>
+              </div>
+
+              {inputMode === 'dropdown' ? (
+                <>
+                  <div style={s.activityGrid} className="activity-grid">
+                    {activityOptions.map((a) => (
+                      <button
+                        key={a.id}
+                        type="button"
+                        className={selectedActivity === a.id ? 'wellness-act-btn wellness-act-btn-active' : 'wellness-act-btn'}
+                        onClick={() => { setSelectedActivity(a.id); setFieldValues({}); }}
+                        style={selectedActivity === a.id ? s.actBtnActive : s.actBtn}
+                      >
+                        <span style={{ fontSize: 20 }}>{a.icon}</span>
+                        <span style={{ fontSize: 11, fontWeight: 600 }}>{a.label}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {selectedActivityConfig && (
+                    selectedActivity === 'headache' ? (
+                      <div className="wellness-activity-form" style={{ marginTop: 14, animation: 'fadeIn .2s ease-out' }}>
+                        <div className="wellness-field-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 14px', marginBottom: 12 }}>
+                          {selectedActivityConfig.fields.map((f) => (
+                            <div key={f.key} style={f.input === 'textarea' ? { gridColumn: '1 / -1' } : {}}>
+                              <label style={s.fieldLabel}>{f.unit ? `${f.label} (${f.unit})` : f.label}</label>
+                              {f.input === 'select' ? (
+                                <select value={fieldValues[f.key] || ''} onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))} style={s.fieldInput}>
+                                  <option value="">Select</option>
+                                  {(f.options || []).map((option) => <option key={`${f.key}-${option.value}`} value={option.value}>{option.label}</option>)}
+                                </select>
+                              ) : f.input === 'textarea' ? (
+                                <textarea value={fieldValues[f.key] || ''} onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))} placeholder={f.placeholder || ''} style={{ ...s.fieldInput, minHeight: 72, resize: 'vertical' }} />
+                              ) : (
+                                <input type="number" min="0" step={f.step} value={fieldValues[f.key] || ''} onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))} placeholder="0" style={s.fieldInput} />
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                        <button type="button" onClick={handleDropdownSave} style={s.addBtn} className="wellness-add-btn">+ Add Headache</button>
+                      </div>
+                    ) : (
+                      <div style={s.fieldRow} className="field-row wellness-activity-form">
+                        {selectedActivityConfig.fields.map((f) => (
+                          <div key={f.key} style={s.fieldGroup}>
+                            <label style={s.fieldLabel}>{f.unit ? `${f.label} (${f.unit})` : f.label}</label>
+                            {f.input === 'select' ? (
+                              <select value={fieldValues[f.key] || ''} onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))} style={s.fieldInput}>
+                                <option value="">Select</option>
+                                {(f.options || []).map((option) => <option key={`${f.key}-${option.value}`} value={option.value}>{option.label}</option>)}
+                              </select>
+                            ) : f.input === 'textarea' ? (
+                              <textarea value={fieldValues[f.key] || ''} onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))} placeholder={f.placeholder || ''} style={{ ...s.fieldInput, minHeight: 86, resize: 'vertical' }} />
+                            ) : (
+                              <input type="number" min="0" step={f.step} value={fieldValues[f.key] || ''} onChange={(e) => setFieldValues((cur) => ({ ...cur, [f.key]: e.target.value }))} placeholder="0" style={s.fieldInput} />
+                            )}
+                          </div>
+                        ))}
+                        <button type="button" onClick={handleDropdownSave} style={s.addBtn} className="wellness-add-btn">+ Add activity</button>
+                      </div>
+                    )
+                  )}
+                </>
+              ) : (
+                <div className="wellness-quick-entry" style={{ marginTop: 8 }}>
+                  <div style={s.textRow} className="wellness-text-row">
+                    <input
+                      value={commandInput}
+                      onChange={(e) => setCommandInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') handleParsedMessage(commandInput, 'text'); }}
+                      placeholder="e.g. running 5 km 30 min"
+                      style={s.textInput}
+                    />
+                    <button type="button" onClick={() => handleParsedMessage(commandInput, 'text')} style={s.addBtn} className="wellness-add-btn">Add</button>
+                  </div>
+                  <div style={s.voiceRow} className="wellness-voice-row">
+                    <button type="button" onClick={startVoiceInput} style={listening ? s.micActive : s.micBtn}>
+                      {listening ? '🔴 Listening...' : '🎙️ Voice'}
+                    </button>
+                    <select value={voiceLanguage} onChange={(e) => setVoiceLanguage(e.target.value)} style={s.langSelect}>
+                      {LANGUAGE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                    <span style={{ fontSize: 12, opacity: 0.7 }}>{voiceStatus}</span>
+                  </div>
+                  {showMicSecurityWarning && <div style={s.warnText}>Mic needs HTTPS or localhost.</div>}
+                  {transcript && <div style={s.metaText}>Heard: {transcript}</div>}
+                  <div style={s.metaText}>Examples: run 30 min · sleep 7 hr · yoga 20</div>
+                </div>
+              )}
+
+              <div style={s.warnText}>Daily drain: -{DAILY_PENALTY.physical} physical, -{DAILY_PENALTY.mental} mental</div>
+            </div>
+          </div>
+        )}
+
         <MobileBottomNav
           theme={{ blue: '#38bdf8', textMuted: '#cbd5e1' }}
           activeId="wellness"
           items={[
             { id: 'home', label: 'Home', icon: '🏠', href: '/dashboard' },
-            { id: 'wellness', label: 'Log', icon: '💪', href: '/wellness' },
+            { id: 'wellness', label: 'Henna', icon: '🌿', href: '/wellness' },
             { id: 'board', label: 'Ranks', icon: '🏆', href: '/leaderboard' },
             { id: 'stats', label: 'Stats', icon: '📊', href: '/running-analytics' },
           ]}
@@ -2017,26 +2120,18 @@ const pageKeyframes = `
   .henna-page button{transition:transform .12s,box-shadow .15s}
   .henna-page button:hover{transform:translateY(-1px)}
   .henna-page button:active{transform:scale(0.97)}
-  .wellness-more-menu { position: relative; }
-  .wellness-more-menu summary { list-style: none; cursor: pointer; }
-  .wellness-more-menu summary::-webkit-details-marker { display: none; }
-  .wellness-more-panel {
-    position: absolute;
-    right: 0;
-    top: calc(100% + 8px);
-    min-width: 180px;
-    padding: 6px;
-    border-radius: 14px;
-    background: rgba(29,18,44,0.96);
-    border: 1px solid rgba(255,255,255,0.12);
-    backdrop-filter: blur(18px);
-    display: grid;
-    gap: 4px;
-    z-index: 30;
-    box-shadow: 0 14px 40px rgba(0,0,0,0.28);
-  }
   .wellness-header-desktop { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .wellness-more-menu { display: none; }
+  .wellness-header-mobile-actions { display: none; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .wellness-weather-inline { display: none; }
+  .wellness-date-past {
+    font-size: 10px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: rgba(251,191,36,0.18);
+    color: #fbbf24;
+    font-weight: 700;
+    border: 1px solid rgba(251,191,36,0.3);
+  }
   @media(max-width:840px){
     .main-grid{grid-template-columns:1fr!important}
     .score-strip{grid-template-columns:1fr 1fr!important}
@@ -2045,20 +2140,26 @@ const pageKeyframes = `
     .field-row{flex-direction:column!important;align-items:stretch!important}
     .plan-stats-grid{grid-template-columns:1fr 1fr!important}
     .wellness-header-desktop{display:none!important}
-    .wellness-more-menu{display:block!important}
+    .wellness-header-mobile-actions{display:flex!important}
     .wellness-header-actions{width:100%;justify-content:flex-end}
-    .wellness-header{flex-direction:column;align-items:stretch}
+    .wellness-header{flex-direction:column;align-items:stretch;gap:8px}
     .wellness-header-brand{width:100%}
+    .wellness-header-actions{justify-content:space-between}
+    .wellness-weather-pill{display:none!important}
+    .wellness-weather-inline{display:flex!important;align-items:center;gap:6px;margin-top:4px;font-size:12px;font-weight:700;opacity:0.88}
   }
   @media(max-width:720px){
     .henna-page{padding:12px 12px 0!important}
     .wellness-header{
-      padding:12px 14px;
-      border-radius:18px;
+      padding:10px 12px;
+      border-radius:16px;
       background:rgba(255,255,255,0.08);
       border:1px solid rgba(255,255,255,0.12);
-      margin-bottom:10px;
+      margin-bottom:8px;
     }
+    .wellness-header-brand .wellness-header-avatar-slot{width:42px!important;height:42px!important}
+    .wellness-plan-card{padding:10px 12px!important;margin-bottom:10px!important}
+    .wellness-plan-stats-grid{display:grid!important}
     .score-strip{gap:8px!important;margin-bottom:10px!important}
     .score-card{padding:12px!important}
     .score-num{font-size:18px!important}
@@ -2068,8 +2169,20 @@ const pageKeyframes = `
     .wellness-act-btn{min-height:58px!important;padding:10px 6px!important}
     .wellness-toggle-row{display:grid!important;grid-template-columns:1fr 1fr!important;gap:8px!important}
     .wellness-toggle-row button{width:100%!important;min-height:44px!important}
-    .wellness-date-row{flex-direction:column!important;align-items:stretch!important}
-    .wellness-date-row input[type=date]{width:100%!important}
+    .wellness-modal-date-block{margin-bottom:12px!important}
+    .wellness-modal-date-controls{flex-direction:column!important;align-items:stretch!important}
+    .wellness-modal-date-controls .wellness-date-controls{width:100%}
+    .wellness-view-date-bar{flex-wrap:wrap}
+    .wellness-date-row{
+      display:flex!important;
+      align-items:center!important;
+      gap:8px!important;
+      margin-bottom:0!important;
+      padding:0!important;
+      flex-wrap:nowrap!important;
+    }
+    .wellness-date-controls{display:flex;align-items:center;gap:6px;flex:1;min-width:0}
+    .wellness-date-controls input[type=date]{flex:1;min-width:0;width:auto!important;padding:6px 8px!important;font-size:12px!important}
     .wellness-field-grid{grid-template-columns:1fr!important}
     .field-row .fieldGroup,.field-row .wellness-add-btn{width:100%!important}
     .wellness-add-btn{width:100%!important;min-height:48px!important;margin-top:8px!important;font-size:15px!important}
@@ -2090,11 +2203,26 @@ const pageKeyframes = `
     .plan-controls input,.plan-controls button,.plan-textInput{width:100%!important}
     .plan-header-row{align-items:flex-start!important}
   }
+  .wellness-modal-backdrop{
+    position:fixed;inset:0;z-index:1100;
+    display:flex;align-items:flex-end;justify-content:center;
+    padding:12px;padding-bottom:calc(12px + env(safe-area-inset-bottom,0px));
+    background:rgba(8,4,16,0.72);
+    backdrop-filter:blur(6px);
+  }
+  .wellness-modal{
+    width:min(560px,100%);
+    max-height:min(88vh,720px);
+    overflow-y:auto;
+    -webkit-overflow-scrolling:touch;
+  }
+  @media(min-width:721px){
+    .wellness-modal-backdrop{align-items:center;padding:24px}
+  }
   @media(max-width:480px){
     .score-strip{grid-template-columns:1fr 1fr!important;gap:8px!important}
     .activity-grid{grid-template-columns:repeat(3,minmax(0,1fr))!important}
     .title{font-size:24px!important}
-    .wellness-nav-home{display:none!important}
   }
   input[type=date]::-webkit-calendar-picker-indicator{filter:invert(1)}
 `;
@@ -2136,7 +2264,170 @@ const s = {
   mainGrid: { display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: 14, alignItems: 'start' },
   card: { ...glass, padding: '18px 20px' },
   cardHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 },
-  cardTitle: { fontSize: 17, fontWeight: 800 },
+  cardTitle: { fontSize: 17, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 8 },
+  cardTitleIcon: { fontSize: 20, lineHeight: 1 },
+  cardMotivate: { margin: '6px 0 0', fontSize: 13, lineHeight: 1.5, opacity: 0.82, fontWeight: 600, color: '#fde68a' },
+  viewDateBar: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+    marginBottom: 12,
+    padding: '10px 12px',
+    borderRadius: 12,
+    background: 'rgba(255,255,255,0.05)',
+    border: '1px solid rgba(255,255,255,0.08)',
+  },
+  viewDateNavBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    border: '1px solid rgba(255,255,255,0.14)',
+    background: 'rgba(255,255,255,0.08)',
+    color: '#fff',
+    fontWeight: 800,
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+  viewDateText: { flex: 1, minWidth: 120, display: 'flex', flexDirection: 'column', gap: 2 },
+  viewDateLabel: { fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.65, fontWeight: 700 },
+  viewDateValue: { fontSize: 15, fontWeight: 800, color: '#fde68a' },
+  viewDateChipToday: {
+    alignSelf: 'flex-start',
+    fontSize: 10,
+    padding: '3px 8px',
+    borderRadius: 999,
+    background: 'rgba(34,197,94,0.18)',
+    color: '#bbf7d0',
+    fontWeight: 700,
+    border: '1px solid rgba(34,197,94,0.35)',
+  },
+  viewDateTodayBtn: {
+    border: '1px solid rgba(255,255,255,0.16)',
+    borderRadius: 999,
+    padding: '7px 12px',
+    background: 'rgba(255,255,255,0.08)',
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: 700,
+    cursor: 'pointer',
+  },
+  weatherInline: { display: 'none', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 12, fontWeight: 700, opacity: 0.88 },
+  addActivityOpenBtn: {
+    border: '1px solid rgba(251,113,133,0.45)',
+    borderRadius: 999,
+    padding: '8px 16px',
+    background: 'linear-gradient(135deg,rgba(251,113,133,0.35),rgba(245,158,11,0.28))',
+    color: '#fff',
+    fontWeight: 800,
+    fontSize: 13,
+    cursor: 'pointer',
+  },
+  emptyActivities: { fontSize: 13, lineHeight: 1.55, opacity: 0.72, padding: '10px 0 4px' },
+  modalBackdrop: { position: 'fixed', inset: 0, zIndex: 1100, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', padding: 12, background: 'rgba(8,4,16,0.72)', backdropFilter: 'blur(6px)' },
+  modalPanel: { ...glass, width: 'min(560px, 100%)', maxHeight: 'min(88vh, 720px)', overflowY: 'auto', padding: '16px 18px', color: '#fff' },
+  modalHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 12 },
+  modalTitle: { fontSize: 18, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 8 },
+  modalMotivate: { margin: '8px 0 0', fontSize: 13, lineHeight: 1.55, opacity: 0.88, fontWeight: 600, color: '#fde68a' },
+  modalCloseBtn: { width: 36, height: 36, borderRadius: 10, border: '1px solid rgba(255,255,255,0.16)', background: 'rgba(255,255,255,0.08)', color: '#fff', fontWeight: 800, cursor: 'pointer', flexShrink: 0 },
+  modalDateBlock: {
+    marginBottom: 14,
+    padding: '14px 14px 12px',
+    borderRadius: 16,
+    background: 'linear-gradient(135deg,rgba(251,113,133,0.16),rgba(245,158,11,0.12))',
+    border: '2px solid rgba(251,113,133,0.35)',
+    boxShadow: '0 0 0 1px rgba(255,255,255,0.06) inset',
+  },
+  modalDateEyebrow: { fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 800, opacity: 0.85, marginBottom: 6 },
+  modalDateHero: { fontSize: 'clamp(22px,5vw,28px)', fontWeight: 900, color: '#fff', lineHeight: 1.15, marginBottom: 8 },
+  modalDateBadgeRow: { marginBottom: 10 },
+  modalDateBadgeToday: {
+    display: 'inline-block',
+    fontSize: 12,
+    fontWeight: 800,
+    padding: '5px 10px',
+    borderRadius: 999,
+    background: 'rgba(34,197,94,0.22)',
+    color: '#bbf7d0',
+    border: '1px solid rgba(34,197,94,0.4)',
+  },
+  modalDateBadgePast: {
+    display: 'inline-block',
+    fontSize: 12,
+    fontWeight: 800,
+    padding: '5px 10px',
+    borderRadius: 999,
+    background: 'rgba(251,191,36,0.22)',
+    color: '#fde68a',
+    border: '1px solid rgba(251,191,36,0.45)',
+  },
+  modalDateControls: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+    marginBottom: 10,
+    padding: '10px 10px',
+    borderRadius: 12,
+    background: 'rgba(0,0,0,0.18)',
+    border: '1px solid rgba(255,255,255,0.12)',
+  },
+  modalDateConfirm: { fontSize: 12, lineHeight: 1.55, opacity: 0.9, fontWeight: 600 },
+  dateCompactRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+    padding: '8px 10px',
+    borderRadius: 12,
+    background: 'rgba(255,255,255,0.06)',
+    border: '1px solid rgba(255,255,255,0.10)',
+    flexWrap: 'nowrap',
+  },
+  dateNavBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    border: '1px solid rgba(255,255,255,0.16)',
+    background: 'rgba(255,255,255,0.08)',
+    color: '#fff',
+    fontWeight: 800,
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+  dateInputCompact: {
+    flex: 1,
+    minWidth: 0,
+    borderRadius: 10,
+    border: '1px solid rgba(255,255,255,0.18)',
+    padding: '6px 8px',
+    background: 'rgba(36,18,47,0.30)',
+    color: '#fff',
+    fontSize: 12,
+    outline: 'none',
+  },
+  dateTodayBtn: {
+    border: '1px solid rgba(255,255,255,0.16)',
+    borderRadius: 999,
+    padding: '7px 12px',
+    background: 'rgba(255,255,255,0.08)',
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 800,
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+  dateTodayActive: {
+    border: '1px solid rgba(34,197,94,0.45)',
+    borderRadius: 999,
+    padding: '7px 12px',
+    background: 'rgba(34,197,94,0.18)',
+    color: '#bbf7d0',
+    fontSize: 12,
+    fontWeight: 800,
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
   dateInput: { borderRadius: 10, border: '1px solid rgba(255,255,255,0.18)', padding: '8px 12px', background: 'rgba(36,18,47,0.30)', color: '#fff', fontSize: 13, outline: 'none' },
   toggleRow: { display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 },
   planCard: { marginBottom: 14, padding: '14px 16px', borderRadius: 16, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.10)', display: 'grid', gap: 10 },
@@ -2148,7 +2439,7 @@ const s = {
   planMenuItem: { border: 'none', borderRadius: 10, padding: '10px 12px', background: 'transparent', color: '#fff', textAlign: 'left', fontSize: 13, fontWeight: 700, cursor: 'pointer' },
   planMenuItemDisabled: { border: 'none', borderRadius: 10, padding: '10px 12px', background: 'transparent', color: 'rgba(255,255,255,0.42)', textAlign: 'left', fontSize: 13, fontWeight: 700, cursor: 'not-allowed' },
   planMenuHint: { padding: '6px 12px 4px', fontSize: 11, lineHeight: 1.4, color: 'rgba(255,255,255,0.58)' },
-  planNameBtn: { marginTop: 6, padding: 0, border: 'none', background: 'transparent', color: '#fde68a', fontSize: 24, fontWeight: 900, letterSpacing: '0.02em', cursor: 'pointer', textAlign: 'left' },
+  planNameBtn: { marginTop: 4, padding: 0, border: 'none', background: 'transparent', color: '#fde68a', fontSize: 20, fontWeight: 900, letterSpacing: '0.02em', cursor: 'pointer', textAlign: 'left' },
   planCopy: { fontSize: 13, lineHeight: 1.5, opacity: 0.86 },
   planActionsRow: { display: 'flex', justifyContent: 'flex-start' },
   planActionBtn: { border: '1px solid rgba(255,255,255,0.16)', borderRadius: 999, padding: '7px 14px', background: 'rgba(255,255,255,0.06)', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer' },
