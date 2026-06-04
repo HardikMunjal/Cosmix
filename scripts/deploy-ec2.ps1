@@ -19,22 +19,26 @@ if (-not (Test-Path -LiteralPath $KeyPath)) {
     throw "SSH key not found: $KeyPath"
 }
 
-$remoteScript = @"
-cd /opt/cosmix && git pull origin main
-if [ -f .env ] && [ ! -f infra/.env ]; then cp .env infra/.env && echo 'Synced .env -> infra/.env'; fi
-if [ ! -f infra/.env ]; then echo 'ERROR: infra/.env missing (set DATABASE_URL to RDS)'; exit 1; fi
+$remoteScript = @'
+set -e
+cd /opt/cosmix
+git pull origin main
+if [ -f .env ] && [ ! -f infra/.env ]; then cp .env infra/.env && echo synced-env; fi
+if [ ! -f infra/.env ]; then echo ERROR-infra-env-missing && exit 1; fi
 docker container prune -f || true
 docker image prune -af || true
 docker builder prune -af || true
 docker system prune -af || true
 df -h / | tail -1
-$composeBase build $noCacheFlag $serviceList
-$composeBase up -d --force-recreate nginx web api-gateway chat-service wellness-service auth-service user-service
-$composeBase ps
-docker system df
-"@
+'@ -replace '\r\n', "`n"
 
-& $ssh -i $KeyPath "${ServerUser}@${ServerIP}" "bash -lc '$remoteScript'"
+$remoteScript += "`n$composeBase build $noCacheFlag $serviceList"
+$remoteScript += "`n$composeBase up -d --force-recreate nginx web api-gateway chat-service wellness-service auth-service user-service"
+$remoteScript += "`n$composeBase ps"
+$remoteScript += "`ndocker system df"
+
+$encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($remoteScript))
+& $ssh -i $KeyPath "${ServerUser}@${ServerIP}" "bash -lc `"echo $encoded | base64 -d | bash`""
 if ($LASTEXITCODE -ne 0) {
     throw "Remote deploy failed with exit code $LASTEXITCODE"
 }
