@@ -3,6 +3,7 @@ export default function NotificationModule({
   notifications = [],
   onOpenChat,
   onOpenProfile,
+  onOpenFitstagram,
 }) {
   const hasItems = Array.isArray(notifications) && notifications.length > 0;
 
@@ -31,8 +32,8 @@ export default function NotificationModule({
             <BellBadge color={theme.cyan} />
           </div>
           <div>
-          <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Notifications</div>
-          <div style={{ fontSize: '18px', fontWeight: 800, color: theme.textHeading, marginTop: '3px' }}>Alerts & Requests</div>
+            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Notifications</div>
+            <div style={{ fontSize: '18px', fontWeight: 800, color: theme.textHeading, marginTop: '3px' }}>Alerts & Requests</div>
           </div>
         </div>
       </div>
@@ -45,10 +46,12 @@ export default function NotificationModule({
         <div style={{ display: 'grid', gap: '8px' }}>
           {notifications.map((item) => {
             const isFriend = item.type === 'friend_request';
-            const accent = isFriend ? '#22c55e' : '#38bdf8';
-            const actionLabel = isFriend ? 'Open Profile' : 'Open Chat';
-            const onAction = isFriend ? onOpenProfile : onOpenChat;
-            const icon = isFriend ? '🤝' : '💬';
+            const isFitstagram = item.type === 'fitstagram';
+            const accent = isFriend ? '#22c55e' : (isFitstagram ? theme.orange : '#38bdf8');
+            const actionLabel = isFriend ? 'Open Profile' : (isFitstagram ? 'Open Fitstagram' : 'Open Chat');
+            const onAction = isFriend ? onOpenProfile : (isFitstagram ? onOpenFitstagram : onOpenChat);
+            const icon = isFriend ? '🤝' : (isFitstagram ? '📷' : '💬');
+            const typeLabel = isFriend ? 'Friend Request' : (isFitstagram ? 'Fitstagram' : 'Chat Message');
 
             return (
               <div
@@ -65,7 +68,7 @@ export default function NotificationModule({
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
                   <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.09em', fontWeight: 800, color: accent, display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                     <span>{icon}</span>
-                    {isFriend ? 'Friend Request' : 'Chat Message'}
+                    {typeLabel}
                   </div>
                   <div style={{ fontSize: '10px', color: theme.textMuted, fontWeight: 700 }}>{item.timeLabel}</div>
                 </div>
@@ -74,7 +77,7 @@ export default function NotificationModule({
                 <div>
                   <button
                     type="button"
-                    onClick={onAction}
+                    onClick={() => onAction(item)}
                     style={{
                       borderRadius: '999px',
                       border: `1px solid ${accent}77`,

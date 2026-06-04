@@ -592,6 +592,7 @@ function OverviewTab({ wellStats, wellSummary, allSportStats, name, theme }) {
     { label: 'Cycling', emoji: '🚴', key: 'cycling', sessions: allSportStats.cycling?.count || 0, mins: allSportStats.cycling?.totalMinutes || 0, accent: theme.blue },
     { label: 'Walking', emoji: '🚶', key: 'walking', sessions: allSportStats.walking?.count || 0, mins: allSportStats.walking?.totalMinutes || 0, accent: theme.cyan },
     { label: 'Swimming', emoji: '🏊', key: 'swimming', sessions: allSportStats.swimming?.count || 0, mins: allSportStats.swimming?.totalMinutes || 0, accent: theme.purple },
+    { label: 'Yoga', emoji: '🧘', key: 'yoga', sessions: allSportStats.yoga?.count || 0, mins: allSportStats.yoga?.totalMinutes || 0, accent: theme.purple || '#a855f7' },
   ].filter((a) => a.sessions > 0);
 
   const totalActivityMins = activities.reduce((s, a) => s + a.mins, 0);
@@ -682,6 +683,7 @@ const PRIMARY_TABS = [
 ];
 const MORE_SPORT_TABS = [
   { id: 'badminton', label: 'Badminton', emoji: '🏸' },
+  { id: 'yoga', label: 'Yoga', emoji: '🧘' },
   { id: 'cycling', label: 'Cycling', emoji: '🚴' },
   { id: 'walking', label: 'Walking', emoji: '🚶' },
   { id: 'swimming', label: 'Swimming', emoji: '🏊' },
@@ -714,6 +716,7 @@ export default function RunningAnalytics() {
   const allSportStats = useMemo(() => ({
     running: computeSportStats(entries, 'runningMinutes', 'runningDistanceKm'),
     badminton: computeSportStats(entries, 'badmintonMinutes'),
+    yoga: computeSportStats(entries, 'yogaMinutes'),
     cycling: computeSportStats(entries, 'cyclingMinutes'),
     walking: computeSportStats(entries, 'walkingMinutes', 'walkingDistanceKm'),
     swimming: computeSportStats(entries, 'swimmingMinutes'),
@@ -871,6 +874,9 @@ export default function RunningAnalytics() {
         )}
         {activeTab === 'badminton' && (
           <SimpleSportTab stats={allSportStats.badminton} name={name} sportLabel="Badminton" minKey="badmintonMinutes" showDistance={false} accent={theme.yellow || '#eab308'} theme={theme} />
+        )}
+        {activeTab === 'yoga' && (
+          <SimpleSportTab stats={allSportStats.yoga} name={name} sportLabel="Yoga" minKey="yogaMinutes" showDistance={false} accent={theme.purple || '#a855f7'} theme={theme} />
         )}
         {activeTab === 'cycling' && (
           <SimpleSportTab stats={allSportStats.cycling} name={name} sportLabel="Cycling" minKey="cyclingMinutes" showDistance={false} accent={theme.blue} theme={theme} />

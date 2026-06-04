@@ -275,6 +275,7 @@ const LEADER_TABS = [
   { id: 'overall', label: 'Overall', emoji: '🏆' },
   { id: 'running', label: 'Running', emoji: '🏃' },
   { id: 'badminton', label: 'Badminton', emoji: '🏸' },
+  { id: 'yoga', label: 'Yoga', emoji: '🧘' },
   { id: 'cycling', label: 'Cycling', emoji: '🚴' },
 ];
 
@@ -358,6 +359,10 @@ export default function Leaderboard() {
               .filter((e) => Number(e.cyclingMinutes || 0) > 0)
               .map((e) => ({ date: e.date, name: participant.displayName, username: participant.username, avatar: participant.avatar, isSelf: participant.isSelf, minutes: Number(e.cyclingMinutes) }));
 
+            const yogaEntries = entries
+              .filter((e) => Number(e.yogaMinutes || 0) > 0)
+              .map((e) => ({ date: e.date, name: participant.displayName, username: participant.username, avatar: participant.avatar, isSelf: participant.isSelf, minutes: Number(e.yogaMinutes) }));
+
             return {
               id: participant.userId,
               name: participant.displayName,
@@ -372,9 +377,11 @@ export default function Leaderboard() {
               runEntries,
               badmintonEntries,
               cyclingEntries,
+              yogaEntries,
               totalRunKm: runEntries.reduce((s, e) => s + e.distance, 0),
               totalBadmintonMins: badmintonEntries.reduce((s, e) => s + e.minutes, 0),
               totalCyclingMins: cyclingEntries.reduce((s, e) => s + e.minutes, 0),
+              totalYogaMins: yogaEntries.reduce((s, e) => s + e.minutes, 0),
             };
           } catch { return null; }
         }));
@@ -424,6 +431,12 @@ export default function Leaderboard() {
 
   const topCycling = useMemo(() =>
     rows.flatMap((r) => r.cyclingEntries || [])
+      .sort((a, b) => b.minutes - a.minutes)
+      .slice(0, 10),
+    [rows]);
+
+  const topYoga = useMemo(() =>
+    rows.flatMap((r) => r.yogaEntries || [])
       .sort((a, b) => b.minutes - a.minutes)
       .slice(0, 10),
     [rows]);
@@ -515,10 +528,11 @@ export default function Leaderboard() {
                 <div style={{ fontSize: '13px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.13em', color: theme.textMuted, marginBottom: '12px' }}>
                   {selfName} vs {leaderRow.name}
                 </div>
-                <div className="lb-3col" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0,1fr))', gap: '12px' }}>
+                <div className="lb-3col" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
                   <CompareCard meRow={meRow} themRow={leaderRow} label="Cumulative Score" valueKey="cumulativeTotal" valueSuffix="pts" theme={theme} selfName={selfName} />
                   <CompareCard meRow={meRow} themRow={leaderRow} label="Total Running Distance" valueKey="totalRunKm" valueSuffix="km" theme={theme} selfName={selfName} />
                   <CompareCard meRow={meRow} themRow={leaderRow} label="Badminton Minutes" valueKey="totalBadmintonMins" valueSuffix="min" theme={theme} selfName={selfName} />
+                  <CompareCard meRow={meRow} themRow={leaderRow} label="Yoga Minutes" valueKey="totalYogaMins" valueSuffix="min" theme={theme} selfName={selfName} />
                 </div>
               </div>
             )}
@@ -549,6 +563,11 @@ export default function Leaderboard() {
             {/* ── Badminton tab ── */}
             {activeTab === 'badminton' && (
               <SportBoard title="Longest Badminton Sessions" entries={topBadminton} valueKey="minutes" valueSuffix="min" color={theme.yellow || '#eab308'} theme={theme} selfName={selfName} />
+            )}
+
+            {/* ── Yoga tab ── */}
+            {activeTab === 'yoga' && (
+              <SportBoard title="Longest Yoga Sessions" entries={topYoga} valueKey="minutes" valueSuffix="min" color={theme.purple || '#a855f7'} theme={theme} selfName={selfName} />
             )}
 
             {/* ── Cycling tab ── */}

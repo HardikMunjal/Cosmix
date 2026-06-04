@@ -1507,6 +1507,24 @@ export class ChatService {
             .map((entry) => entry.username);
     }
 
+    private async notifyGroupMessagePush(groupId: string, senderUsername: string, chatMessage: { id: string; chat: { name: string }; text?: string; gif?: string }) {
+        try {
+            const recipients = (await this.groupMemberUsernames(groupId)).filter((username) => username !== senderUsername);
+            void this.sendPushToUsers(recipients, {
+                title: `New message in ${chatMessage.chat.name}`,
+                body: `${senderUsername}: ${String(chatMessage.text || chatMessage.gif || 'New message')}`,
+                url: '/chat',
+                tag: `group-${groupId}-${chatMessage.id}`,
+            }, {
+                type: 'group',
+                senderUsername,
+                groupId,
+            });
+        } catch (_) {
+            // Push must not block or break message delivery.
+        }
+    }
+
     async sendFriendRequest(actorUsername: string, targetUsername: string) {
         const requester = this.normalizeUsername(actorUsername);
         const addressee = this.normalizeUsername(targetUsername);
@@ -2315,7 +2333,7 @@ export class ChatService {
 
         if (payload.chat.type === 'group' && chatId !== GENERAL_GROUP_ID) {
             await this.assertGroupPermission(senderUsername, chatId, 'post');
-            await this.applyRetentionPolicy(chatId);
+            void this.applyRetentionPolicy(chatId);
         }
         if (payload.chat.type === 'dm') {
             await this.assertFriendship(senderUsername, payload.chat.name);
@@ -2324,6 +2342,7 @@ export class ChatService {
         const chatMessage = {
             ...payload,
             id: this.buildId('msg'),
+            clientMessageId: String((payload as any).clientMessageId || '').trim() || undefined,
             timestamp: payload.timestamp || new Date().toISOString(),
             user: senderUsername,
             userId: actor.userId || null,
@@ -2362,17 +2381,7 @@ export class ChatService {
                     senderUsername,
                 });
             } else {
-                const recipients = (await this.groupMemberUsernames(chatId)).filter((username) => username !== senderUsername);
-                void this.sendPushToUsers(recipients, {
-                    title: `New message in ${chatMessage.chat.name}`,
-                    body: `${senderUsername}: ${String(chatMessage.text || chatMessage.gif || 'New message')}`,
-                    url: '/chat',
-                    tag: `group-${chatId}-${chatMessage.id}`,
-                }, {
-                    type: 'group',
-                    senderUsername,
-                    groupId: chatId,
-                });
+                void this.notifyGroupMessagePush(chatId, senderUsername, chatMessage);
             }
             return chatMessage;
         }
@@ -2389,17 +2398,7 @@ export class ChatService {
                 senderUsername,
             });
         } else {
-            const recipients = (await this.groupMemberUsernames(chatId)).filter((username) => username !== senderUsername);
-            void this.sendPushToUsers(recipients, {
-                title: `New message in ${chatMessage.chat.name}`,
-                body: `${senderUsername}: ${String(chatMessage.text || chatMessage.gif || 'New message')}`,
-                url: '/chat',
-                tag: `group-${chatId}-${chatMessage.id}`,
-            }, {
-                type: 'group',
-                senderUsername,
-                groupId: chatId,
-            });
+            void this.notifyGroupMessagePush(chatId, senderUsername, chatMessage);
         }
         return chatMessage;
     }

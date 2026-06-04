@@ -12,8 +12,15 @@ export function hasPostgresStorage() {
 function getPostgresPoolOptions() {
   const options = {
     connectionString: DATABASE_URL,
+    connectionTimeoutMillis: 8000,
+    idleTimeoutMillis: 10000,
+    max: 8,
   };
-  if (DATABASE_URL.includes('sslmode=') || DATABASE_URL.includes('ssl=true') || DATABASE_URL.includes('rds.amazonaws.com')) {
+  if (
+    DATABASE_URL.includes('sslmode=')
+    || DATABASE_URL.includes('ssl=true')
+    || DATABASE_URL.includes('rds.amazonaws.com')
+  ) {
     options.ssl = { rejectUnauthorized: false };
   }
   return options;

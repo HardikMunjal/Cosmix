@@ -55,6 +55,7 @@ export function ChatAlbumGallery({
   folders = [],
   images = [],
   canManage = false,
+  compact = false,
   folderForm,
   onFolderFormChange,
   onCreateFolder,
@@ -72,10 +73,12 @@ export function ChatAlbumGallery({
 }) {
   const [albumPath, setAlbumPath] = useState([]);
   const [lightboxIndex, setLightboxIndex] = useState(-1);
+  const [showCreateForm, setShowCreateForm] = useState(false);
   const folderTree = useMemo(() => buildFolderTree(folders), [folders]);
   const currentParentId = albumPath.length ? albumPath[albumPath.length - 1].id : null;
   const currentFolders = folderTree.get(currentParentId) || [];
   const currentFolder = albumPath.length ? albumPath[albumPath.length - 1] : null;
+  const inAlbumView = Boolean(currentFolder);
 
   const imageById = useMemo(
     () => Object.fromEntries((images || []).map((image) => [image.id, image])),
@@ -101,9 +104,71 @@ export function ChatAlbumGallery({
     return map;
   }, [folders, imageById]);
 
+  const goToAlbumList = () => {
+    setAlbumPath([]);
+    setShowCreateForm(false);
+    setLightboxIndex(-1);
+  };
+
+  const goUpOneLevel = () => {
+    setAlbumPath((path) => path.slice(0, -1));
+    setShowCreateForm(false);
+    setLightboxIndex(-1);
+  };
+
+  const openAlbum = (folder) => {
+    setAlbumPath((path) => [...path, folder]);
+    setShowCreateForm(false);
+    setLightboxIndex(-1);
+    if (canManage) onSelectUploadFolder(folder.id);
+  };
+
+  const handleUploadClick = () => {
+    if (currentFolder) {
+      onSelectUploadFolder(currentFolder.id);
+      onPickFiles();
+      return;
+    }
+    if (selectedUploadFolderId) {
+      onPickFiles();
+      return;
+    }
+    if (folders.length === 1) {
+      onSelectUploadFolder(folders[0].id);
+      onPickFiles();
+    }
+  };
+
+  const handleCreateSubmit = (event) => {
+    onCreateFolder(event, currentParentId);
+    setShowCreateForm(false);
+  };
+
+  const actionBtn = {
+    border: 'none',
+    borderRadius: '12px',
+    padding: compact ? '12px 14px' : '11px 14px',
+    fontWeight: 800,
+    fontSize: '13px',
+    cursor: 'pointer',
+    fontFamily: theme.font,
+  };
+
   return (
     <>
       <style>{`
+        .chat-album-root {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+          min-height: 0;
+        }
+        .chat-album-scroll {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+          min-height: 0;
+        }
         .chat-album-grid {
           display: grid;
           grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -114,23 +179,21 @@ export function ChatAlbumGallery({
           padding: 0;
           cursor: pointer;
           text-align: left;
-          border-radius: 18px;
+          border-radius: 16px;
           overflow: hidden;
           background: transparent;
           color: inherit;
           font-family: inherit;
-          box-shadow: 0 12px 28px rgba(0,0,0,0.22);
-          transition: transform 0.15s ease, box-shadow 0.15s ease;
+          box-shadow: 0 8px 20px rgba(0,0,0,0.18);
         }
-        .chat-album-card:active { transform: scale(0.98); }
         .chat-album-cover {
           position: relative;
-          min-height: 118px;
-          padding: 14px;
+          min-height: ${compact ? '96px' : '118px'};
+          padding: 12px;
           display: flex;
           flex-direction: column;
           justify-content: flex-end;
-          gap: 6px;
+          gap: 4px;
         }
         .chat-album-cover img {
           position: absolute;
@@ -146,24 +209,11 @@ export function ChatAlbumGallery({
           inset: 0;
           background: linear-gradient(180deg, transparent 20%, rgba(2,6,23,0.88));
         }
-        .chat-album-cover-content {
-          position: relative;
-          z-index: 1;
-        }
+        .chat-album-cover-content { position: relative; z-index: 1; }
         .chat-album-media-grid {
           display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
+          grid-template-columns: repeat(3, minmax(0, 1fr));
           gap: 8px;
-        }
-        .chat-album-media-grid img,
-        .chat-album-media-grid video {
-          width: 100%;
-          aspect-ratio: 1;
-          object-fit: cover;
-          border-radius: 14px;
-          border: 1px solid rgba(148,163,184,0.22);
-          display: block;
-          background: rgba(15,23,42,0.5);
         }
         .chat-album-media-tile {
           border: none;
@@ -171,217 +221,292 @@ export function ChatAlbumGallery({
           background: transparent;
           cursor: pointer;
           position: relative;
-          border-radius: 14px;
+          border-radius: 12px;
           overflow: hidden;
         }
-        .chat-album-media-tile:hover { transform: scale(1.02); transition: transform 0.15s ease; }
+        .chat-album-media-grid img,
+        .chat-album-media-grid video {
+          width: 100%;
+          aspect-ratio: 1;
+          object-fit: cover;
+          border-radius: 12px;
+          border: 1px solid rgba(148,163,184,0.22);
+          display: block;
+          background: rgba(15,23,42,0.5);
+        }
         .chat-album-media-badge {
           position: absolute;
-          right: 8px;
-          bottom: 8px;
+          right: 6px;
+          bottom: 6px;
           border-radius: 999px;
-          padding: 4px 8px;
-          font-size: 10px;
+          padding: 3px 7px;
+          font-size: 9px;
           font-weight: 800;
           background: rgba(2,6,23,0.72);
           color: #fff;
         }
-        .chat-album-filmstrip {
-          display: flex;
-          gap: 8px;
-          overflow-x: auto;
-          padding-bottom: 6px;
-          scroll-snap-type: x mandatory;
-        }
-        .chat-album-filmstrip img,
-        .chat-album-filmstrip video {
-          flex: 0 0 120px;
-          width: 120px;
-          height: 120px;
-          object-fit: cover;
-          border-radius: 14px;
-          scroll-snap-align: start;
-          border: 1px solid rgba(148,163,184,0.22);
-        }
-        .chat-album-breadcrumb {
+        .chat-album-nav {
           display: flex;
           align-items: center;
-          gap: 6px;
+          gap: 8px;
           flex-wrap: wrap;
-          margin-bottom: 12px;
         }
-        .chat-album-breadcrumb button {
-          border: none;
-          background: rgba(255,255,255,0.08);
+        .chat-album-nav-btn {
+          border: 1px solid rgba(148,163,184,0.28);
+          background: rgba(255,255,255,0.06);
           color: inherit;
           border-radius: 999px;
-          padding: 6px 10px;
-          font-size: 11px;
+          padding: 8px 12px;
+          font-size: 12px;
           font-weight: 700;
           cursor: pointer;
+          font-family: inherit;
         }
-        @media (min-width: 720px) {
+        .chat-album-actions {
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+        .chat-album-actions--sticky {
+          position: sticky;
+          bottom: 0;
+          z-index: 2;
+          padding-top: 8px;
+          margin-top: 4px;
+          background: linear-gradient(180deg, transparent, ${theme.panelBg} 28%);
+        }
+        .chat-album-create {
+          display: grid;
+          gap: 8px;
+          padding: 12px;
+          border-radius: 14px;
+          border: 1px solid rgba(148,163,184,0.25);
+          background: ${theme.cardBg};
+        }
+        @media (max-width: 720px) {
+          .chat-album-grid { grid-template-columns: 1fr; }
+          .chat-album-media-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+        @media (min-width: 721px) {
           .chat-album-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-          .chat-album-media-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         }
       `}</style>
 
-      <div style={{ display: 'grid', gap: '14px' }}>
-        <div style={{ display: 'grid', gap: '6px' }}>
-          <div style={{ fontSize: '15px', fontWeight: 800, color: theme.textHeading }}>Photo & video albums</div>
-          <div style={{ fontSize: '12px', color: theme.textSecondary, lineHeight: 1.45 }}>
-            Create nested folders like Family → Ooty trip. Upload memories and share album links with your thread.
-          </div>
+      <div className="chat-album-root">
+        <div className="chat-album-nav">
+          {inAlbumView ? (
+            <button type="button" className="chat-album-nav-btn" onClick={goUpOneLevel}>
+              ← Albums{albumPath.length > 1 ? ` / ${albumPath[albumPath.length - 2].name}` : ''}
+            </button>
+          ) : (
+            <span style={{ fontSize: compact ? '14px' : '15px', fontWeight: 800, color: theme.textHeading }}>
+              Albums
+            </span>
+          )}
+          {inAlbumView && currentFolder ? (
+            <span style={{ fontSize: '13px', fontWeight: 800, color: theme.textHeading, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {currentFolder.name}
+            </span>
+          ) : null}
         </div>
 
-        <div className="chat-album-breadcrumb">
-          <button type="button" onClick={() => setAlbumPath([])}>All albums</button>
-          {albumPath.map((folder, index) => (
-            <button
-              key={folder.id}
-              type="button"
-              onClick={() => setAlbumPath(albumPath.slice(0, index + 1))}
-            >
-              {folder.name}
-            </button>
-          ))}
-        </div>
-
-        {canManage ? (
-          <form
-            onSubmit={(event) => onCreateFolder(event, currentParentId)}
-            style={{ display: 'grid', gap: '8px', padding: '12px', borderRadius: '14px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg }}
-          >
-            <div style={{ fontSize: '12px', fontWeight: 800, color: theme.textHeading }}>
-              {currentFolder ? `New sub-album inside "${currentFolder.name}"` : 'New album folder'}
-            </div>
-            <input
-              style={{ width: '100%', boxSizing: 'border-box', borderRadius: '10px', border: `1px solid ${theme.cardBorder}`, padding: '10px 12px', background: theme.inputBg, color: theme.textPrimary, fontSize: '14px' }}
-              value={folderForm.name}
-              onChange={(e) => onFolderFormChange({ ...folderForm, name: e.target.value })}
-              placeholder={currentFolder ? 'e.g. Day 2 hike' : 'e.g. Family, Ooty trip'}
-            />
-            <input
-              style={{ width: '100%', boxSizing: 'border-box', borderRadius: '10px', border: `1px solid ${theme.cardBorder}`, padding: '10px 12px', background: theme.inputBg, color: theme.textPrimary, fontSize: '13px' }}
-              value={folderForm.description}
-              onChange={(e) => onFolderFormChange({ ...folderForm, description: e.target.value })}
-              placeholder="Optional caption"
-            />
-            <button type="submit" style={{ border: 'none', borderRadius: '12px', padding: '11px 14px', background: `linear-gradient(135deg, ${theme.blue}, ${theme.purple})`, color: '#fff', fontWeight: 800, cursor: 'pointer' }}>
-              Create album folder
-            </button>
-          </form>
+        {!compact ? (
+          <p style={{ margin: 0, fontSize: '12px', color: theme.textSecondary, lineHeight: 1.45 }}>
+            Tap an album to see photos. Use the buttons below to add albums or upload.
+          </p>
         ) : null}
 
-        {currentFolders.length ? (
-          <div className="chat-album-grid">
-            {currentFolders.map((folder) => {
-              const cover = folderCoverMap[folder.id];
-              const childCount = (folderTree.get(folder.id) || []).length;
-              const mediaCount = (folder.items || []).filter((item) => item.imageId).length;
-              return (
-                <button
-                  key={folder.id}
-                  type="button"
-                  className="chat-album-card"
-                  onClick={() => setAlbumPath([...albumPath, folder])}
-                >
-                  <div className="chat-album-cover" style={{ background: albumGradient(folder.name) }}>
-                    {cover?.imageUrl ? <img src={cover.imageUrl} alt="" /> : null}
-                    <div className="chat-album-cover-content">
-                      <div style={{ fontSize: '24px' }}>{albumEmoji(folder.name)}</div>
-                      <div style={{ fontSize: '14px', fontWeight: 900, color: '#fff' }}>{folder.name}</div>
-                      <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.82)' }}>
-                        {mediaCount} media · {childCount} subfolder{childCount === 1 ? '' : 's'}
-                      </div>
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        ) : (
-          <div style={{ padding: '18px', borderRadius: '14px', border: `1px dashed ${theme.cardBorder}`, color: theme.textMuted, fontSize: '13px', textAlign: 'center', lineHeight: 1.5 }}>
-            {currentFolder ? 'No sub-albums here yet. Create one or upload photos below.' : 'No albums yet. Create your first folder — Family, Ooty, Wedding…'}
-          </div>
-        )}
-
-        {currentFolder ? (
-          <div style={{ display: 'grid', gap: '10px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-              <div style={{ fontSize: '13px', fontWeight: 800, color: theme.textHeading }}>{currentFolder.name} · {folderImages.length} items</div>
-              {onShareFolder ? (
-                <button type="button" onClick={() => onShareFolder(currentFolder)} style={{ border: `1px solid ${theme.cardBorder}`, borderRadius: '999px', padding: '7px 12px', background: theme.panelBg, color: theme.textPrimary, fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
-                  Share album
-                </button>
-              ) : null}
-            </div>
-
-            {canManage ? (
-              <div style={{ display: 'grid', gap: '8px', padding: '12px', borderRadius: '14px', background: theme.cardBg, border: `1px solid ${theme.cardBorder}` }}>
-                <input
-                  style={{ width: '100%', boxSizing: 'border-box', borderRadius: '10px', border: `1px solid ${theme.cardBorder}`, padding: '10px 12px', background: theme.inputBg, color: theme.textPrimary }}
-                  value={imageCaption}
-                  onChange={(e) => onImageCaptionChange(e.target.value)}
-                  placeholder="Caption for upload"
-                />
-                <button type="button" onClick={() => { onSelectUploadFolder(currentFolder.id); onPickFiles(); }} style={{ border: 'none', borderRadius: '12px', padding: '12px', background: theme.orange, color: '#fff', fontWeight: 800, cursor: 'pointer' }}>
-                  📷 Upload photos & videos
-                </button>
-              </div>
-            ) : null}
-
-            {folderImages.length ? (
-              <>
-                <div className="chat-album-filmstrip">
-                  {folderImages.map((image, imageIndex) => (
-                    <button key={`strip-${image.id}`} type="button" className="chat-album-media-tile" onClick={() => setLightboxIndex(imageIndex)} style={{ flex: '0 0 120px' }}>
-                      {isVideoMedia(image) ? (
-                        <video src={image.imageUrl} muted playsInline preload="metadata" />
-                      ) : (
-                        <img src={image.imageUrl} alt={image.caption || 'Album media'} />
-                      )}
-                    </button>
-                  ))}
+        <div className="chat-album-scroll">
+          {!inAlbumView ? (
+            <>
+              {currentFolders.length ? (
+                <div className="chat-album-grid">
+                  {currentFolders.map((folder) => {
+                    const cover = folderCoverMap[folder.id];
+                    const childCount = (folderTree.get(folder.id) || []).length;
+                    const mediaCount = (folder.items || []).filter((item) => item.imageId).length;
+                    return (
+                      <button key={folder.id} type="button" className="chat-album-card" onClick={() => openAlbum(folder)}>
+                        <div className="chat-album-cover" style={{ background: albumGradient(folder.name) }}>
+                          {cover?.imageUrl ? <img src={cover.imageUrl} alt="" /> : null}
+                          <div className="chat-album-cover-content">
+                            <div style={{ fontSize: '22px' }}>{albumEmoji(folder.name)}</div>
+                            <div style={{ fontSize: '14px', fontWeight: 900, color: '#fff' }}>{folder.name}</div>
+                            <div style={{ fontSize: '11px', color: 'rgba(255,255,255,0.82)' }}>
+                              {mediaCount} photo{mediaCount === 1 ? '' : 's'}{childCount ? ` · ${childCount} inside` : ''}
+                            </div>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
+              ) : (
+                <div style={{ padding: '20px 12px', borderRadius: '14px', border: `1px dashed ${theme.cardBorder}`, color: theme.textMuted, fontSize: '13px', textAlign: 'center', lineHeight: 1.5 }}>
+                  No albums yet.{canManage ? ' Tap “New album” below to create one.' : ''}
+                </div>
+              )}
+
+              {showCreateForm && canManage ? (
+                <form className="chat-album-create" onSubmit={handleCreateSubmit}>
+                  <div style={{ fontSize: '12px', fontWeight: 800, color: theme.textHeading }}>New album name</div>
+                  <input
+                    style={{ width: '100%', boxSizing: 'border-box', borderRadius: '10px', border: `1px solid ${theme.cardBorder}`, padding: '10px 12px', background: theme.inputBg, color: theme.textPrimary, fontSize: '14px' }}
+                    value={folderForm.name}
+                    onChange={(e) => onFolderFormChange({ ...folderForm, name: e.target.value })}
+                    placeholder="e.g. Family, Ooty trip"
+                    autoFocus
+                  />
+                  {!compact ? (
+                    <input
+                      style={{ width: '100%', boxSizing: 'border-box', borderRadius: '10px', border: `1px solid ${theme.cardBorder}`, padding: '10px 12px', background: theme.inputBg, color: theme.textPrimary, fontSize: '13px' }}
+                      value={folderForm.description}
+                      onChange={(e) => onFolderFormChange({ ...folderForm, description: e.target.value })}
+                      placeholder="Optional note"
+                    />
+                  ) : null}
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button type="button" style={{ ...actionBtn, flex: 1, background: theme.cardBg, color: theme.textSecondary, border: `1px solid ${theme.cardBorder}` }} onClick={() => setShowCreateForm(false)}>
+                      Cancel
+                    </button>
+                    <button type="submit" style={{ ...actionBtn, flex: 1, background: `linear-gradient(135deg, ${theme.blue}, ${theme.purple})`, color: '#fff' }}>
+                      Save
+                    </button>
+                  </div>
+                </form>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '12px', color: theme.textMuted }}>{folderImages.length} item{folderImages.length === 1 ? '' : 's'}</span>
+                {onShareFolder ? (
+                  <button type="button" onClick={() => onShareFolder(currentFolder)} style={{ border: `1px solid ${theme.cardBorder}`, borderRadius: '999px', padding: '6px 11px', background: theme.panelBg, color: theme.textPrimary, fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                    Share
+                  </button>
+                ) : null}
+              </div>
+
+              {(folderTree.get(currentFolder.id) || []).length > 0 ? (
+                <div className="chat-album-grid">
+                  {(folderTree.get(currentFolder.id) || []).map((folder) => {
+                    const cover = folderCoverMap[folder.id];
+                    const mediaCount = (folder.items || []).filter((item) => item.imageId).length;
+                    return (
+                      <button key={folder.id} type="button" className="chat-album-card" onClick={() => openAlbum(folder)}>
+                        <div className="chat-album-cover" style={{ background: albumGradient(folder.name), minHeight: '80px' }}>
+                          {cover?.imageUrl ? <img src={cover.imageUrl} alt="" /> : null}
+                          <div className="chat-album-cover-content">
+                            <div style={{ fontSize: '18px' }}>{albumEmoji(folder.name)}</div>
+                            <div style={{ fontSize: '13px', fontWeight: 900, color: '#fff' }}>{folder.name}</div>
+                            <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.82)' }}>{mediaCount} photo{mediaCount === 1 ? '' : 's'}</div>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+
+              {folderImages.length ? (
                 <div className="chat-album-media-grid">
                   {folderImages.map((image, imageIndex) => (
                     <button key={image.id} type="button" className="chat-album-media-tile" onClick={() => setLightboxIndex(imageIndex)}>
                       {isVideoMedia(image) ? (
                         <>
                           <video src={image.imageUrl} muted playsInline preload="metadata" />
-                          <span className="chat-album-media-badge">▶ Video</span>
+                          <span className="chat-album-media-badge">▶</span>
                         </>
                       ) : (
-                        <img src={image.imageUrl} alt={image.caption || 'Album media'} />
+                        <img src={image.imageUrl} alt={image.caption || 'Photo'} />
                       )}
                     </button>
                   ))}
                 </div>
+              ) : (
+                <div style={{ fontSize: '13px', color: theme.textMuted, textAlign: 'center', padding: '16px 8px', lineHeight: 1.5 }}>
+                  No photos here yet.{canManage ? ' Tap Upload below.' : ''}
+                </div>
+              )}
+
+              {showCreateForm && canManage ? (
+                <form className="chat-album-create" onSubmit={handleCreateSubmit}>
+                  <div style={{ fontSize: '12px', fontWeight: 800, color: theme.textHeading }}>New folder inside {currentFolder.name}</div>
+                  <input
+                    style={{ width: '100%', boxSizing: 'border-box', borderRadius: '10px', border: `1px solid ${theme.cardBorder}`, padding: '10px 12px', background: theme.inputBg, color: theme.textPrimary, fontSize: '14px' }}
+                    value={folderForm.name}
+                    onChange={(e) => onFolderFormChange({ ...folderForm, name: e.target.value })}
+                    placeholder="e.g. Day 2"
+                    autoFocus
+                  />
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button type="button" style={{ ...actionBtn, flex: 1, background: theme.cardBg, color: theme.textSecondary, border: `1px solid ${theme.cardBorder}` }} onClick={() => setShowCreateForm(false)}>
+                      Cancel
+                    </button>
+                    <button type="submit" style={{ ...actionBtn, flex: 1, background: `linear-gradient(135deg, ${theme.blue}, ${theme.purple})`, color: '#fff' }}>
+                      Save
+                    </button>
+                  </div>
+                </form>
+              ) : null}
+            </>
+          )}
+        </div>
+
+        {canManage ? (
+          <div className={`chat-album-actions${compact ? ' chat-album-actions--sticky' : ''}`}>
+            {!inAlbumView ? (
+              <>
+                <button
+                  type="button"
+                  style={{ ...actionBtn, flex: 1, minWidth: '120px', background: theme.cardBg, color: theme.textHeading, border: `1px solid ${theme.cardBorder}` }}
+                  onClick={() => setShowCreateForm((open) => !open)}
+                >
+                  {showCreateForm ? 'Close' : '+ New album'}
+                </button>
+                {folders.length > 0 ? (
+                  <button
+                    type="button"
+                    style={{ ...actionBtn, flex: 1, minWidth: '120px', background: theme.blue, color: '#fff' }}
+                    onClick={handleUploadClick}
+                  >
+                    Upload
+                  </button>
+                ) : null}
               </>
             ) : (
-              <div style={{ fontSize: '12px', color: theme.textMuted, padding: '8px 2px' }}>No photos or videos in this album yet.</div>
+              <>
+                <button
+                  type="button"
+                  style={{ ...actionBtn, flex: 1, background: theme.orange, color: '#fff' }}
+                  onClick={handleUploadClick}
+                >
+                  📷 Upload
+                </button>
+                <button
+                  type="button"
+                  style={{ ...actionBtn, background: theme.cardBg, color: theme.textSecondary, border: `1px solid ${theme.cardBorder}` }}
+                  onClick={() => setShowCreateForm((open) => !open)}
+                >
+                  {showCreateForm ? 'Close' : '+ Folder'}
+                </button>
+              </>
             )}
           </div>
         ) : null}
 
-        {!currentFolder && canManage ? (
-          <div style={{ display: 'grid', gap: '8px' }}>
-            <div style={{ fontSize: '12px', fontWeight: 700, color: theme.textMuted }}>Quick upload (pick album first)</div>
-            <select
-              style={{ width: '100%', borderRadius: '10px', border: `1px solid ${theme.cardBorder}`, padding: '10px 12px', background: theme.inputBg, color: theme.textPrimary }}
-              value={selectedUploadFolderId}
-              onChange={(e) => onSelectUploadFolder(e.target.value)}
-            >
-              <option value="">Select album folder</option>
-              {folders.map((folder) => (
-                <option key={folder.id} value={folder.id}>{folder.name}</option>
-              ))}
-            </select>
-            <button type="button" onClick={onPickFiles} style={{ border: 'none', borderRadius: '12px', padding: '12px', background: theme.blue, color: '#fff', fontWeight: 800, cursor: 'pointer' }}>
-              Upload to selected album
-            </button>
-          </div>
+        {!compact && canManage && !inAlbumView && folders.length > 0 ? (
+          <details style={{ fontSize: '12px', color: theme.textMuted }}>
+            <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Upload with caption</summary>
+            <div style={{ display: 'grid', gap: '8px', marginTop: '8px' }}>
+              <input
+                style={{ width: '100%', boxSizing: 'border-box', borderRadius: '10px', border: `1px solid ${theme.cardBorder}`, padding: '10px 12px', background: theme.inputBg, color: theme.textPrimary }}
+                value={imageCaption}
+                onChange={(e) => onImageCaptionChange(e.target.value)}
+                placeholder="Caption (optional)"
+              />
+            </div>
+          </details>
         ) : null}
       </div>
 

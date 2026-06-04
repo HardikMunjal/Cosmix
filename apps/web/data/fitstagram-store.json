@@ -1,0 +1,234 @@
+{
+  "views": {
+    "usr-hardi": [
+      "fit-usr-hardi-run-2026-05-22"
+    ]
+  },
+  "likes": {
+    "fit-usr-hardi-run-2026-05-22": {
+      "voters": [
+        "usr-hardi"
+      ]
+    }
+  },
+  "notifications": {
+    "usr-hardi": [
+      {
+        "id": "fit-notif-fit-usr-1776348315064-629418-yoga-2026-05-15",
+        "userId": "usr-hardi",
+        "type": "fitstagram",
+        "title": "laks finished Yoga",
+        "description": "60 min yoga session — great consistency",
+        "postId": "fit-usr-1776348315064-629418-yoga-2026-05-15",
+        "authorName": "laks",
+        "linkTab": "posts",
+        "viewed": false,
+        "createdAt": "2026-05-15T17:30:00.000Z"
+      },
+      {
+        "id": "fit-notif-fit-usr-1776348315064-629418-badminton-2026-05-15",
+        "userId": "usr-hardi",
+        "type": "fitstagram",
+        "title": "laks finished Badminton",
+        "description": "45 min badminton session — great consistency",
+        "postId": "fit-usr-1776348315064-629418-badminton-2026-05-15",
+        "authorName": "laks",
+        "linkTab": "posts",
+        "viewed": false,
+        "createdAt": "2026-05-15T17:30:00.000Z"
+      },
+      {
+        "id": "fit-notif-fit-usr-1776348315064-629418-yoga-2026-05-19",
+        "userId": "usr-hardi",
+        "type": "fitstagram",
+        "title": "laks finished Yoga",
+        "description": "60 min yoga session — great consistency",
+        "postId": "fit-usr-1776348315064-629418-yoga-2026-05-19",
+        "authorName": "laks",
+        "linkTab": "posts",
+        "viewed": false,
+        "createdAt": "2026-05-19T17:30:00.000Z"
+      },
+      {
+        "id": "fit-notif-fit-usr-1776348315064-629418-run-2026-05-19",
+        "userId": "usr-hardi",
+        "type": "fitstagram",
+        "title": "laks logged a run",
+        "description": "2.6 km in 19.23 min · 7:24 /km · 8.1 km/h",
+        "postId": "fit-usr-1776348315064-629418-run-2026-05-19",
+        "authorName": "laks",
+        "linkTab": "posts",
+        "viewed": false,
+        "createdAt": "2026-05-19T18:00:00.000Z"
+      },
+      {
+        "id": "fit-notif-fit-usr-1776348315064-629418-yoga-2026-05-20",
+        "userId": "usr-hardi",
+        "type": "fitstagram",
+        "title": "laks finished Yoga",
+        "description": "60 min yoga session — great consistency",
+        "postId": "fit-usr-1776348315064-629418-yoga-2026-05-20",
+        "authorName": "laks",
+        "linkTab": "posts",
+        "viewed": false,
+        "createdAt": "2026-05-20T17:30:00.000Z"
+      },
+      {
+        "id": "fit-notif-fit-usr-1776348315064-629418-badminton-2026-05-20",
+        "userId": "usr-hardi",
+        "type": "fitstagram",
+        "title": "laks finished Badminton",
+        "description": "45 min badminton session — great consistency",
+        "postId": "fit-usr-1776348315064-629418-badminton-2026-05-20",
+        "authorName": "laks",
+        "linkTab": "posts",
+        "viewed": false,
+        "createdAt": "2026-05-20T17:30:00.000Z"
+      },
+      {
+        "id": "fit-notif-fit-usr-1776348315064-629418-run-2026-05-20",
+        "userId": "usr-hardi",
+        "type": "fitstagram",
+        "title": "laks logged a run",
+        "description": "3.0 km in 26 min · 8:40 /km · 6.9 km/h",
+        "postId": "fit-usr-1776348315064-629418-run-2026-05-20",
+        "authorName": "laks",
+        "linkTab": "posts",
+        "viewed": false,
+        "createdAt": "2026-05-20T18:00:00.000Z"
+      },
+      {
+        "id": "fit-notif-fit-usr-1776348315064-629418-pr-distance-2026-05-20",
+        "userId": "usr-hardi",
+        "type": "fitstagram",
+        "title": "laks broke their max distance record",
+        "description": "New longest run: 3.0 km. Previous bests are officially in the rear-view.",
+        "postId": "fit-usr-1776348315064-629418-pr-distance-2026-05-20",
+        "authorName": "laks",
+        "linkTab": "posts",
+        "viewed": true,
+        "createdAt": "2026-05-20T19:20:00.000Z"
+      }
+    ],
+    "usr-1776348315064-629418": [
+      {
+        "id": "fit-notif-fit-usr-hardi-run-2026-05-21",
+        "userId": "usr-1776348315064-629418",
+        "type": "fitstagram",
+        "title": "Hardik Munjal logged a run",
+        "description": "3.0 km in 31 min · 10:20 /km · 5.8 km/h",
+        "postId": "fit-usr-hardi-run-2026-05-21",
+        "authorName": "Hardik Munjal",
+        "linkTab": "posts",
+        "viewed": false,
+        "createdAt": "2026-05-21T18:00:00.000Z"
+      },
+      {
+        "id": "fit-notif-fit-usr-hardi-badminton-2026-05-22",
+        "userId": "usr-1776348315064-629418",
+        "type": "fitstagram",
+        "title": "Hardik Munjal finished Badminton",
+        "description": "150 min badminton session — great consistency",
+        "postId": "fit-usr-hardi-badminton-2026-05-22",
+        "authorName": "Hardik Munjal",
+        "linkTab": "posts",
+        "viewed": false,
+        "createdAt": "2026-05-22T17:30:00.000Z"
+      },
+      {
+        "id": "fit-notif-fit-usr-hardi-run-2026-05-22",
+        "userId": "usr-1776348315064-629418",
+        "type": "fitstagram",
+        "title": "Hardik Munjal logged a run",
+        "description": "9.1 km in 81 min · 8:54 /km · 6.7 km/h",
+        "postId": "fit-usr-hardi-run-2026-05-22",
+        "authorName": "Hardik Munjal",
+        "linkTab": "posts",
+        "viewed": false,
+        "createdAt": "2026-05-22T18:00:00.000Z"
+      },
+      {
+        "id": "fit-notif-fit-usr-hardi-badminton-2026-05-23",
+        "userId": "usr-1776348315064-629418",
+        "type": "fitstagram",
+        "title": "Hardik Munjal finished Badminton",
+        "description": "150 min badminton session — great consistency",
+        "postId": "fit-usr-hardi-badminton-2026-05-23",
+        "authorName": "Hardik Munjal",
+        "linkTab": "posts",
+        "viewed": false,
+        "createdAt": "2026-05-23T17:30:00.000Z"
+      },
+      {
+        "id": "fit-notif-fit-usr-hardi-badminton-2026-05-24",
+        "userId": "usr-1776348315064-629418",
+        "type": "fitstagram",
+        "title": "Hardik Munjal finished Badminton",
+        "description": "60 min badminton session — great consistency",
+        "postId": "fit-usr-hardi-badminton-2026-05-24",
+        "authorName": "Hardik Munjal",
+        "linkTab": "posts",
+        "viewed": false,
+        "createdAt": "2026-05-24T17:30:00.000Z"
+      },
+      {
+        "id": "fit-notif-fit-usr-hardi-badminton-2026-05-25",
+        "userId": "usr-1776348315064-629418",
+        "type": "fitstagram",
+        "title": "Hardik Munjal finished Badminton",
+        "description": "75 min badminton session — great consistency",
+        "postId": "fit-usr-hardi-badminton-2026-05-25",
+        "authorName": "Hardik Munjal",
+        "linkTab": "posts",
+        "viewed": false,
+        "createdAt": "2026-05-25T17:30:00.000Z"
+      },
+      {
+        "id": "fit-notif-fit-usr-hardi-badminton-2026-05-31",
+        "userId": "usr-1776348315064-629418",
+        "type": "fitstagram",
+        "title": "Hardik Munjal finished Badminton",
+        "description": "60 min badminton session — great consistency",
+        "postId": "fit-usr-hardi-badminton-2026-05-31",
+        "authorName": "Hardik Munjal",
+        "linkTab": "posts",
+        "viewed": false,
+        "createdAt": "2026-05-31T17:30:00.000Z"
+      },
+      {
+        "id": "fit-notif-fit-usr-hardi-badminton-2026-06-03",
+        "userId": "usr-1776348315064-629418",
+        "type": "fitstagram",
+        "title": "Hardik Munjal finished Badminton",
+        "description": "60 min badminton session — great consistency",
+        "postId": "fit-usr-hardi-badminton-2026-06-03",
+        "authorName": "Hardik Munjal",
+        "linkTab": "posts",
+        "viewed": false,
+        "createdAt": "2026-06-03T17:30:00.000Z"
+      }
+    ]
+  },
+  "pushed": {
+    "usr-hardi": {
+      "fit-usr-1776348315064-629418-pr-distance-2026-05-20": true,
+      "fit-usr-1776348315064-629418-run-2026-05-20": true,
+      "fit-usr-1776348315064-629418-badminton-2026-05-20": true,
+      "fit-usr-1776348315064-629418-yoga-2026-05-20": true,
+      "fit-usr-1776348315064-629418-run-2026-05-19": true,
+      "fit-usr-1776348315064-629418-yoga-2026-05-19": true,
+      "fit-usr-1776348315064-629418-badminton-2026-05-15": true,
+      "fit-usr-1776348315064-629418-yoga-2026-05-15": true
+    },
+    "usr-1776348315064-629418": {
+      "fit-usr-hardi-badminton-2026-06-03": true,
+      "fit-usr-hardi-badminton-2026-05-31": true,
+      "fit-usr-hardi-badminton-2026-05-25": true,
+      "fit-usr-hardi-badminton-2026-05-24": true,
+      "fit-usr-hardi-badminton-2026-05-23": true,
+      "fit-usr-hardi-run-2026-05-22": true,
+      "fit-usr-hardi-badminton-2026-05-22": true,
+      "fit-usr-hardi-run-2026-05-21": true
+    }
+  }
+}

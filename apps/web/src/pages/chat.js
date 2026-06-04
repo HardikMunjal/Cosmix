@@ -1,7 +1,6 @@
 import { useRouter } from 'next/router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import io from 'socket.io-client';
-import { logoutClientSession } from '../lib/auth-client';
+import { getCachedClientUser, logoutClientSession, persistClientUser } from '../lib/auth-client';
 import { ChatAlbumGallery } from '../lib/ChatAlbumGallery';
 import { MobileBottomNav } from '../lib/MobileNav';
 import { useTheme } from '../lib/ThemePicker';
@@ -123,15 +122,27 @@ function getUserColor(username, theme) {
   return colors[Math.abs(hash) % colors.length];
 }
 
+function createClientMessageId() {
+  return `client-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
 function mergeMessages(previous, incoming) {
-  const next = [...previous];
-  const seen = new Set(previous.map((message) => message.id || `${message.user}-${message.timestamp}-${message.text || message.gif || ''}`));
+  let next = [...previous];
   incoming.forEach((message) => {
-    const key = message.id || `${message.user}-${message.timestamp}-${message.text || message.gif || ''}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      next.push(message);
+    const clientMessageId = String(message?.clientMessageId || '').trim();
+    if (clientMessageId) {
+      next = next.filter((entry) => entry.id !== clientMessageId && entry.clientMessageId !== clientMessageId);
     }
+    const key = message.id || `${message.user}-${message.timestamp}-${message.text || message.gif || ''}`;
+    const existingIndex = next.findIndex((entry) => (
+      (entry.id || `${entry.user}-${entry.timestamp}-${entry.text || entry.gif || ''}`) === key
+    ));
+    const normalized = { ...message, pending: false };
+    if (existingIndex >= 0) {
+      next[existingIndex] = { ...next[existingIndex], ...normalized };
+      return;
+    }
+    next.push(normalized);
   });
   return next.sort((left, right) => new Date(left.timestamp || 0).getTime() - new Date(right.timestamp || 0).getTime());
 }
@@ -355,6 +366,97 @@ function createStyles(theme) {
       gap: '8px',
       maxHeight: '280px',
       overflowY: 'auto',
+    },
+    threadFolderScroll: {
+      flex: 1,
+      overflowY: 'auto',
+      padding: '14px 12px 20px',
+      WebkitOverflowScrolling: 'touch',
+    },
+    threadFolderHeader: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'flex-start',
+      gap: '10px',
+      marginBottom: '14px',
+    },
+    threadFolderTitle: {
+      margin: 0,
+      fontSize: '20px',
+      fontWeight: 900,
+      color: theme.textHeading,
+      lineHeight: 1.15,
+    },
+    threadFolderSubtitle: {
+      margin: '6px 0 0',
+      fontSize: '12px',
+      color: theme.textSecondary,
+      lineHeight: 1.5,
+    },
+    threadFolderGrid: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+      gap: '12px',
+    },
+    threadFolderCard: {
+      appearance: 'none',
+      border: `1px solid ${theme.cardBorder}`,
+      borderRadius: '18px',
+      background: theme.cardBg,
+      padding: 0,
+      overflow: 'hidden',
+      cursor: 'pointer',
+      textAlign: 'left',
+      color: 'inherit',
+      fontFamily: theme.font,
+      display: 'grid',
+      gridTemplateRows: '88px auto',
+      boxShadow: `0 10px 28px ${theme.shadow}`,
+    },
+    threadFolderCover: {
+      minHeight: '88px',
+      background: `linear-gradient(135deg, ${theme.blue}, ${theme.purple})`,
+      position: 'relative',
+      overflow: 'hidden',
+    },
+    threadFolderBody: {
+      padding: '10px 12px 12px',
+      display: 'grid',
+      gap: '4px',
+    },
+    threadFolderName: {
+      fontSize: '13px',
+      fontWeight: 800,
+      color: theme.textHeading,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+    },
+    threadFolderMeta: {
+      fontSize: '10px',
+      color: theme.textMuted,
+      lineHeight: 1.4,
+    },
+    threadSubStrip: {
+      display: 'flex',
+      gap: '8px',
+      overflowX: 'auto',
+      padding: '8px 12px',
+      borderBottom: `1px solid ${theme.cardBorder}`,
+      background: theme.panelBg,
+      WebkitOverflowScrolling: 'touch',
+    },
+    threadSubChip: {
+      flexShrink: 0,
+      border: `1px solid ${theme.cardBorder}`,
+      borderRadius: '999px',
+      padding: '7px 12px',
+      background: theme.cardBg,
+      color: theme.textPrimary,
+      fontSize: '11px',
+      fontWeight: 700,
+      cursor: 'pointer',
+      fontFamily: theme.font,
     },
     main: {
       flex: 1,
@@ -861,6 +963,7 @@ export default function ChatPage() {
   const [activeReplyMessageId, setActiveReplyMessageId] = useState('');
   const [replyDrafts, setReplyDrafts] = useState({});
   const [showSidebar, setShowSidebar] = useState(false);
+  const [isNarrowScreen, setIsNarrowScreen] = useState(false);
   const [activePanelTab, setActivePanelTab] = useState('');
   const [sidebarPanel, setSidebarPanel] = useState('');
   const [sidebarFilter, setSidebarFilter] = useState('');
@@ -950,12 +1053,41 @@ export default function ChatPage() {
     return flattenedGroups.filter(({ group }) => group.name.toLowerCase().includes(q));
   }, [flattenedGroups, sidebarFilter]);
 
+  const topLevelThreads = useMemo(
+    () => bootstrap.groups.filter((group) => !group.parentGroupId),
+    [bootstrap.groups],
+  );
+
+  const filteredTopLevelThreads = useMemo(() => {
+    if (!sidebarFilter.trim()) return topLevelThreads;
+    const q = sidebarFilter.toLowerCase();
+    return topLevelThreads.filter((group) => {
+      const haystack = `${group.name} ${group.description || ''}`.toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [topLevelThreads, sidebarFilter]);
+
+  const mobilePanelOpen = isNarrowScreen && Boolean(activePanelTab && selectedGroup);
+  const mobileShowThreadFolder = isNarrowScreen && !activeChat;
+
   const onlineUserSet = useMemo(
     () => new Set((onlineUsers || []).map((name) => normalizeUsername(name)).filter(Boolean)),
     [onlineUsers],
   );
 
   const isUserOnline = useCallback((username) => onlineUserSet.has(normalizeUsername(username)), [onlineUserSet]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const syncViewport = () => {
+      const narrow = window.innerWidth <= 720;
+      setIsNarrowScreen(narrow);
+      if (narrow) setShowSidebar(false);
+    };
+    syncViewport();
+    window.addEventListener('resize', syncViewport);
+    return () => window.removeEventListener('resize', syncViewport);
+  }, []);
 
   useEffect(() => {
     activeChatRef.current = activeChat;
@@ -1226,13 +1358,27 @@ export default function ChatPage() {
 
   useEffect(() => {
     let active = true;
-    fetch('/api/auth/session', { cache: 'no-store' })
+    const cached = getCachedClientUser();
+    if (cached) {
+      setUser(cached);
+      setStatusMessage('Loading groups, friendships, and media...');
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 8000);
+
+    fetch('/api/auth/session', { cache: 'no-store', signal: controller.signal })
       .then(async (response) => {
         const payload = await response.json().catch(() => ({}));
         if (!active) return;
         if (response.ok && payload.user) {
+          persistClientUser(payload.user);
           setUser(payload.user);
           setStatusMessage('Loading groups, friendships, and media...');
+          return;
+        }
+        if (cached) {
+          setStatusMessage('Using saved session — reconnecting to chat…');
           return;
         }
         const token = typeof router.query.groupInvite === 'string' ? router.query.groupInvite : '';
@@ -1244,11 +1390,20 @@ export default function ChatPage() {
       })
       .catch(() => {
         if (!active) return;
+        if (cached) {
+          setStatusMessage('Using saved session — chat server may be slow to respond.');
+          return;
+        }
         router.push('/');
+      })
+      .finally(() => {
+        window.clearTimeout(timeoutId);
       });
 
     return () => {
       active = false;
+      controller.abort();
+      window.clearTimeout(timeoutId);
     };
   }, [router]);
 
@@ -1261,7 +1416,12 @@ export default function ChatPage() {
     fetchBootstrap().then(() => {
       setStatusMessage('Ready');
     }).catch((error) => {
-      reportError(error.message);
+      const message = String(error?.message || 'Could not load chat data.');
+      if (/ECONNREFUSED|fetch failed|502|503|504/i.test(message)) {
+        reportError('Chat API is offline. Start chat-service on port 3002 (run npm run dev from Cosmix/).');
+      } else {
+        reportError(message);
+      }
     });
   }, [user?.username]);
 
@@ -1269,13 +1429,18 @@ export default function ChatPage() {
     if (!user?.username) return undefined;
 
     let active = true;
+    let chatSocket = null;
     setConnectionState('connecting');
     socketConnectErrorShownRef.current = false;
-    const { url: socketUrl, options: socketOptions } = resolveChatSocketClient();
-    const chatSocket = io(socketUrl, socketOptions);
-    socketRef.current = chatSocket;
 
-    chatSocket.on('connect', () => {
+    (async () => {
+      const { default: io } = await import('socket.io-client');
+      if (!active) return;
+      const { url: socketUrl, options: socketOptions } = resolveChatSocketClient();
+      chatSocket = io(socketUrl, socketOptions);
+      socketRef.current = chatSocket;
+
+      chatSocket.on('connect', () => {
       if (!active) return;
       socketConnectErrorShownRef.current = false;
       setConnectionState('connected');
@@ -1366,16 +1531,24 @@ export default function ChatPage() {
       setCallStatusByGroup(next);
     });
 
-    chatSocket.on('chat_error', (payload) => {
-      reportError(payload?.message || 'Chat request failed.');
+      chatSocket.on('chat_error', (payload) => {
+        setMessages((previous) => previous.filter((message) => !message.pending));
+        reportError(payload?.message || 'Chat request failed.');
+      });
+    })().catch((error) => {
+      if (!active) return;
+      setConnectionState('offline');
+      reportError(error?.message || 'Could not load chat client.');
     });
 
     return () => {
       active = false;
-      chatSocket.removeAllListeners();
-      chatSocket.disconnect();
-      if (socketRef.current === chatSocket) {
-        socketRef.current = null;
+      if (chatSocket) {
+        chatSocket.removeAllListeners();
+        chatSocket.disconnect();
+        if (socketRef.current === chatSocket) {
+          socketRef.current = null;
+        }
       }
     };
   }, [user?.username]);
@@ -1447,8 +1620,9 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (!selectedGroup) return;
-    const members = selectedGroup.memberships.filter((membership) => membership.role === 'member').map((membership) => membership.username).join(', ');
-    const viewers = selectedGroup.memberships.filter((membership) => membership.role === 'viewer').map((membership) => membership.username).join(', ');
+    const memberships = selectedGroup?.memberships || [];
+    const members = memberships.filter((membership) => membership.role === 'member').map((membership) => membership.username).join(', ');
+    const viewers = memberships.filter((membership) => membership.role === 'viewer').map((membership) => membership.username).join(', ');
     setVisibilityForm({ members, viewers });
     setGroupSettingsForm({
       allowJoinByLink: selectedGroup.settings?.allowJoinByLink !== false,
@@ -1633,8 +1807,14 @@ export default function ChatPage() {
       setThreadCoverFile(null);
       setThreadCoverPreview('');
       setSidebarPanel('');
-      setShowSidebar(false);
-      setActivePanelTab('invite');
+      const createdGroup = payload.groups?.find((group) => group.id === createdGroupId);
+      if (createdGroup) {
+        openThread(createdGroup);
+        setActivePanelTab('invite');
+      } else {
+        setShowSidebar(false);
+        setActivePanelTab('');
+      }
       reportStatus('Thread created. Copy or share the invite link!');
     } catch (error) {
       reportError(error.message || 'Unable to create thread.');
@@ -1900,6 +2080,31 @@ export default function ChatPage() {
     setReplyDrafts((previous) => ({ ...previous, [messageId]: value }));
   }
 
+  function queueOutboundMessage({ type = 'text', text = '', gif = '' }) {
+    if (!user?.username || !activeChat) return null;
+    const clientMessageId = createClientMessageId();
+    const timestamp = new Date().toISOString();
+    const optimistic = {
+      id: clientMessageId,
+      clientMessageId,
+      pending: true,
+      type,
+      text,
+      gif,
+      user: user.username,
+      userId: user.id || null,
+      avatar: user.avatar || null,
+      timestamp,
+      chat: {
+        type: activeChat.type,
+        id: activeChat.id,
+        name: activeChat.name,
+      },
+    };
+    setMessages((previous) => mergeMessages(previous, [optimistic]));
+    return { clientMessageId, timestamp };
+  }
+
   function handleSendInlineReply(targetMessage) {
     const chatSocket = socketRef.current;
     if (!chatSocket?.connected || !activeChat) return;
@@ -1907,28 +2112,52 @@ export default function ChatPage() {
     if (!draft) return;
 
     const replyEnvelope = `[reply:${targetMessage.id}:${targetMessage.user || 'user'}]\n${draft}`;
+    const outbound = queueOutboundMessage({ type: 'text', text: replyEnvelope });
+    if (!outbound) return;
+
     chatSocket.emit('message', {
       type: 'text',
       text: replyEnvelope,
       chat: { type: activeChat.type, id: activeChat.id, name: activeChat.name },
-      timestamp: new Date().toISOString(),
+      timestamp: outbound.timestamp,
+      clientMessageId: outbound.clientMessageId,
     });
 
     setReplyDrafts((previous) => ({ ...previous, [targetMessage.id]: '' }));
     setActiveReplyMessageId('');
   }
 
+  function openThreadPanel(tab) {
+    setActivePanelTab(tab);
+    if (isNarrowScreen) setShowSidebar(false);
+  }
+
+  function leaveActiveThread() {
+    setActivePanelTab('');
+    setActiveChat(null);
+    setShowSidebar(false);
+  }
+
+  function openThread(group) {
+    selectChat({ type: 'group', id: group.id, name: group.name, label: group.name });
+    setActivePanelTab('');
+    setShowSidebar(false);
+  }
+
+  function selectGroup(group) {
+    openThread(group);
+  }
+
   function selectFriend(friendName) {
+    if (!user?.username) return;
     selectChat({
       type: 'dm',
       id: buildDmId(user.username, friendName),
       name: friendName,
       label: friendName,
     });
-  }
-
-  function selectGroup(group) {
-    selectChat({ type: 'group', id: group.id, name: group.name, label: group.name });
+    setActivePanelTab('');
+    setShowSidebar(false);
   }
 
   function emitTyping() {
@@ -1950,11 +2179,16 @@ export default function ChatPage() {
       return;
     }
     if (!activeChat || !composerText.trim()) return;
+    const text = composerText.trim();
+    const outbound = queueOutboundMessage({ type: 'text', text });
+    if (!outbound) return;
+
     chatSocket.emit('message', {
       type: 'text',
-      text: composerText.trim(),
+      text,
       chat: { type: activeChat.type, id: activeChat.id, name: activeChat.name },
-      timestamp: new Date().toISOString(),
+      timestamp: outbound.timestamp,
+      clientMessageId: outbound.clientMessageId,
     });
     setComposerText('');
   }
@@ -2029,11 +2263,104 @@ export default function ChatPage() {
   const isCurrentDmMuted = Boolean(activeChat?.type === 'dm' && pushPreferences.mutedUsernames.includes(normalizeUsername(activeChat.name)));
 
   // ── panel render helpers ────────────────────────────────────────────────
+  function renderThreadFolderLibrary() {
+    const childCountFor = (groupId) => bootstrap.groups.filter((g) => g.parentGroupId === groupId).length;
+
+    return (
+      <div className="chat-thread-folder" style={styles.threadFolderScroll}>
+        <div style={styles.threadFolderHeader}>
+          <div>
+            <h2 style={styles.threadFolderTitle}>Your threads</h2>
+            <p style={styles.threadFolderSubtitle}>
+              Each thread has its own chat, photo albums, and share link. Tap a folder to open it.
+            </p>
+          </div>
+          <button
+            type="button"
+            style={{ ...styles.btn, width: 'auto', padding: '10px 12px', flexShrink: 0 }}
+            onClick={() => { setShowSidebar(true); setSidebarPanel('group'); }}
+          >
+            + New
+          </button>
+        </div>
+
+        {filteredTopLevelThreads.length ? (
+          <div className="chat-thread-folder-grid" style={styles.threadFolderGrid}>
+            {filteredTopLevelThreads.map((group) => {
+              const albumCount = (group.folders || []).length;
+              const mediaCount = (group.images || []).length;
+              const subs = childCountFor(group.id);
+              const chatKey = getChatKey({ type: 'group', id: group.id });
+              return (
+                <button key={group.id} type="button" style={styles.threadFolderCard} onClick={() => openThread(group)}>
+                  <div style={styles.threadFolderCover}>
+                    {group.coverImageUrl ? (
+                      group.coverMediaType === 'video' ? (
+                        <video src={group.coverImageUrl} style={{ width: '100%', height: '100%', objectFit: 'cover' }} muted playsInline />
+                      ) : (
+                        <img src={group.coverImageUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      )
+                    ) : (
+                      <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', fontSize: '28px', opacity: 0.9 }}>🧵</div>
+                    )}
+                    {unreadCounts[chatKey] ? (
+                      <span style={{ position: 'absolute', top: '8px', right: '8px', ...styles.sidebarUnread }}>{unreadCounts[chatKey]}</span>
+                    ) : null}
+                  </div>
+                  <div style={styles.threadFolderBody}>
+                    <div style={styles.threadFolderName}>{group.name}</div>
+                    <div style={styles.threadFolderMeta}>
+                      {group.memberships?.length || 0} members · {albumCount} album{albumCount === 1 ? '' : 's'} · {mediaCount} media
+                      {subs > 0 ? ` · ${subs} sub-thread${subs === 1 ? '' : 's'}` : ''}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div style={styles.emptyState}>
+            <div style={{ fontSize: '44px', marginBottom: '6px' }}>📁</div>
+            <p style={{ fontSize: '15px', fontWeight: 800, color: theme.textHeading, margin: 0 }}>No threads yet</p>
+            <p style={{ fontSize: '13px', lineHeight: 1.6, margin: '8px 0 0', maxWidth: '300px' }}>
+              Create a thread for family, trips, or teams. Each thread keeps separate chat and albums.
+            </p>
+            <button type="button" style={{ ...styles.btn, width: 'auto', padding: '10px 16px', marginTop: '12px' }} onClick={() => { setShowSidebar(true); setSidebarPanel('group'); }}>
+              Create first thread
+            </button>
+          </div>
+        )}
+
+        {filteredFriends.length > 0 ? (
+          <div style={{ marginTop: '20px' }}>
+            <p style={styles.sidebarSectionLabel}>Direct messages</p>
+            <div style={{ display: 'grid', gap: '6px' }}>
+              {filteredFriends.map((friendName) => (
+                <button
+                  key={friendName}
+                  type="button"
+                  style={{ ...styles.sidebarItem, borderRadius: '14px', background: theme.cardBg, border: `1px solid ${theme.cardBorder}` }}
+                  onClick={() => selectFriend(friendName)}
+                >
+                  <div style={{ ...styles.sidebarItemAvatar, background: getUserColor(friendName, theme) }}>{friendName.slice(0, 2).toUpperCase()}</div>
+                  <div style={styles.sidebarItemText}>
+                    <div style={styles.sidebarItemName}>{friendName}</div>
+                    <div style={styles.sidebarItemMeta}>{isUserOnline(friendName) ? 'Online' : 'Offline'}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   function renderMembersPanel() {
     return (
       <>
         <div style={styles.badgeRow}>
-          {selectedGroup.memberships.map((m) => (
+          {(selectedGroup?.memberships || []).map((m) => (
             <span key={`${selectedGroup.id}-${m.username}`} style={styles.badge}>
               {m.username} · {m.role}
             </span>
@@ -2068,10 +2395,9 @@ export default function ChatPage() {
 
     return (
       <>
-        {threadInviteUrl ? (
+        {threadInviteUrl && !isNarrowScreen ? (
           <div style={{ display: 'grid', gap: '8px', padding: '12px', borderRadius: '14px', background: `linear-gradient(135deg, ${theme.blue}22, ${theme.purple}18)`, border: `1px solid ${theme.cardBorder}` }}>
             <div style={{ fontSize: '12px', fontWeight: 800, color: theme.textHeading }}>Share this thread</div>
-            <div style={{ fontSize: '11px', color: theme.textSecondary, lineHeight: 1.45 }}>Anyone with the link can join and browse albums.</div>
             <button
               type="button"
               style={{ ...styles.btn, marginTop: '2px' }}
@@ -2084,12 +2410,14 @@ export default function ChatPage() {
                 }
               }}
             >
-              Copy thread join link
+              Copy join link
             </button>
           </div>
         ) : null}
         <ChatAlbumGallery
+          key={selectedGroup?.id || 'albums'}
           theme={theme}
+          compact={isNarrowScreen}
           folders={selectedGroup?.folders || []}
           images={selectedGroup?.images || []}
           canManage={canManageFolders}
@@ -2329,10 +2657,22 @@ export default function ChatPage() {
   }
 
   // ── render ──────────────────────────────────────────────────────────────
+  if (!user) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: theme.pageBg, color: theme.textPrimary, fontFamily: theme.font, padding: '24px' }}>
+        <div style={{ textAlign: 'center', maxWidth: '320px' }}>
+          <div style={{ fontSize: '32px', marginBottom: '12px' }}>💬</div>
+          <p style={{ margin: 0, fontSize: '16px', fontWeight: 800, color: theme.textHeading }}>Loading chat…</p>
+          <p style={{ margin: '8px 0 0', fontSize: '13px', color: theme.textMuted, lineHeight: 1.5 }}>{statusMessage}</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div style={styles.root}>
+    <div className="chat-root" style={styles.root}>
       {/* Mobile backdrop */}
-      {showSidebar && <div style={styles.backdrop} className="sidebar-backdrop" onClick={() => setShowSidebar(false)} />}
+      {isNarrowScreen && showSidebar ? <div style={styles.backdrop} className="sidebar-backdrop" onClick={() => setShowSidebar(false)} /> : null}
 
       {/* Sidebar */}
       <aside className={`chat-sidebar${showSidebar ? ' chat-sidebar--open' : ''}`} style={styles.sidebar}>
@@ -2387,7 +2727,7 @@ export default function ChatPage() {
 
           {filteredGroups.length > 0 && (
             <>
-              <p style={styles.sidebarSectionLabel}>Threads</p>
+              <p style={styles.sidebarSectionLabel}>Thread folders</p>
               {filteredGroups.map(({ group, depth }) => {
                 const chatKey = getChatKey({ type: 'group', id: group.id });
                 const isActive = activeChat?.type === 'group' && activeChat?.id === group.id;
@@ -2401,7 +2741,7 @@ export default function ChatPage() {
                     )}
                     <div style={styles.sidebarItemText}>
                       <div style={styles.sidebarItemName}>{group.name}</div>
-                      <div style={styles.sidebarItemMeta}>{group.memberships.length} members</div>
+                      <div style={styles.sidebarItemMeta}>{(group.memberships || []).length} members</div>
                     </div>
                     {activeCallCount > 0 ? <span style={{ ...styles.sidebarUnread, background: theme.green }}>{activeCallCount}📞</span> : null}
                     {unreadCounts[chatKey] ? <span style={styles.sidebarUnread}>{unreadCounts[chatKey]}</span> : null}
@@ -2450,7 +2790,7 @@ export default function ChatPage() {
         )}
 
         {sidebarPanel === 'group' && (
-          <form style={styles.expansionPanel} onSubmit={handleCreateGroup}>
+          <form className="expansion-panel-mobile" style={styles.expansionPanel} onSubmit={handleCreateGroup}>
             <p style={styles.sectionTitle}>Create Thread</p>
             <button type="button" style={{ ...styles.btn, ...styles.btnSecondary, width: 'auto', padding: '10px 12px' }} onClick={() => threadCoverInputRef.current?.click()}>
               {threadCoverPreview ? 'Change cover photo/video' : '📷 Add cover photo/video'}
@@ -2489,10 +2829,14 @@ export default function ChatPage() {
       </aside>
 
       {/* Main chat area */}
-      <main style={styles.main}>
+      <main className="chat-main-area" style={styles.main}>
         {/* Top bar */}
         <div style={styles.topBar}>
-          <button type="button" className="hamburger-btn" style={styles.hamburger} onClick={() => setShowSidebar(true)}>☰</button>
+          {isNarrowScreen && activeChat ? (
+            <button type="button" className="chat-back-btn" style={styles.hamburger} onClick={leaveActiveThread} aria-label="Back to threads">←</button>
+          ) : (
+            <button type="button" className="hamburger-btn" style={styles.hamburger} onClick={() => setShowSidebar(true)}>☰</button>
+          )}
           <div style={styles.topBarTitle}>
             <h2 style={styles.chatName}>
               {activeChat
@@ -2510,8 +2854,8 @@ export default function ChatPage() {
             )}
           </div>
           <div style={styles.topBarIcons}>
-            <button type="button" title="Dashboard" style={styles.iconBtn} onClick={() => router.push('/dashboard')}>🏠</button>
-            <button type="button" title="Logout" style={{ ...styles.iconBtn, padding: '0 10px', minWidth: '70px', fontSize: '11px', fontWeight: 800 }} onClick={handleLogout}>Logout</button>
+            <button type="button" title="Dashboard" className="chat-top-icon chat-top-icon--desktop" style={styles.iconBtn} onClick={() => router.push('/dashboard')}>🏠</button>
+            <button type="button" title="Logout" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, padding: '0 10px', minWidth: '70px', fontSize: '11px', fontWeight: 800 }} onClick={handleLogout}>Logout</button>
             {activeChat?.type === 'dm' ? (
               <button
                 type="button"
@@ -2532,9 +2876,9 @@ export default function ChatPage() {
             {selectedGroup && (
               <>
                 <button type="button" title="Members" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(activePanelTab === 'members' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'members' ? '' : 'members')}>👥</button>
-                <button type="button" title="Albums" style={{ ...styles.iconBtn, ...(activePanelTab === 'albums' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'albums' ? '' : 'albums')}>📸</button>
-                <button type="button" title="Bookmarks" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(activePanelTab === 'bookmarks' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'bookmarks' ? '' : 'bookmarks')}>🔖</button>
-                <button type="button" title="Invite" style={{ ...styles.iconBtn, ...(activePanelTab === 'invite' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'invite' ? '' : 'invite')}>🔗</button>
+                <button type="button" title="Albums" className="chat-top-icon" style={{ ...styles.iconBtn, ...(activePanelTab === 'albums' ? styles.iconBtnActive : {}) }} onClick={() => openThreadPanel(activePanelTab === 'albums' ? '' : 'albums')}>📸</button>
+                <button type="button" title="Bookmarks" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(activePanelTab === 'bookmarks' ? styles.iconBtnActive : {}) }} onClick={() => openThreadPanel(activePanelTab === 'bookmarks' ? '' : 'bookmarks')}>🔖</button>
+                <button type="button" title="Invite" className="chat-top-icon" style={{ ...styles.iconBtn, ...(activePanelTab === 'invite' ? styles.iconBtnActive : {}) }} onClick={() => openThreadPanel(activePanelTab === 'invite' ? '' : 'invite')}>🔗</button>
                 {isGroupOwner && <button type="button" title="Settings" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(activePanelTab === 'settings' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'settings' ? '' : 'settings')}>⚙️</button>}
               </>
             )}
@@ -2562,9 +2906,21 @@ export default function ChatPage() {
           </div>
         )}
 
-        {/* Body: messages + optional side panel */}
-        <div style={styles.body}>
-          {/* Messages */}
+        {selectedGroup && childGroups.length > 0 && !mobilePanelOpen ? (
+          <div className="chat-thread-substrip" style={styles.threadSubStrip}>
+            {childGroups.map((g) => (
+              <button key={g.id} type="button" style={styles.threadSubChip} onClick={() => openThread(g)}>↳ {g.name}</button>
+            ))}
+          </div>
+        ) : null}
+
+        {/* Body: thread folder, messages, or full-screen panel */}
+        <div className={`chat-body${mobilePanelOpen ? ' chat-body--panel-open' : ''}`} style={styles.body}>
+          {mobileShowThreadFolder ? (
+            renderThreadFolderLibrary()
+          ) : null}
+
+          {!mobileShowThreadFolder && !mobilePanelOpen ? (
           <div ref={messagesContainerRef} className="chat-messages" style={styles.messages}>
             {visibleMessages.length ? visibleMessages.map((message) => {
               const isOwn = message.user === user?.username;
@@ -2579,7 +2935,10 @@ export default function ChatPage() {
                     )}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', ...(isOwn ? { alignItems: 'flex-end' } : {}) }}>
                       {!isOwn && <span style={{ fontSize: '11px', fontWeight: 800, color: getUserColor(message.user || 'user', theme), paddingLeft: '2px' }}>{message.user}</span>}
-                      <div style={isOwn ? styles.msgBubbleOwn : styles.msgBubbleOther}>
+                      <div style={{
+                        ...(isOwn ? styles.msgBubbleOwn : styles.msgBubbleOther),
+                        ...(message.pending ? { opacity: 0.72 } : {}),
+                      }}>
                         {parsed.replyToMessageId && (
                           <div style={isOwn ? styles.replyQuote : styles.replyQuoteOther}>↩ Reply to {parsed.replyToUser}</div>
                         )}
@@ -2642,17 +3001,17 @@ export default function ChatPage() {
             )}
             <div ref={messagesEndRef} />
           </div>
+          ) : null}
 
-          {/* Side panel */}
-          {activePanelTab && selectedGroup && (
-            <div className={`side-panel${activePanelTab === 'albums' || activePanelTab === 'folders' || activePanelTab === 'media' ? ' side-panel--albums' : ''}`} style={styles.sidePanel}>
-              <div style={styles.sidePanelHeader}>
+          {activePanelTab && selectedGroup ? (
+            <div className={`side-panel${activePanelTab === 'albums' || activePanelTab === 'folders' || activePanelTab === 'media' ? ' side-panel--albums' : ''}${mobilePanelOpen ? ' side-panel--mobile-full' : ''}`} style={mobilePanelOpen ? { ...styles.sidePanel, width: '100%', borderLeft: 'none' } : styles.sidePanel}>
+              <div className="side-panel-header-wrap" style={styles.sidePanelHeader}>
                 <p style={styles.sidePanelTitle}>
-                  {activePanelTab === 'members' ? '👥 Members' : activePanelTab === 'albums' || activePanelTab === 'folders' || activePanelTab === 'media' ? '📸 Albums' : activePanelTab === 'bookmarks' ? '🔖 Bookmarks' : activePanelTab === 'invite' ? '🔗 Invite' : '⚙️ Settings'}
+                  {activePanelTab === 'members' ? '👥 Members' : activePanelTab === 'albums' || activePanelTab === 'folders' || activePanelTab === 'media' ? '📸 Albums' : activePanelTab === 'bookmarks' ? '🔖 Bookmarks' : activePanelTab === 'invite' ? '🔗 Share' : '⚙️ Settings'}
                 </p>
-                <button type="button" style={styles.sidePanelClose} onClick={() => setActivePanelTab('')}>✕</button>
+                <button type="button" style={styles.sidePanelClose} onClick={() => setActivePanelTab('')} aria-label="Close panel">{isNarrowScreen ? '← Back' : '✕'}</button>
               </div>
-              <div style={styles.sidePanelContent}>
+              <div className="side-panel-content" style={styles.sidePanelContent}>
                 {activePanelTab === 'members' && renderMembersPanel()}
                 {(activePanelTab === 'albums' || activePanelTab === 'folders' || activePanelTab === 'media') && renderAlbumsPanel()}
                 {activePanelTab === 'bookmarks' && renderBookmarksPanel()}
@@ -2660,7 +3019,7 @@ export default function ChatPage() {
                 {activePanelTab === 'settings' && renderSettingsPanel()}
               </div>
             </div>
-          )}
+          ) : null}
         </div>
 
         <div className="chat-bottom-stack">
@@ -2669,16 +3028,34 @@ export default function ChatPage() {
             {typingUsers.length ? `${typingUsers.join(', ')} is typing…` : ''}
           </div>
 
-          {selectedGroup ? (
+          {selectedGroup && activeChat?.type === 'group' ? (
             <div className="chat-thread-dock">
-              <button type="button" className={`chat-thread-dock-btn${!activePanelTab ? ' chat-thread-dock-btn--active' : ''}`} onClick={() => setActivePanelTab('')}>💬 Chat</button>
-              <button type="button" className={`chat-thread-dock-btn${activePanelTab === 'albums' || activePanelTab === 'folders' || activePanelTab === 'media' ? ' chat-thread-dock-btn--active' : ''}`} onClick={() => setActivePanelTab('albums')}>📸 Albums</button>
-              <button type="button" className={`chat-thread-dock-btn${activePanelTab === 'invite' ? ' chat-thread-dock-btn--active' : ''}`} onClick={() => setActivePanelTab('invite')}>🔗 Invite</button>
-              <button type="button" className={`chat-thread-dock-btn${activePanelTab === 'members' || activePanelTab === 'bookmarks' || activePanelTab === 'settings' ? ' chat-thread-dock-btn--active' : ''}`} onClick={() => setActivePanelTab(activePanelTab === 'members' ? '' : 'members')}>👥 More</button>
+              {[
+                { id: '', icon: '💬', label: 'Chat' },
+                { id: 'albums', icon: '📸', label: 'Albums' },
+                { id: 'invite', icon: '🔗', label: 'Share' },
+                { id: 'members', icon: '👥', label: 'People' },
+                { id: 'bookmarks', icon: '🔖', label: 'Saved' },
+                ...(isGroupOwner ? [{ id: 'settings', icon: '⚙️', label: 'Admin' }] : []),
+              ].map((item) => {
+                const isAlbums = item.id === 'albums' && (activePanelTab === 'albums' || activePanelTab === 'folders' || activePanelTab === 'media');
+                const isActive = item.id === '' ? !activePanelTab : (item.id === 'albums' ? isAlbums : activePanelTab === item.id);
+                return (
+                  <button
+                    key={item.id || 'chat'}
+                    type="button"
+                    className={`chat-thread-dock-btn${isActive ? ' chat-thread-dock-btn--active' : ''}`}
+                    onClick={() => openThreadPanel(item.id)}
+                  >
+                    <span>{item.icon}</span>
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
             </div>
           ) : null}
 
-          {/* Composer */}
+          {activeChat && (!isNarrowScreen || !mobilePanelOpen) ? (
           <form className="chat-composer" style={styles.composer} onSubmit={handleSendMessage}>
             <textarea
               ref={composerRef}
@@ -2692,6 +3069,7 @@ export default function ChatPage() {
             />
             <button type="submit" style={styles.sendBtn} disabled={!activeChat || !composerText.trim()}>➤</button>
           </form>
+          ) : null}
         </div>
       </main>
 
@@ -2721,25 +3099,49 @@ export default function ChatPage() {
       />
 
       <style jsx>{`
-        /* Mobile: sidebar slides in from left */
-        .chat-sidebar {
-          position: fixed;
-          top: 0; left: 0; bottom: 0;
-          z-index: 30;
-          transform: translateX(-260px);
-          transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        .chat-sidebar--open {
-          transform: translateX(0);
-          box-shadow: 4px 0 28px rgba(0,0,0,0.28);
+        /* Mobile: sidebar is an overlay drawer; main fills the screen */
+        @media (max-width: 720px) {
+          .chat-root {
+            position: relative;
+            width: 100%;
+          }
+          .chat-main-area {
+            width: 100%;
+            flex: 1 1 auto;
+            min-width: 0;
+          }
+          .chat-sidebar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            width: min(92vw, 320px) !important;
+            max-width: 320px;
+            z-index: 40;
+            transform: translateX(-105%);
+            transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: none;
+            pointer-events: none;
+          }
+          .chat-sidebar--open {
+            transform: translateX(0);
+            box-shadow: 4px 0 28px rgba(0,0,0,0.35);
+            pointer-events: auto;
+          }
+          .sidebar-backdrop {
+            z-index: 35;
+          }
         }
         /* Desktop: sidebar always visible, hamburger hidden */
-        @media (min-width: 680px) {
+        @media (min-width: 721px) {
           .chat-sidebar {
             position: relative;
             transform: none !important;
-            top: auto; left: auto; bottom: auto;
+            top: auto;
+            left: auto;
+            bottom: auto;
             box-shadow: none !important;
+            pointer-events: auto;
           }
           .sidebar-backdrop { display: none !important; }
           .hamburger-btn { display: none !important; }
@@ -2760,39 +3162,71 @@ export default function ChatPage() {
           .msg-actions { opacity: 1 !important; }
         }
         /* Side panel: overlay on mobile */
-        @media (max-width: 680px) {
-          .side-panel {
-            position: fixed !important;
-            top: 0; right: 0; bottom: 0;
-            z-index: 25;
-            width: min(300px, 88vw) !important;
-            box-shadow: -4px 0 28px rgba(0,0,0,0.25);
+        @media (max-width: 720px) {
+          .chat-body--panel-open {
+            position: relative;
           }
-          .side-panel--albums {
-            left: 0 !important;
-            right: 0 !important;
+          .chat-body--panel-open .chat-messages {
+            display: none !important;
+          }
+          .side-panel--mobile-full {
+            position: absolute !important;
+            inset: 0 !important;
+            z-index: 20 !important;
             width: 100% !important;
             max-width: none !important;
+            box-shadow: none !important;
+            display: flex !important;
+            flex-direction: column !important;
+            overflow: hidden !important;
+          }
+          .side-panel--albums.side-panel--mobile-full .side-panel-content {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            overscroll-behavior: contain;
+            padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+          }
+          .side-panel--mobile-full .side-panel-header-wrap {
+            flex-shrink: 0;
+          }
+          .chat-thread-folder {
+            flex: 1;
+            min-height: 0;
+          }
+          .chat-thread-folder-grid {
+            grid-template-columns: 1fr !important;
           }
           .chat-top-icon--desktop { display: none !important; }
+          .chat-back-btn { display: grid !important; }
           .chat-thread-dock {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            display: flex;
             gap: 6px;
             padding: 8px 10px;
             border-top: 1px solid ${theme.cardBorder};
             background: ${theme.panelBg};
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
           }
           .chat-thread-dock-btn {
             border: 1px solid ${theme.cardBorder};
             background: ${theme.cardBg};
             color: ${theme.textSecondary};
             border-radius: 12px;
-            padding: 8px 4px;
+            padding: 8px 10px;
             font-size: 10px;
             font-weight: 800;
             font-family: ${theme.font};
             cursor: pointer;
+            flex: 1 0 auto;
+            min-width: 64px;
+            display: grid;
+            gap: 2px;
+            justify-items: center;
+          }
+          .expansion-panel-mobile {
+            max-height: min(52vh, 420px) !important;
           }
           .chat-thread-dock-btn--active {
             background: ${theme.blue}22;
@@ -2829,8 +3263,11 @@ export default function ChatPage() {
           .chat-thread-dock { display: none; }
           .chat-thread-strip { display: none; }
         }
-        @media (max-width: 680px) {
-          .chat-thread-dock { display: grid; }
+        @media (max-width: 720px) {
+          .chat-thread-dock { display: flex; }
+        }
+        @media (min-width: 721px) {
+          .chat-back-btn { display: none !important; }
         }
         /* Keep composer + send above fixed mobile bottom nav */
         @media (max-width: 720px) {

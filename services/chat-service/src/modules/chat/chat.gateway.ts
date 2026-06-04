@@ -163,6 +163,7 @@ export class ChatGateway
       gif?: string;
       chat: { type: 'group' | 'dm'; name: string };
       timestamp: string;
+      clientMessageId?: string;
     },
     @ConnectedSocket() socket: Socket,
   ) {

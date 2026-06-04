@@ -2,6 +2,7 @@ import { useRouter } from 'next/router';
 import { useEffect, useMemo, useState } from 'react';
 import { restoreUserSession } from '../lib/auth-client';
 import { useTheme } from '../lib/ThemePicker';
+import { subscribeToWebPush } from '../lib/webPush';
 
 async function readJsonResponse(response) {
   const payload = await response.json().catch(() => ({}));
@@ -18,6 +19,7 @@ export default function PushSettingsPage() {
   const [friends, setFriends] = useState([]);
   const [groups, setGroups] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [enablingPush, setEnablingPush] = useState(false);
   const [status, setStatus] = useState('Loading preferences...');
   const [prefs, setPrefs] = useState({
     muteAll: false,
@@ -52,6 +54,7 @@ export default function PushSettingsPage() {
           mutedUsernames: Array.isArray(nextPrefs.mutedUsernames) ? nextPrefs.mutedUsernames : [],
         });
         setStatus('Ready');
+        void subscribeToWebPush(user.username);
       } catch (error) {
         if (!active) return;
         setStatus(error.message || 'Unable to load push preferences.');
@@ -79,6 +82,25 @@ export default function PushSettingsPage() {
     if (next.has(key)) next.delete(key);
     else next.add(key);
     setPrefs((previous) => ({ ...previous, mutedUsernames: Array.from(next) }));
+  }
+
+  async function enableDevicePush() {
+    if (!user?.username) return;
+    setEnablingPush(true);
+    setStatus('Requesting notification permission...');
+    const result = await subscribeToWebPush(user.username);
+    if (result.ok) {
+      setStatus('This device is subscribed to chat push notifications.');
+    } else if (result.reason === 'permission-denied') {
+      setStatus('Notifications blocked. Allow them in your browser or phone settings, then try again.');
+    } else if (result.reason === 'no-vapid-key') {
+      setStatus('Push is not configured on the server (missing VAPID keys).');
+    } else if (result.reason === 'unsupported') {
+      setStatus('This browser does not support Web Push.');
+    } else {
+      setStatus('Could not enable push on this device. Try again from Chrome/Safari with HTTPS.');
+    }
+    setEnablingPush(false);
   }
 
   async function savePreferences() {
@@ -123,6 +145,21 @@ export default function PushSettingsPage() {
         </div>
 
         <p style={{ margin: 0, color: theme.textMuted }}>{status}</p>
+
+        <section style={{ border: `1px solid ${theme.cardBorder}`, borderRadius: 14, background: theme.panelBg, padding: 14, display: 'grid', gap: 10 }}>
+          <h2 style={{ margin: 0, fontSize: 18, color: theme.textHeading }}>Chat alerts on this phone</h2>
+          <p style={{ margin: 0, fontSize: 13, color: theme.textSecondary, lineHeight: 1.5 }}>
+            Enable once so new direct messages and group chats notify you even when Cosmix is closed. On iPhone, use Safari, tap Share, then Add to Home Screen for reliable background alerts.
+          </p>
+          <button
+            type="button"
+            onClick={enableDevicePush}
+            disabled={enablingPush || !user?.username}
+            style={{ border: 'none', borderRadius: 12, padding: '12px 14px', fontWeight: 700, fontSize: 15, cursor: enablingPush ? 'not-allowed' : 'pointer', background: `linear-gradient(135deg, ${theme.blue}, ${theme.orange})`, color: '#fff', fontFamily: theme.font, justifySelf: 'start' }}
+          >
+            {enablingPush ? 'Enabling...' : 'Enable push on this device'}
+          </button>
+        </section>
 
         <section style={{ border: `1px solid ${theme.cardBorder}`, borderRadius: 14, background: theme.panelBg, padding: 14, display: 'grid', gap: 10 }}>
           <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>

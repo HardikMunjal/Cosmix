@@ -1265,6 +1265,33 @@ export class WellnessStorageService {
     };
   }
 
+  private aggregateActivityTotals(entries: WellnessEntry[] = []) {
+    const keys = [
+      'badmintonMinutes',
+      'runningMinutes',
+      'cyclingMinutes',
+      'swimmingMinutes',
+      'yogaMinutes',
+      'walkingMinutes',
+      'exerciseMinutes',
+      'footballMinutes',
+      'cricketMinutes',
+      'meditationMinutes',
+    ] as const;
+    const totals = Object.fromEntries(keys.map((key) => [key, 0])) as Record<(typeof keys)[number], number>;
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      for (const key of keys) {
+        const value = Number((entry as any)?.[key] || 0);
+        if (Number.isFinite(value) && value > 0) {
+          totals[key] += value;
+        }
+      }
+    }
+    return Object.fromEntries(
+      Object.entries(totals).map(([key, value]) => [key, Number(value.toFixed(1))]),
+    );
+  }
+
   async loadActivePlanSummary(userId: string) {
     const [store, scoringRules] = await Promise.all([this.loadStore(userId), this.loadScoringRules()]);
     const normalizedStore = this.normalizeStore(store);
@@ -1280,12 +1307,14 @@ export class WellnessStorageService {
         cumulativeTotal: 0,
         lastDayScore: 0,
         series: [],
+        activityTotals: {},
       };
     }
 
     const orderedScores = [...(Array.isArray(derived.dailyScores) ? derived.dailyScores : [])]
       .sort((left, right) => String(left.date || '').localeCompare(String(right.date || '')));
     const latest = orderedScores[orderedScores.length - 1] || null;
+    const planEntries = this.activeEntriesForPlan(derived.entries || [], activePlan.id);
 
     return {
       userId,
@@ -1302,6 +1331,7 @@ export class WellnessStorageService {
         date: score.date,
         cumulative: Number(score.cumulativeTotalScore || 0),
       })),
+      activityTotals: this.aggregateActivityTotals(planEntries),
     };
   }
 }

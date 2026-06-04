@@ -1,3 +1,5 @@
+import { subscribeToWebPush } from './webPush';
+
 export function persistClientUser(user) {
   localStorage.setItem('user', JSON.stringify(user));
 }
@@ -36,6 +38,7 @@ export async function restoreUserSession(router, setUser) {
     }
     persistClientUser(data.user);
     setUser(data.user);
+    void subscribeToWebPush(data.user.username);
     return data.user;
   } catch (_) {
     if (!cached) {

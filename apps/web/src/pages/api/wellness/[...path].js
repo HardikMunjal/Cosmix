@@ -6,7 +6,7 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 function emptyWellnessPayload(segments, method) {
   if (method !== 'GET') return null;
   if (segments.startsWith('plan-summary/')) {
-    return { hasActivePlan: false, series: [], plan: null, cumulativeTotal: 0 };
+    return { hasActivePlan: false, series: [], plan: null, cumulativeTotal: 0, activityTotals: {} };
   }
   if (segments.startsWith('data/')) {
     return { entries: [], dailyScores: [], plans: [], plan: null };

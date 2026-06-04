@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { useEffect, useState } from 'react';
 
@@ -17,7 +18,10 @@ export function MobileBottomNav({ theme, items = [], activeId, hideSpacer = fals
     if (activeId) return item.id === activeId;
     if (!hydrated) return false;
     const paths = item.matchPaths || (item.href ? [item.href] : []);
-    return paths.some((path) => router.pathname === path || router.asPath.startsWith(path));
+    return paths.some((path) => {
+      const base = String(path).split('?')[0];
+      return router.pathname === base || router.asPath.startsWith(base);
+    });
   };
 
   const navStyle = hydrated && theme
@@ -39,20 +43,37 @@ export function MobileBottomNav({ theme, items = [], activeId, hideSpacer = fals
         <div className="cosmix-mobile-nav-inner">
           {items.map((item) => {
             const isActive = resolveIsActive(item);
-            const handleClick = () => {
-              if (item.onClick) {
-                item.onClick();
-                return;
-              }
-              if (item.href) router.push(item.href);
-            };
+            const className = `cosmix-mobile-nav-btn${isActive ? ' is-active' : ''}`;
+
+            if (item.href) {
+              return (
+                <Link
+                  key={item.id}
+                  href={item.href}
+                  className={className}
+                  aria-current={isActive ? 'page' : undefined}
+                  onClick={(event) => {
+                    const base = String(item.href).split('?')[0];
+                    if (router.pathname === base && !String(item.href).includes('?')) {
+                      event.preventDefault();
+                    }
+                  }}
+                >
+                  <span className="cosmix-mobile-nav-icon" aria-hidden="true">{item.icon}</span>
+                  <span className="cosmix-mobile-nav-label">{item.label}</span>
+                </Link>
+              );
+            }
+
             return (
               <button
                 key={item.id}
                 type="button"
-                className={`cosmix-mobile-nav-btn${isActive ? ' is-active' : ''}`}
+                className={className}
                 aria-current={isActive ? 'page' : undefined}
-                onClick={handleClick}
+                onClick={() => {
+                  if (item.onClick) item.onClick();
+                }}
               >
                 <span className="cosmix-mobile-nav-icon" aria-hidden="true">{item.icon}</span>
                 <span className="cosmix-mobile-nav-label">{item.label}</span>

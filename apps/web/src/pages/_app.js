@@ -9,7 +9,7 @@ function RouteLoader({ active }) {
         style={{
           position: 'fixed',
           inset: 0,
-          pointerEvents: active ? 'auto' : 'none',
+          pointerEvents: 'none',
           opacity: active ? 1 : 0,
           transition: 'opacity 180ms ease',
           zIndex: 9999,
@@ -57,13 +57,18 @@ export default function App({ Component, pageProps }) {
 
   useEffect(() => {
     let loaderTimeout = null;
+    let safetyTimeout = null;
 
     const handleStart = () => {
       if (loaderTimeout) clearTimeout(loaderTimeout);
+      if (safetyTimeout) clearTimeout(safetyTimeout);
       setRouteLoading(true);
+      safetyTimeout = setTimeout(() => setRouteLoading(false), 12000);
     };
 
     const handleStop = () => {
+      if (safetyTimeout) clearTimeout(safetyTimeout);
+      safetyTimeout = null;
       loaderTimeout = setTimeout(() => setRouteLoading(false), 180);
     };
 
@@ -73,6 +78,7 @@ export default function App({ Component, pageProps }) {
 
     return () => {
       if (loaderTimeout) clearTimeout(loaderTimeout);
+      if (safetyTimeout) clearTimeout(safetyTimeout);
       router.events.off('routeChangeStart', handleStart);
       router.events.off('routeChangeComplete', handleStop);
       router.events.off('routeChangeError', handleStop);
@@ -171,6 +177,7 @@ export default function App({ Component, pageProps }) {
           cursor: pointer;
           min-height: 48px;
           transition: background 0.15s ease, color 0.15s ease;
+          text-decoration: none;
         }
         .cosmix-mobile-nav-btn.is-active,
         .cosmix-mobile-nav-btn[aria-current="page"] {

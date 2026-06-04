@@ -8,6 +8,8 @@ import { MobileBottomNav } from '../lib/MobileNav';
 import { buildStrategySummary, formatCurrency } from '../lib/userInsights';
 import NotificationModule from '../modules/dashboard/NotificationModule';
 import PostFeedModule from '../modules/dashboard/PostFeedModule';
+import { ACTIVITY_METRIC_DEFS as activityMetricDefs, aggregateActivityTotals } from '../lib/activityMetrics';
+import { subscribeToWebPush } from '../lib/webPush';
 
 const tradingDeskModules = [
   { icon: 'NT', title: 'Nifty Tracker', desc: 'Track saved strategies, live payoff movement, and execution snapshots.', path: '/nifty-strategies', accent: '#22c55e' },
@@ -66,29 +68,6 @@ function isGenericMonthlyPlanName(value) {
 }
 
 const comparisonLineColors = ['#38bdf8', '#14b8a6', '#f97316', '#a855f7', '#ec4899', '#22c55e', '#ef4444'];
-const activityMetricDefs = [
-  { key: 'badmintonMinutes', label: 'Badminton' },
-  { key: 'runningMinutes', label: 'Running' },
-  { key: 'cyclingMinutes', label: 'Cycling' },
-  { key: 'swimmingMinutes', label: 'Swimming' },
-  { key: 'yogaMinutes', label: 'Yoga' },
-];
-
-function aggregateActivityTotals(entries = []) {
-  const totals = Object.fromEntries(activityMetricDefs.map((metric) => [metric.key, 0]));
-  for (const entry of Array.isArray(entries) ? entries : []) {
-    for (const metric of activityMetricDefs) {
-      const value = Number(entry?.[metric.key] || 0);
-      if (Number.isFinite(value) && value > 0) {
-        totals[metric.key] += value;
-      }
-    }
-  }
-
-  return Object.fromEntries(
-    Object.entries(totals).map(([key, value]) => [key, Number(value.toFixed(1))]),
-  );
-}
 
 function SettingsIcon({ color }) {
   return (
@@ -317,12 +296,12 @@ function MiniTrendSparkline({ series = [], theme }) {
   );
 }
 
-function BuddyCard({ buddy, theme }) {
+function BuddyCard({ buddy, theme, compact = false }) {
   const imageUrl = getBuddyImage(buddy.name || buddy.label || buddy.id || 'buddy', Number(buddy.rank || 0));
   const latestValue = buddy.series?.length ? Number(buddy.series[buddy.series.length - 1].cumulative || 0) : 0;
   return (
-    <article style={{ borderRadius: '24px', border: `1px solid ${theme.cardBorder}`, background: theme.cardBg, overflow: 'hidden', display: 'grid', gap: '14px' }}>
-      <div style={{ position: 'relative', minHeight: '170px', overflow: 'hidden' }}>
+    <article className="dashboard-buddy-card" style={{ borderRadius: compact ? '20px' : '24px', border: `1px solid ${theme.cardBorder}`, background: theme.cardBg, overflow: 'hidden', display: 'grid', gap: '14px' }}>
+      <div style={{ position: 'relative', minHeight: compact ? '140px' : '170px', overflow: 'hidden' }}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={imageUrl} alt={`Buddy ${buddy.name || 'profile'}`} style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center' }} />
         <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: '14px', background: 'linear-gradient(180deg, transparent, rgba(15,23,42,0.85))' }}>
@@ -422,15 +401,16 @@ function LineChart({ points, theme, height = 220, emptyLabel = 'No data yet', va
   );
 }
 
-function ComparisonTrendChart({ rows, theme, height = 210, emptyLabel = 'No active wellness comparison data yet' }) {
+function ComparisonTrendChart({ rows, theme, height = 210, emptyLabel = 'No active wellness comparison data yet', compact = false }) {
   if (!rows.length) {
     return <div style={{ minHeight: `${height}px`, display: 'grid', placeItems: 'center', color: theme.textSecondary, fontSize: '14px' }}>{emptyLabel}</div>;
   }
 
-  const width = 640;
-  const pad = { left: 16, right: 30, top: 18, bottom: 30 };
+  const width = compact ? 360 : 640;
+  const pad = compact ? { left: 12, right: 16, top: 14, bottom: 26 } : { left: 16, right: 30, top: 18, bottom: 30 };
+  const chartHeight = compact ? Math.min(height, 200) : height;
   const plotWidth = width - pad.left - pad.right;
-  const plotHeight = height - pad.top - pad.bottom;
+  const plotHeight = chartHeight - pad.top - pad.bottom;
   const allValues = rows.flatMap((row) => (row.series || []).map((point) => Number(point.cumulative || 0))).filter((value) => Number.isFinite(value));
   const min = Math.min(0, ...allValues);
   const max = Math.max(1, ...allValues);
@@ -445,7 +425,8 @@ function ComparisonTrendChart({ rows, theme, height = 210, emptyLabel = 'No acti
 
   return (
     <div style={{ display: 'grid', gap: '12px' }}>
-      <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={{ width: '100%', height: `${height}px`, display: 'block' }}>
+      <div className="dashboard-chart-scroll">
+      <svg viewBox={`0 0 ${width} ${chartHeight}`} preserveAspectRatio={compact ? 'xMidYMid meet' : 'none'} style={{ width: '100%', minWidth: compact ? `${width}px` : undefined, height: `${chartHeight}px`, display: 'block' }}>
         <defs>
           <linearGradient id="buddy-race-grid-glow" x1="0" x2="1" y1="0" y2="1">
             <stop offset="0%" stopColor="rgba(34,197,94,0.18)" />
@@ -462,15 +443,15 @@ function ComparisonTrendChart({ rows, theme, height = 210, emptyLabel = 'No acti
         </defs>
         <rect x={pad.left} y={pad.top} width={plotWidth} height={plotHeight} rx="18" fill="url(#buddy-race-grid-glow)" opacity="0.55" />
         <line x1={pad.left} y1={zeroY} x2={width - pad.right} y2={zeroY} stroke={theme.graphGridLine} strokeDasharray="5 4" />
-        <line x1={finishX} y1={pad.top} x2={finishX} y2={height - pad.bottom} stroke={theme.textHeading} strokeOpacity="0.22" strokeDasharray="6 6" />
+        <line x1={finishX} y1={pad.top} x2={finishX} y2={chartHeight - pad.bottom} stroke={theme.textHeading} strokeOpacity="0.22" strokeDasharray="6 6" />
         {(referenceRow?.series || []).map((point, index) => {
           if (index !== 0 && index !== referenceRow.series.length - 1 && index % labelStep !== 0) return null;
           const alignedIndex = (maxSeriesLength - referenceRow.series.length) + index;
           const x = xFor(alignedIndex);
           return (
             <g key={`${point.date}-${index}`}>
-              <line x1={x} y1={pad.top} x2={x} y2={height - pad.bottom} stroke={theme.graphGridLine} strokeOpacity="0.22" />
-              <text x={x} y={height - 8} textAnchor="middle" fill={theme.textMuted} fontSize="10">{String(point.date || '').slice(5)}</text>
+              <line x1={x} y1={pad.top} x2={x} y2={chartHeight - pad.bottom} stroke={theme.graphGridLine} strokeOpacity="0.22" />
+              <text x={x} y={chartHeight - 8} textAnchor="middle" fill={theme.textMuted} fontSize={compact ? '9' : '10'}>{String(point.date || '').slice(5)}</text>
             </g>
           );
         })}
@@ -495,15 +476,16 @@ function ComparisonTrendChart({ rows, theme, height = 210, emptyLabel = 'No acti
         })}
         <text x={finishX - 2} y={pad.top - 4} textAnchor="end" fill={theme.textMuted} fontSize="10" fontWeight="800">Finish</text>
       </svg>
+      </div>
 
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 12px' }}>
+      <div className="dashboard-buddy-legend" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
         {rows.map((row) => (
-          <div key={`${row.id}-legend`} style={{ display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '11px', color: theme.textSecondary, fontWeight: 700, padding: '6px 10px', borderRadius: '999px', background: `${row.color}10`, border: `1px solid ${row.color}33` }}>
-            <span style={{ minWidth: '18px', height: '18px', borderRadius: '999px', background: row.color, color: '#fff', display: 'inline-grid', placeItems: 'center', fontSize: '10px', fontWeight: 900 }}>{row.rank}</span>
-            <span style={{ width: '10px', height: '10px', borderRadius: '999px', background: row.color, boxShadow: `0 0 0 3px ${row.color}22` }} />
-            <span style={{ color: theme.textHeading }}>{row.displayPlanName || row.planName || row.label || row.name}</span>
-            <span style={{ color: theme.textMuted }}>{row.isSelf ? '(you)' : `(${row.name})`}</span>
-            <span>{`${Number(row.current || 0).toFixed(1)}`}</span>
+          <div key={`${row.id}-legend`} className="dashboard-buddy-legend-chip" style={{ display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '11px', color: theme.textSecondary, fontWeight: 700, padding: '6px 10px', borderRadius: '999px', background: `${row.color}10`, border: `1px solid ${row.color}33`, maxWidth: '100%' }}>
+            <span style={{ minWidth: '18px', height: '18px', borderRadius: '999px', background: row.color, color: '#fff', display: 'inline-grid', placeItems: 'center', fontSize: '10px', fontWeight: 900, flexShrink: 0 }}>{row.rank}</span>
+            <span style={{ width: '10px', height: '10px', borderRadius: '999px', background: row.color, boxShadow: `0 0 0 3px ${row.color}22`, flexShrink: 0 }} />
+            <span style={{ color: theme.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.displayPlanName || row.planName || row.label || row.name}</span>
+            <span style={{ color: theme.textMuted, flexShrink: 0 }}>{row.isSelf ? '(you)' : ''}</span>
+            <span style={{ flexShrink: 0 }}>{`${Number(row.current || 0).toFixed(1)}`}</span>
           </div>
         ))}
       </div>
@@ -511,7 +493,7 @@ function ComparisonTrendChart({ rows, theme, height = 210, emptyLabel = 'No acti
   );
 }
 
-function ActivityFaceoffChart({ rows, theme, height = 320, emptyLabel = 'No activity comparison data yet' }) {
+function ActivityFaceoffChart({ rows, theme, height = 320, emptyLabel = 'No activity comparison data yet', compact = false }) {
   if (!rows.length) {
     return <div style={{ minHeight: `${height}px`, display: 'grid', placeItems: 'center', color: theme.textSecondary, fontSize: '14px' }}>{emptyLabel}</div>;
   }
@@ -524,9 +506,39 @@ function ActivityFaceoffChart({ rows, theme, height = 320, emptyLabel = 'No acti
       color: row.color,
       value: Number(row.activityTotals?.[metric.key] || 0),
     })),
-  }));
+  })).filter((metric) => metric.values.some((point) => point.value > 0));
+
+  if (!metrics.length) {
+    return <div style={{ minHeight: `${height}px`, display: 'grid', placeItems: 'center', color: theme.textSecondary, fontSize: '14px' }}>{emptyLabel}</div>;
+  }
 
   const maxValue = Math.max(1, ...metrics.flatMap((metric) => metric.values.map((point) => point.value)));
+
+  if (compact) {
+    return (
+      <div className="dashboard-activity-mobile" style={{ display: 'grid', gap: '12px' }}>
+        {metrics.map((metric) => (
+          <div key={metric.key} style={{ borderRadius: '16px', border: `1px solid ${theme.cardBorder}`, background: theme.cardBg, padding: '12px 14px' }}>
+            <div style={{ fontSize: '12px', fontWeight: 800, color: theme.textHeading, marginBottom: '10px' }}>{metric.label}</div>
+            <div style={{ display: 'grid', gap: '8px' }}>
+              {metric.values.map((point) => (
+                <div key={`${metric.key}-${point.id}`}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginBottom: '4px', fontSize: '11px' }}>
+                    <span style={{ color: theme.textHeading, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{point.label}</span>
+                    <span style={{ color: theme.textMuted, fontWeight: 800, flexShrink: 0 }}>{`${point.value.toFixed(0)}m`}</span>
+                  </div>
+                  <div style={{ height: '8px', borderRadius: '999px', background: `${theme.cardBorder}`, overflow: 'hidden' }}>
+                    <div style={{ width: `${Math.max(4, (point.value / maxValue) * 100)}%`, height: '100%', borderRadius: '999px', background: point.color }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
   const width = 760;
   const leftLabelWidth = 128;
   const rightPad = 54;
@@ -626,6 +638,11 @@ export default function Dashboard() {
   }, [router]);
 
   useEffect(() => {
+    if (!user?.username) return;
+    void subscribeToWebPush(user.username);
+  }, [user?.username]);
+
+  useEffect(() => {
     if (!router.isReady) return;
     const tabParam = String(router.query.tab || 'home').toLowerCase();
     if (['home', 'posts', 'buddies'].includes(tabParam)) {
@@ -700,16 +717,41 @@ export default function Dashboard() {
         groups: Array.isArray(bootstrapData?.groups) ? bootstrapData.groups : [],
       });
 
-      const participants = friends
+      const friendUsernames = friends
         .map((username) => String(username || '').trim())
         .filter(Boolean)
         .filter((username) => username.toLowerCase() !== selfUsername.toLowerCase())
-        .slice(0, 8)
-        .map((username) => ({
-          username,
-          displayName: username,
-          userId: username,
-        }));
+        .slice(0, 8);
+
+      let participants = friendUsernames.map((username) => ({
+        username,
+        displayName: username,
+        userId: username,
+      }));
+
+      try {
+        const batchResponse = await fetch('/api/chat/buddy-batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ usernames: friendUsernames }),
+        });
+        const batchData = await batchResponse.json().catch(() => ({}));
+        const lookup = new Map(
+          (Array.isArray(batchData?.results) ? batchData.results : [])
+            .map((entry) => [String(entry?.username || '').toLowerCase(), entry]),
+        );
+        participants = friendUsernames.map((username) => {
+          const match = lookup.get(username.toLowerCase());
+          return {
+            username,
+            displayName: String(match?.name || match?.username || username).trim(),
+            userId: String(match?.id || match?.email || match?.username || username).trim(),
+          };
+        });
+      } catch (_) {
+        // Fall back to username-based ids when batch lookup fails.
+      }
 
       const nextRows = await Promise.all(participants.map(async (participant) => {
         try {
@@ -721,12 +763,15 @@ export default function Dashboard() {
             .slice(-14)
             .map((point) => ({ date: String(point.date || ''), cumulative: Number(point.cumulative || 0) }));
           if (!series.length) return null;
+          const activityTotals = data?.activityTotals && typeof data.activityTotals === 'object'
+            ? data.activityTotals
+            : null;
           return {
             id: participant.userId,
             name: participant.displayName,
             planName: String(data?.plan?.name || ''),
             current: Number(data.cumulativeTotal || series[series.length - 1]?.cumulative || 0),
-            activityTotals: null,
+            activityTotals,
             series,
             isSelf: false,
           };
@@ -750,7 +795,7 @@ export default function Dashboard() {
     if (!baseUid) return;
 
     try {
-      const response = await fetch(`${notificationsApiBase}/${encodeURIComponent(baseUid)}`);
+      const response = await fetch(`${notificationsApiBase}/${encodeURIComponent(baseUid)}`, { credentials: 'include' });
       const data = await response.json();
       if (response.ok && Array.isArray(data.notifications)) {
         setServerNotifications(data.notifications);
@@ -768,7 +813,7 @@ export default function Dashboard() {
     if (!baseUid) return;
 
     try {
-      const response = await fetch(`${postsApiBase}/${encodeURIComponent(baseUid)}`);
+      const response = await fetch(`${postsApiBase}/${encodeURIComponent(baseUid)}`, { credentials: 'include' });
       const data = await response.json();
       if (response.ok && Array.isArray(data.posts)) {
         setFeedPosts(data.posts);
@@ -780,15 +825,58 @@ export default function Dashboard() {
     }
   }, [postsApiBase, user]);
 
+  const markPostViewed = useCallback(async (postId) => {
+    if (!postId || !user) return;
+    const baseUid = resolveWellnessUserId(user);
+    if (!baseUid) return;
+    setFeedPosts((current) => current.map((post) => (
+      post.id === postId ? { ...post, seen: true, viewedBy: [baseUid] } : post
+    )));
+    try {
+      await fetch(
+        `${postsApiBase}/${encodeURIComponent(baseUid)}/viewed/${encodeURIComponent(postId)}`,
+        { method: 'PUT', credentials: 'include' },
+      );
+    } catch (_) {
+      // Ignore view tracking failures.
+    }
+  }, [postsApiBase, user]);
+
   const likePost = useCallback(async (postId) => {
     if (!postId) return;
     try {
-      await fetch(`${postsApiBase}/${encodeURIComponent(postId)}/like`, { method: 'PUT' });
-      setFeedPosts((current) => current.map((post) => (post.id === postId ? { ...post, likes: Number(post.likes || 0) + 1 } : post)));
+      const response = await fetch(`${postsApiBase}/${encodeURIComponent(postId)}/like`, { method: 'PUT', credentials: 'include' });
+      const data = await response.json().catch(() => ({}));
+      if (!data.added) return;
+      setFeedPosts((current) => current.map((post) => (
+        post.id === postId
+          ? {
+            ...post,
+            likes: Number(data.likes) || 0,
+            likedByMe: true,
+          }
+          : post
+      )));
     } catch (_) {
       // Ignore like failures.
     }
   }, [postsApiBase]);
+
+  const openFitstagram = useCallback((item) => {
+    const baseUid = resolveWellnessUserId(user);
+    if (item?.id && baseUid) {
+      fetch(
+        `${notificationsApiBase}/${encodeURIComponent(baseUid)}/viewed/${encodeURIComponent(item.id)}`,
+        { method: 'PUT', credentials: 'include' },
+      ).catch(() => {});
+      setServerNotifications((current) => current.filter((n) => n.id !== item.id));
+    }
+    setShowNotifications(false);
+    setActiveTab('posts');
+    if (router.isReady) {
+      router.push({ pathname: '/dashboard', query: { tab: 'posts' } }, undefined, { shallow: true });
+    }
+  }, [notificationsApiBase, router, user]);
 
   useEffect(() => {
     if (!user) return undefined;
@@ -807,9 +895,19 @@ export default function Dashboard() {
     }
     if (activeTab === 'posts') {
       loadFeedPosts();
+      loadServerNotifications();
     }
     return undefined;
-  }, [user, activeTab, loadWellnessData, loadBuddyTrendRows, loadFeedPosts]);
+  }, [user, activeTab, loadWellnessData, loadBuddyTrendRows, loadFeedPosts, loadServerNotifications]);
+
+  useEffect(() => {
+    if (!user || activeTab !== 'posts') return undefined;
+    const timer = setInterval(() => {
+      loadFeedPosts();
+      loadServerNotifications();
+    }, 30000);
+    return () => clearInterval(timer);
+  }, [user, activeTab, loadFeedPosts, loadServerNotifications]);
 
   const strategySummary = useMemo(() => buildStrategySummary(strategies), [strategies]);
   const wellnessSummary = useMemo(() => {
@@ -1007,11 +1105,13 @@ export default function Dashboard() {
     if (Array.isArray(serverNotifications) && serverNotifications.length > 0) {
       return serverNotifications.map((item) => ({
         id: item.id,
-        type: 'notification',
+        type: item.type || 'notification',
         title: item.title,
         description: item.description,
+        postId: item.postId,
+        linkTab: item.linkTab,
         timeLabel: item.createdAt ? `${Math.max(0, Math.round((Date.now() - new Date(item.createdAt).getTime()) / 3600000))}h ago` : 'recently',
-        actionLabel: 'View',
+        actionLabel: item.type === 'fitstagram' ? 'Open Fitstagram' : 'View',
       }));
     }
 
@@ -1144,7 +1244,25 @@ export default function Dashboard() {
           .dashboard-profile-meta { align-content: start !important; }
         }
         @media (max-width: 720px) {
-          .dashboard-page { padding: 12px 12px 0 !important; }
+          .dashboard-page { padding: 12px 12px 88px !important; }
+          .dashboard-buddies-stack { gap: 12px !important; }
+          .dashboard-buddy-grid { grid-template-columns: 1fr !important; gap: 12px !important; }
+          .dashboard-buddies-title { font-size: 20px !important; }
+          .dashboard-buddy-legend { flex-direction: column; align-items: stretch; }
+          .dashboard-buddy-legend-chip { width: 100%; }
+          .dashboard-chart-scroll {
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            margin: 0 -2px;
+            padding: 0 2px;
+          }
+          .dashboard-buddy-activity-row { min-width: 0; }
+          .dashboard-buddy-activity-text { min-width: 0; overflow: hidden; }
+          .dashboard-leaderboard-link {
+            width: 100%;
+            justify-content: center;
+            margin-top: 4px;
+          }
           .dashboard-top-shell {
             display: grid !important;
             gap: 10px !important;
@@ -1214,7 +1332,8 @@ export default function Dashboard() {
           .dashboard-profile-meta .dashboard-profile-quote { font-size: 12px !important; line-height: 1.45 !important; }
         }
         @media (max-width: 560px) {
-          .dashboard-page { padding: 10px 10px 0 !important; }
+          .dashboard-page { padding: 10px 10px 88px !important; }
+          .dashboard-buddies-title { font-size: 18px !important; }
           .dashboard-title { font-size: 20px !important; }
           .dashboard-panel { border-radius: 18px !important; padding: 12px !important; gap: 10px !important; }
           .dashboard-profile-shell { gap: 8px !important; }
@@ -1298,6 +1417,7 @@ export default function Dashboard() {
             notifications={notifications}
             onOpenChat={() => router.push('/chat')}
             onOpenProfile={() => router.push('/profile')}
+            onOpenFitstagram={openFitstagram}
           />
         ) : null}
 
@@ -1444,35 +1564,37 @@ export default function Dashboard() {
         </section>
 
         <section
-          style={{ display: activeTab === 'buddies' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '12px', cursor: 'pointer' }}
-          className="dashboard-panel"
-          role="button"
-          tabIndex={0}
-          onClick={() => router.push('/leaderboard')}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') router.push('/leaderboard');
-          }}
+          style={{ display: activeTab === 'buddies' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '12px' }}
+          className="dashboard-panel dashboard-buddies-panel"
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
             <div>
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Buddy showdown</div>
-              <div style={{ fontSize: '24px', fontWeight: 800, color: theme.textHeading, marginTop: '6px' }}>{showdownTitle}</div>
+              <div className="dashboard-buddies-title" style={{ fontSize: '24px', fontWeight: 800, color: theme.textHeading, marginTop: '6px' }}>{showdownTitle}</div>
             </div>
-            <div style={{ fontSize: '11px', color: theme.textMuted, fontWeight: 700 }}>{`${Math.max(0, comparisonTrendRows.length - 1)} rivals • open leaderboard`}</div>
+            <div style={{ fontSize: '11px', color: theme.textMuted, fontWeight: 700 }}>{`${Math.max(0, comparisonTrendRows.length - 1)} rivals`}</div>
           </div>
 
           <div style={{ fontSize: '12px', color: theme.textSecondary, lineHeight: 1.55 }}>Fight mode: each line keeps a fixed color, rank badges (1,2,3...) are stamped at the finish, and legend chips map rank to plan and player.</div>
 
-          <SectionLoadingShell loading={showBuddiesSectionLoader} label="Loading buddy race..." theme={theme} height={210}>
-            <ComparisonTrendChart rows={comparisonTrendRows} theme={theme} emptyLabel="Add wellness activity and active buddies to start the score sprint" />
+          <SectionLoadingShell loading={showBuddiesSectionLoader} label="Loading buddy race..." theme={theme} height={isNarrowScreen ? 200 : 210}>
+            <ComparisonTrendChart rows={comparisonTrendRows} theme={theme} compact={isNarrowScreen} emptyLabel="Add wellness activity and active buddies to start the score sprint" />
           </SectionLoadingShell>
+          <button
+            type="button"
+            className="dashboard-leaderboard-link"
+            onClick={() => router.push('/leaderboard')}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', alignSelf: 'flex-start', borderRadius: '999px', border: `1px solid ${theme.cardBorder}`, background: theme.cardBg, color: theme.textHeading, padding: '10px 16px', cursor: 'pointer', fontSize: '12px', fontWeight: 800 }}
+          >
+            Open leaderboard →
+          </button>
         </section>
 
-        <section style={{ display: activeTab === 'buddies' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '18px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '14px' }} className="dashboard-panel">
+        <section style={{ display: activeTab === 'buddies' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '18px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '14px' }} className="dashboard-panel dashboard-buddies-panel">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
             <div>
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Buddy activity</div>
-              <div style={{ fontSize: '24px', fontWeight: 800, color: theme.textHeading, marginTop: '6px' }}>Friends on the move</div>
+              <div className="dashboard-buddies-title" style={{ fontSize: '24px', fontWeight: 800, color: theme.textHeading, marginTop: '6px' }}>Friends on the move</div>
             </div>
             <div style={{ fontSize: '11px', color: theme.textMuted, fontWeight: 700 }}>Live activity highlights from your training circle</div>
           </div>
@@ -1480,9 +1602,9 @@ export default function Dashboard() {
           <div style={{ display: 'grid', gap: '12px' }}>
             {buddyActivityItems.map((item) => (
               <div key={item.id} style={{ display: 'grid', gap: '10px', borderRadius: '20px', border: `1px solid ${theme.cardBorder}`, padding: '14px', background: theme.cardBg }}>
-                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                  <div style={{ width: '44px', height: '44px', borderRadius: '16px', display: 'grid', placeItems: 'center', background: `${theme.blue}10`, color: theme.blue, fontWeight: 800, fontSize: '18px' }}>{item.avatar}</div>
-                  <div style={{ display: 'grid', gap: '4px' }}>
+                <div className="dashboard-buddy-activity-row" style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                  <div style={{ width: '44px', height: '44px', borderRadius: '16px', display: 'grid', placeItems: 'center', background: `${theme.blue}10`, color: theme.blue, fontWeight: 800, fontSize: '18px', flexShrink: 0 }}>{item.avatar}</div>
+                  <div className="dashboard-buddy-activity-text" style={{ display: 'grid', gap: '4px', flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: '15px', fontWeight: 800, color: theme.textHeading }}>{item.title}</div>
                     <div style={{ fontSize: '12px', color: theme.textSecondary, lineHeight: 1.4 }}>{item.description}</div>
                   </div>
@@ -1495,20 +1617,20 @@ export default function Dashboard() {
         <section style={{ display: activeTab === 'posts' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '18px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '14px' }} className="dashboard-panel">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
             <div>
-              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Community feed</div>
-              <div style={{ fontSize: '24px', fontWeight: 800, color: theme.textHeading, marginTop: '6px' }}>Intelligent post suggestions</div>
+              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Buddy feed</div>
+              <div style={{ fontSize: '24px', fontWeight: 800, color: theme.textHeading, marginTop: '6px' }}>Fitstagram</div>
             </div>
-            <div style={{ fontSize: '11px', color: theme.textMuted, fontWeight: 700 }}>{`${feedPosts.length} updates • refreshed every 30s`}</div>
+            <div style={{ fontSize: '11px', color: theme.textMuted, fontWeight: 700 }}>{`${feedPosts.filter((p) => !p.seen).length} new · ${feedPosts.length} posts · refreshes every 30s`}</div>
           </div>
 
-          <PostFeedModule posts={feedPosts.slice(0, 6)} theme={theme} onLike={likePost} />
+          <PostFeedModule posts={feedPosts.slice(0, 12)} theme={theme} onLike={likePost} onView={markPostViewed} />
         </section>
 
-        <section style={{ display: activeTab === 'buddies' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '18px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '18px' }} className="dashboard-panel">
+        <section style={{ display: activeTab === 'buddies' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '18px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '18px' }} className="dashboard-panel dashboard-buddies-panel">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
             <div>
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Buddy insights</div>
-              <div style={{ fontSize: '24px', fontWeight: 800, color: theme.textHeading, marginTop: '6px' }}>Your training circle</div>
+              <div className="dashboard-buddies-title" style={{ fontSize: '24px', fontWeight: 800, color: theme.textHeading, marginTop: '6px' }}>Your training circle</div>
             </div>
             <div style={{ fontSize: '11px', color: theme.textMuted, fontWeight: 700 }}>{`${buddyRows.length} buddies • performance graphs`}</div>
           </div>
@@ -1516,53 +1638,54 @@ export default function Dashboard() {
           {buddyRows.length === 0 ? (
             <div style={{ borderRadius: '20px', border: `1px solid ${theme.cardBorder}`, padding: '18px', color: theme.textMuted, background: theme.cardBg }}>No buddies are active yet. Add a buddy to compare performance and see side-by-side trend graphs.</div>
           ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '16px' }}>
+            <div className="dashboard-buddy-grid" style={{ display: 'grid', gridTemplateColumns: isNarrowScreen ? '1fr' : 'repeat(2, minmax(0, 1fr))', gap: '16px' }}>
               {displayedBuddyRows.slice(0, 4).map((buddy) => (
-                <BuddyCard key={buddy.id} buddy={buddy} theme={theme} />
+                <BuddyCard key={buddy.id} buddy={buddy} theme={theme} compact={isNarrowScreen} />
               ))}
             </div>
           )}
 
           <div style={{ borderRadius: '24px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px' }}>
             <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textHeading, marginBottom: '12px' }}>Shared performance comparison</div>
-            <SectionLoadingShell loading={showBuddiesSectionLoader} label="Loading buddy trends..." theme={theme} height={210}>
-              <ComparisonTrendChart rows={displayedBuddyRows.slice(0, 6)} theme={theme} emptyLabel="Add buddies to unlock shared trend comparisons" />
+            <SectionLoadingShell loading={showBuddiesSectionLoader} label="Loading buddy trends..." theme={theme} height={isNarrowScreen ? 200 : 210}>
+              <ComparisonTrendChart rows={displayedBuddyRows.slice(0, 6)} theme={theme} compact={isNarrowScreen} emptyLabel="Add buddies to unlock shared trend comparisons" />
             </SectionLoadingShell>
           </div>
         </section>
 
-        <section style={{ display: activeTab === 'buddies' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '12px' }} className="dashboard-panel"
-          role="button"
-          tabIndex={0}
-          onClick={() => router.push('/leaderboard')}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') router.push('/leaderboard');
-          }}
-        >
+        <section style={{ display: activeTab === 'buddies' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '12px' }} className="dashboard-panel dashboard-buddies-panel">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
             <div>
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Activity duel board</div>
-              <div style={{ fontSize: '24px', fontWeight: 800, color: theme.textHeading, marginTop: '6px' }}>Who Trained More?</div>
+              <div className="dashboard-buddies-title" style={{ fontSize: '24px', fontWeight: 800, color: theme.textHeading, marginTop: '6px' }}>Who Trained More?</div>
             </div>
-            <div style={{ fontSize: '11px', color: theme.textMuted, fontWeight: 700 }}>{`${Math.max(0, activityShowdownRows.length - 1)} rivals • open leaderboard`}</div>
+            <div style={{ fontSize: '11px', color: theme.textMuted, fontWeight: 700 }}>{`${Math.max(0, activityShowdownRows.length - 1)} rivals`}</div>
           </div>
 
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 12px' }}>
+          <div className="dashboard-buddy-legend" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
             {activityShowdownRows.map((row) => (
-              <div key={`${row.id}-activity-legend`} style={{ display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '11px', color: theme.textSecondary, fontWeight: 700, padding: '6px 10px', borderRadius: '999px', background: `${row.color}10`, border: `1px solid ${row.color}33` }}>
-                <span style={{ minWidth: '18px', height: '18px', borderRadius: '999px', background: row.color, color: '#fff', display: 'inline-grid', placeItems: 'center', fontSize: '10px', fontWeight: 900 }}>{row.rank}</span>
-                <span style={{ width: '10px', height: '10px', borderRadius: '999px', background: row.color }} />
-                <span style={{ color: theme.textHeading }}>{row.displayPlanName || row.name}</span>
+              <div key={`${row.id}-activity-legend`} className="dashboard-buddy-legend-chip" style={{ display: 'inline-flex', alignItems: 'center', gap: '7px', fontSize: '11px', color: theme.textSecondary, fontWeight: 700, padding: '6px 10px', borderRadius: '999px', background: `${row.color}10`, border: `1px solid ${row.color}33`, maxWidth: '100%' }}>
+                <span style={{ minWidth: '18px', height: '18px', borderRadius: '999px', background: row.color, color: '#fff', display: 'inline-grid', placeItems: 'center', fontSize: '10px', fontWeight: 900, flexShrink: 0 }}>{row.rank}</span>
+                <span style={{ width: '10px', height: '10px', borderRadius: '999px', background: row.color, flexShrink: 0 }} />
+                <span style={{ color: theme.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.displayPlanName || row.name}</span>
               </div>
             ))}
           </div>
 
-          <SectionLoadingShell loading={showBuddiesSectionLoader} label="Loading activity duel..." theme={theme} height={320}>
-            <ActivityFaceoffChart rows={activityShowdownRows} theme={theme} emptyLabel="Add activity minutes for you and your buddies to unlock the duel board" />
+          <SectionLoadingShell loading={showBuddiesSectionLoader} label="Loading activity duel..." theme={theme} height={isNarrowScreen ? 240 : 320}>
+            <ActivityFaceoffChart rows={activityShowdownRows} theme={theme} compact={isNarrowScreen} emptyLabel="Add activity minutes for you and your buddies to unlock the duel board" />
           </SectionLoadingShell>
+          <button
+            type="button"
+            className="dashboard-leaderboard-link"
+            onClick={() => router.push('/leaderboard')}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', alignSelf: 'flex-start', borderRadius: '999px', border: `1px solid ${theme.cardBorder}`, background: theme.cardBg, color: theme.textHeading, padding: '10px 16px', cursor: 'pointer', fontSize: '12px', fontWeight: 800 }}
+          >
+            Open leaderboard →
+          </button>
         </section>
 
-        <section style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '12px' }} className="dashboard-market-grid">
+        <section style={{ display: activeTab === 'home' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '12px' }} className="dashboard-market-grid">
           <div
             style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '12px', cursor: 'pointer' }}
             className="dashboard-panel"
