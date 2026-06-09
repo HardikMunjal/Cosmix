@@ -22,7 +22,7 @@ const wellnessClubModules = [
   { title: 'Running Dashboard', path: '/running-analytics', accent: '#38bdf8' },
   { title: 'Leaderboard', path: '/leaderboard', accent: '#f97316' },
   { title: 'Wellness Dashboard', path: '/wellness', accent: '#22c55e' },
-  { title: 'Chat', path: '/chat', accent: '#a78bfa' },
+  { title: 'Threads', path: '/chat', accent: '#a78bfa' },
   { title: 'Media', path: '/media', accent: '#ec4899' },
 ];
 
@@ -1719,7 +1719,7 @@ export default function Dashboard() {
         activeId={activeTab}
         items={[
           { id: 'home', label: 'Home', icon: '🏠', onClick: () => { setActiveTab('home'); if (router.isReady) router.push({ pathname: '/dashboard', query: { tab: 'home' } }, undefined, { shallow: true }); } },
-          { id: 'chat', label: 'Chat', icon: '💬', href: '/chat' },
+          { id: 'chat', label: 'Threads', icon: '🧵', href: '/chat' },
           { id: 'posts', label: 'Posts', icon: '📷', onClick: () => { setActiveTab('posts'); if (router.isReady) router.push({ pathname: '/dashboard', query: { tab: 'posts' } }, undefined, { shallow: true }); } },
           { id: 'buddies', label: 'Buddies', icon: '👥', onClick: () => { setActiveTab('buddies'); if (router.isReady) router.push({ pathname: '/dashboard', query: { tab: 'buddies' } }, undefined, { shallow: true }); } },
           { id: 'nifty', label: 'Nifty', icon: '📊', href: '/nifty-strategies' },

@@ -144,6 +144,23 @@ export class ChatController {
     return this.chatService.createGroupFolder(body.actorUsername, groupId, body);
   }
 
+  @Put('groups/:groupId/parent')
+  moveGroupParent(
+    @Param('groupId') groupId: string,
+    @Body() body: { actorUsername: string; parentGroupId?: string | null },
+  ) {
+    return this.chatService.moveGroupParent(body.actorUsername, groupId, body);
+  }
+
+  @Put('groups/:groupId/folders/:folderId/parent')
+  moveFolderParent(
+    @Param('groupId') groupId: string,
+    @Param('folderId') folderId: string,
+    @Body() body: { actorUsername: string; parentFolderId?: string | null },
+  ) {
+    return this.chatService.moveFolderParent(body.actorUsername, groupId, folderId, body);
+  }
+
   @Post('groups/:groupId/folders/:folderId/items')
   addFolderItem(
     @Param('groupId') groupId: string,

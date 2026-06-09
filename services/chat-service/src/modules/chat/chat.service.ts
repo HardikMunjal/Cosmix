@@ -2099,6 +2099,206 @@ export class ChatService {
         return this.getBootstrap(actor);
     }
 
+    private async isGroupNestedInside(groupId: string, potentialParentId: string): Promise<boolean> {
+        if (!potentialParentId) return false;
+        if (groupId === potentialParentId) return true;
+
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            let current: string | null = potentialParentId;
+            const visited = new Set<string>();
+            while (current) {
+                if (current === groupId) return true;
+                if (visited.has(current)) break;
+                visited.add(current);
+                const parentRow = (await pool?.query(
+                    'SELECT parent_group_id FROM chat_groups WHERE id = $1 LIMIT 1',
+                    [current],
+                ))?.rows?.[0] as { parent_group_id: string | null } | undefined;
+                current = parentRow?.parent_group_id || null;
+            }
+            return false;
+        }
+
+        let current: string | null = potentialParentId;
+        const visited = new Set<string>();
+        while (current) {
+            if (current === groupId) return true;
+            if (visited.has(current)) break;
+            visited.add(current);
+            const group = this.groups.find((entry) => entry.id === current);
+            current = group?.parentGroupId || null;
+        }
+        return false;
+    }
+
+    private async isFolderNestedInside(groupId: string, folderId: string, potentialParentId: string): Promise<boolean> {
+        if (!potentialParentId) return false;
+        if (folderId === potentialParentId) return true;
+
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            let current: string | null = potentialParentId;
+            const visited = new Set<string>();
+            while (current) {
+                if (current === folderId) return true;
+                if (visited.has(current)) break;
+                visited.add(current);
+                const parentRow = (await pool?.query(
+                    'SELECT parent_folder_id FROM chat_group_folders WHERE id = $1 AND group_id = $2 LIMIT 1',
+                    [current, groupId],
+                ))?.rows?.[0] as { parent_folder_id: string | null } | undefined;
+                current = parentRow?.parent_folder_id || null;
+            }
+            return false;
+        }
+
+        let current: string | null = potentialParentId;
+        const visited = new Set<string>();
+        while (current) {
+            if (current === folderId) return true;
+            if (visited.has(current)) break;
+            visited.add(current);
+            const folder = this.folders.find((entry) => entry.id === current && entry.groupId === groupId);
+            current = folder?.parentFolderId || null;
+        }
+        return false;
+    }
+
+    async moveGroupParent(
+        actorUsername: string,
+        groupId: string,
+        payload: { parentGroupId?: string | null },
+    ) {
+        const actor = this.normalizeUsername(actorUsername);
+        await this.assertGroupPermission(actor, groupId, 'invite');
+        const parentGroupId = payload.parentGroupId ? String(payload.parentGroupId).trim() : null;
+
+        if (parentGroupId === groupId) {
+            throw new BadRequestException('A thread cannot be nested inside itself.');
+        }
+
+        if (parentGroupId) {
+            await this.assertGroupPermission(actor, parentGroupId, 'invite');
+            if (await this.isGroupNestedInside(groupId, parentGroupId)) {
+                throw new BadRequestException('Cannot move a thread inside its own sub-thread.');
+            }
+        }
+
+        const now = this.nowIso();
+
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            const groupResult = await pool?.query('SELECT id FROM chat_groups WHERE id = $1 LIMIT 1', [groupId]);
+            if (!groupResult?.rows?.[0]) {
+                throw new NotFoundException('Thread not found.');
+            }
+            if (parentGroupId) {
+                const parentResult = await pool?.query('SELECT id FROM chat_groups WHERE id = $1 LIMIT 1', [parentGroupId]);
+                if (!parentResult?.rows?.[0]) {
+                    throw new BadRequestException('Parent thread not found.');
+                }
+            }
+            await pool?.query(
+                'UPDATE chat_groups SET parent_group_id = $1, updated_at = $2 WHERE id = $3',
+                [parentGroupId, now, groupId],
+            );
+            return this.getBootstrap(actor);
+        }
+
+        const group = this.groups.find((entry) => entry.id === groupId);
+        if (!group) {
+            throw new NotFoundException('Thread not found.');
+        }
+        if (parentGroupId && !this.groups.some((entry) => entry.id === parentGroupId)) {
+            throw new BadRequestException('Parent thread not found.');
+        }
+        group.parentGroupId = parentGroupId;
+        group.updatedAt = now;
+        return this.getBootstrap(actor);
+    }
+
+    async moveFolderParent(
+        actorUsername: string,
+        groupId: string,
+        folderId: string,
+        payload: { parentFolderId?: string | null },
+    ) {
+        const actor = this.normalizeUsername(actorUsername);
+        await this.assertGroupManagementPermission(actor, groupId, 'folder');
+        const parentFolderId = payload.parentFolderId ? String(payload.parentFolderId).trim() : null;
+
+        if (parentFolderId === folderId) {
+            throw new BadRequestException('An album cannot be nested inside itself.');
+        }
+
+        if (parentFolderId) {
+            if (await this.isFolderNestedInside(groupId, folderId, parentFolderId)) {
+                throw new BadRequestException('Cannot move an album inside its own sub-album.');
+            }
+        }
+
+        const now = this.nowIso();
+
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            const folderResult = await pool?.query(
+                'SELECT id, name FROM chat_group_folders WHERE id = $1 AND group_id = $2 LIMIT 1',
+                [folderId, groupId],
+            );
+            const folderRow = folderResult?.rows?.[0];
+            if (!folderRow) {
+                throw new NotFoundException('Album folder not found.');
+            }
+            if (parentFolderId) {
+                const parentResult = await pool?.query(
+                    'SELECT id FROM chat_group_folders WHERE id = $1 AND group_id = $2 LIMIT 1',
+                    [parentFolderId, groupId],
+                );
+                if (!parentResult?.rows?.[0]) {
+                    throw new BadRequestException('Parent album not found in this thread.');
+                }
+            }
+            const conflictResult = await pool?.query(
+                `SELECT id FROM chat_group_folders
+                 WHERE group_id = $1
+                   AND COALESCE(parent_folder_id, '') = COALESCE($2, '')
+                   AND lower(name) = lower($3)
+                   AND id <> $4
+                 LIMIT 1`,
+                [groupId, parentFolderId, folderRow.name, folderId],
+            );
+            if (conflictResult?.rows?.length) {
+                throw new BadRequestException('Another album with this name already exists in that location.');
+            }
+            await pool?.query(
+                'UPDATE chat_group_folders SET parent_folder_id = $1, updated_at = $2 WHERE id = $3 AND group_id = $4',
+                [parentFolderId, now, folderId, groupId],
+            );
+            return this.getBootstrap(actor);
+        }
+
+        const folder = this.folders.find((entry) => entry.id === folderId && entry.groupId === groupId);
+        if (!folder) {
+            throw new NotFoundException('Album folder not found.');
+        }
+        if (parentFolderId && !this.folders.some((entry) => entry.id === parentFolderId && entry.groupId === groupId)) {
+            throw new BadRequestException('Parent album not found in this thread.');
+        }
+        const duplicate = this.folders.some((entry) => (
+            entry.groupId === groupId
+            && entry.id !== folderId
+            && (entry.parentFolderId || null) === parentFolderId
+            && entry.name.toLowerCase() === folder.name.toLowerCase()
+        ));
+        if (duplicate) {
+            throw new BadRequestException('Another album with this name already exists in that location.');
+        }
+        folder.parentFolderId = parentFolderId;
+        folder.updatedAt = now;
+        return this.getBootstrap(actor);
+    }
+
     async addFolderItem(
         actorUsername: string,
         groupId: string,

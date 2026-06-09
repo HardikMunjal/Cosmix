@@ -1,6 +1,7 @@
 import { Pool } from 'pg';
 
 const DATABASE_URL = process.env.DATABASE_URL || '';
+const globalForPg = globalThis;
 
 let pool = null;
 let schemaPromise = null;
@@ -12,9 +13,10 @@ export function hasPostgresStorage() {
 function getPostgresPoolOptions() {
   const options = {
     connectionString: DATABASE_URL,
-    connectionTimeoutMillis: 8000,
-    idleTimeoutMillis: 10000,
-    max: 8,
+    connectionTimeoutMillis: 5000,
+    idleTimeoutMillis: 30000,
+    max: 10,
+    keepAlive: true,
   };
   if (
     DATABASE_URL.includes('sslmode=')
@@ -28,17 +30,22 @@ function getPostgresPoolOptions() {
 
 export function getWebPool() {
   if (!hasPostgresStorage()) return null;
-  if (!pool) {
-    pool = new Pool(getPostgresPoolOptions());
+  if (!globalForPg.__cosmixWebPool) {
+    globalForPg.__cosmixWebPool = new Pool(getPostgresPoolOptions());
+    globalForPg.__cosmixWebPool.on('connect', (client) => client.query('SET statement_timeout = 30000'));
+    globalForPg.__cosmixWebPool.on('error', (error) => {
+      console.error('Postgres pool error:', error?.message || error);
+    });
   }
+  pool = globalForPg.__cosmixWebPool;
   return pool;
 }
 
 export async function ensureWebStorage() {
   if (!hasPostgresStorage()) return null;
-  if (!schemaPromise) {
+  if (!globalForPg.__cosmixWebSchemaPromise) {
     const activePool = getWebPool();
-    schemaPromise = activePool.query(`
+    globalForPg.__cosmixWebSchemaPromise = activePool.query(`
       CREATE TABLE IF NOT EXISTS app_users (
         id TEXT PRIMARY KEY,
         username TEXT NOT NULL,
@@ -165,6 +172,7 @@ export async function ensureWebStorage() {
         ON option_strategy_transactions(owner_id, strategy_id);
     `);
   }
+  schemaPromise = globalForPg.__cosmixWebSchemaPromise;
 
   await schemaPromise;
   return getWebPool();

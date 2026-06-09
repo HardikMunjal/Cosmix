@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 function isVideoMedia(item) {
   if (!item) return false;
@@ -18,6 +18,7 @@ export function ChatMediaLightbox({
   canComment = false,
 }) {
   const [index, setIndex] = useState(startIndex);
+  const touchStartRef = useRef(null);
   const current = items[index] || null;
 
   const goPrev = useCallback(() => {
@@ -41,6 +42,21 @@ export function ChatMediaLightbox({
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [goNext, goPrev, onClose]);
+
+  const handleTouchStart = (event) => {
+    touchStartRef.current = event.changedTouches?.[0]?.clientX ?? null;
+  };
+
+  const handleTouchEnd = (event) => {
+    if (touchStartRef.current == null || items.length < 2) return;
+    const endX = event.changedTouches?.[0]?.clientX;
+    if (endX == null) return;
+    const delta = endX - touchStartRef.current;
+    if (Math.abs(delta) < 48) return;
+    if (delta > 0) goPrev();
+    else goNext();
+    touchStartRef.current = null;
+  };
 
   if (!current) return null;
 
@@ -81,6 +97,25 @@ export function ChatMediaLightbox({
           border-radius: 16px;
           box-shadow: 0 24px 60px rgba(0,0,0,0.45);
         }
+        .chat-lightbox-icon-btn {
+          width: 36px;
+          height: 36px;
+          border: 1px solid rgba(148,163,184,0.35);
+          border-radius: 10px;
+          background: rgba(255,255,255,0.1);
+          color: #fff;
+          font-size: 16px;
+          line-height: 1;
+          display: grid;
+          place-items: center;
+          cursor: pointer;
+          padding: 0;
+          font-family: inherit;
+        }
+        .chat-lightbox-icon-btn--primary {
+          background: ${theme?.blue || '#2563eb'};
+          border-color: ${theme?.blue || '#2563eb'};
+        }
         .chat-lightbox-nav {
           position: absolute;
           top: 50%;
@@ -96,6 +131,48 @@ export function ChatMediaLightbox({
         }
         .chat-lightbox-nav--left { left: 10px; }
         .chat-lightbox-nav--right { right: 10px; }
+        .chat-lightbox-dots {
+          display: flex;
+          justify-content: center;
+          gap: 6px;
+          flex-wrap: wrap;
+        }
+        .chat-lightbox-dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 999px;
+          background: rgba(148,163,184,0.45);
+        }
+        .chat-lightbox-dot--active {
+          background: ${theme?.blue || '#38bdf8'};
+          width: 18px;
+        }
+        @media (max-width: 720px) {
+          .chat-lightbox-toolbar {
+            padding: 10px 12px;
+          }
+          .chat-lightbox-media {
+            max-width: 100vw;
+            max-height: min(82vh, 900px);
+            border-radius: 0;
+            box-shadow: none;
+          }
+          .chat-lightbox-stage {
+            padding: 0 4px;
+          }
+          .chat-lightbox-nav {
+            width: 36px;
+            height: 36px;
+            font-size: 18px;
+          }
+          .chat-lightbox-nav--left { left: 4px; }
+          .chat-lightbox-nav--right { right: 4px; }
+          .chat-lightbox-thumb {
+            flex: 0 0 56px;
+            width: 56px;
+            height: 56px;
+          }
+        }
         .chat-lightbox-footer {
           padding: 12px 14px calc(12px + env(safe-area-inset-bottom, 0px));
           display: grid;
@@ -143,17 +220,21 @@ export function ChatMediaLightbox({
               {index + 1} / {items.length} · by {current.uploadedBy || 'member'}
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button type="button" onClick={() => onDownload?.(current)} style={{ border: 'none', borderRadius: 999, padding: '8px 12px', background: theme?.blue || '#2563eb', color: '#fff', fontWeight: 800, fontSize: 11, cursor: 'pointer' }}>
-              Download
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button type="button" className="chat-lightbox-icon-btn chat-lightbox-icon-btn--primary" onClick={() => onDownload?.(current)} aria-label="Download" title="Download">
+              ⬇
             </button>
-            <button type="button" onClick={onClose} style={{ border: 'none', borderRadius: 999, padding: '8px 12px', background: 'rgba(255,255,255,0.12)', color: '#fff', fontWeight: 800, fontSize: 11, cursor: 'pointer' }}>
-              Close
+            <button type="button" className="chat-lightbox-icon-btn" onClick={onClose} aria-label="Close" title="Close">
+              ✕
             </button>
           </div>
         </div>
 
-        <div className="chat-lightbox-stage" onClick={onClose}>
+        <div
+          className="chat-lightbox-stage"
+          onTouchStart={handleTouchStart}
+          onTouchEnd={handleTouchEnd}
+        >
           {items.length > 1 ? (
             <>
               <button type="button" className="chat-lightbox-nav chat-lightbox-nav--left" onClick={(event) => { event.stopPropagation(); goPrev(); }} aria-label="Previous">‹</button>
@@ -182,6 +263,13 @@ export function ChatMediaLightbox({
         </div>
 
         <div className="chat-lightbox-footer">
+          {items.length > 1 && items.length <= 12 ? (
+            <div className="chat-lightbox-dots" aria-hidden="true">
+              {items.map((item, itemIndex) => (
+                <span key={item.id} className={`chat-lightbox-dot${itemIndex === index ? ' chat-lightbox-dot--active' : ''}`} />
+              ))}
+            </div>
+          ) : null}
           {items.length > 1 ? (
             <div className="chat-lightbox-thumbs">
               {items.map((item, itemIndex) => {

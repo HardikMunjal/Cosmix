@@ -2,6 +2,7 @@ import { useRouter } from 'next/router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getCachedClientUser, logoutClientSession, persistClientUser } from '../lib/auth-client';
 import { ChatAlbumGallery } from '../lib/ChatAlbumGallery';
+import { ChatHomeHub } from '../lib/ChatHomeHub';
 import { MobileBottomNav } from '../lib/MobileNav';
 import { useTheme } from '../lib/ThemePicker';
 
@@ -156,6 +157,28 @@ function flattenGroups(groups, parentGroupId = null, depth = 0) {
     { group, depth },
     ...flattenGroups(groups, group.id, depth + 1),
   ]);
+}
+
+function buildChatQuery({ chat, panelTab, hubTab, inviteModalOpen }) {
+  const query = {};
+  if (chat?.type === 'group' && chat.id) {
+    query.thread = chat.id;
+    if (inviteModalOpen) query.view = 'invite';
+    else if (panelTab) query.view = panelTab;
+  } else if (chat?.type === 'dm' && chat.name) {
+    query.dm = chat.name;
+  } else if (hubTab === 'friends') {
+    query.tab = 'friends';
+  }
+  return query;
+}
+
+function chatQueriesMatch(left, right) {
+  const keys = new Set([...Object.keys(left || {}), ...Object.keys(right || {})]);
+  for (const key of keys) {
+    if (String(left?.[key] || '') !== String(right?.[key] || '')) return false;
+  }
+  return true;
 }
 
 function parseReplyEnvelope(text) {
@@ -882,6 +905,51 @@ function createStyles(theme) {
       background: 'rgba(0,0,0,0.5)',
       zIndex: 20,
     },
+    modalBackdrop: {
+      position: 'fixed',
+      inset: 0,
+      zIndex: 1100,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: '16px',
+      background: 'rgba(8,4,16,0.72)',
+      backdropFilter: 'blur(6px)',
+    },
+    modalPanel: {
+      width: 'min(520px, 100%)',
+      maxHeight: 'min(88vh, 720px)',
+      overflowY: 'auto',
+      borderRadius: '20px',
+      border: `1px solid ${theme.cardBorder}`,
+      background: theme.panelBg,
+      padding: '18px 16px',
+      boxShadow: `0 24px 48px ${theme.shadow}`,
+    },
+    modalHead: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'flex-start',
+      gap: '12px',
+      marginBottom: '14px',
+    },
+    modalTitle: {
+      margin: 0,
+      fontSize: '18px',
+      fontWeight: 900,
+      color: theme.textHeading,
+    },
+    modalCloseBtn: {
+      width: '34px',
+      height: '34px',
+      borderRadius: '10px',
+      border: `1px solid ${theme.cardBorder}`,
+      background: theme.cardBg,
+      color: theme.textSecondary,
+      fontWeight: 800,
+      cursor: 'pointer',
+      flexShrink: 0,
+    },
     toastStack: {
       position: 'fixed',
       bottom: '16px',
@@ -967,6 +1035,13 @@ export default function ChatPage() {
   const [activePanelTab, setActivePanelTab] = useState('');
   const [sidebarPanel, setSidebarPanel] = useState('');
   const [sidebarFilter, setSidebarFilter] = useState('');
+  const [hubTab, setHubTab] = useState('threads');
+  const [showCreateThreadModal, setShowCreateThreadModal] = useState(false);
+  const [showJoinThreadModal, setShowJoinThreadModal] = useState(false);
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [showThreadModeModal, setShowThreadModeModal] = useState(false);
+  const [threadModePickerGroup, setThreadModePickerGroup] = useState(null);
+  const [bootstrapReady, setBootstrapReady] = useState(false);
   const [callParticipants, setCallParticipants] = useState([]);
   const [joinedCallRoom, setJoinedCallRoom] = useState('');
   const [callStatusByGroup, setCallStatusByGroup] = useState({});
@@ -993,6 +1068,8 @@ export default function ChatPage() {
   const socketRef = useRef(null);
   const socketConnectErrorShownRef = useRef(false);
   const userRef = useRef(null);
+  const urlHydratedRef = useRef(false);
+  const skipUrlSyncRef = useRef(false);
 
   const chatApiBase = '/chat-api/chat';
 
@@ -1067,8 +1144,36 @@ export default function ChatPage() {
     });
   }, [topLevelThreads, sidebarFilter]);
 
+  const filteredThreadRows = useMemo(() => {
+    if (!sidebarFilter.trim()) return flattenedGroups;
+    const q = sidebarFilter.toLowerCase();
+    return flattenedGroups.filter(({ group }) => {
+      const haystack = `${group.name} ${group.description || ''}`.toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [flattenedGroups, sidebarFilter]);
+
   const mobilePanelOpen = isNarrowScreen && Boolean(activePanelTab && selectedGroup);
-  const mobileShowThreadFolder = isNarrowScreen && !activeChat;
+  const showChatHub = !activeChat;
+
+  const recentThreadMedia = useMemo(() => {
+    const rows = [];
+    topLevelThreads.forEach((group) => {
+      (group.images || []).forEach((image) => {
+        const imageUrl = String(image?.imageUrl || '').trim();
+        if (!imageUrl || imageUrl === 'null' || imageUrl === 'undefined') return;
+        if (!/^(https?:\/\/|\/|blob:)/i.test(imageUrl)) return;
+        rows.push({
+          id: image.id || `${group.id}-${imageUrl}`,
+          imageUrl,
+          mediaType: image.mediaType,
+          thread: group,
+          ts: Number(image.createdAt || image.uploadedAt || 0),
+        });
+      });
+    });
+    return rows.sort((a, b) => b.ts - a.ts);
+  }, [topLevelThreads]);
 
   const onlineUserSet = useMemo(
     () => new Set((onlineUsers || []).map((name) => normalizeUsername(name)).filter(Boolean)),
@@ -1184,7 +1289,6 @@ export default function ChatPage() {
         wellnessReminderEnabled: nextBootstrap.pushPreferences.wellnessReminderEnabled !== false,
       });
     }
-    const fallbackChat = getDefaultChat(nextBootstrap, user?.username);
     const activeChatCandidate = nextChat || activeChatRef.current;
 
     if (nextChat) {
@@ -1194,13 +1298,13 @@ export default function ChatPage() {
     }
 
     if (!activeChatCandidate) {
-      setActiveChat(fallbackChat);
+      // Keep the trip-thread hub visible until the user explicitly opens a chat.
       return;
     }
 
     if (activeChatCandidate.type === 'dm') {
       if (!nextBootstrap.friends.includes(activeChatCandidate.name)) {
-        setActiveChat(fallbackChat);
+        setActiveChat(null);
       }
       return;
     }
@@ -1209,7 +1313,7 @@ export default function ChatPage() {
       group.id === activeChatCandidate.id || group.name === activeChatCandidate.name
     ));
     if (!matchingGroup) {
-      setActiveChat(fallbackChat);
+      setActiveChat(null);
     }
   }
 
@@ -1413,9 +1517,12 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (!user?.username) return;
+    setBootstrapReady(false);
     fetchBootstrap().then(() => {
+      setBootstrapReady(true);
       setStatusMessage('Ready');
     }).catch((error) => {
+      setBootstrapReady(true);
       const message = String(error?.message || 'Could not load chat data.');
       if (/ECONNREFUSED|fetch failed|502|503|504/i.test(message)) {
         reportError('Chat API is offline. Start chat-service on port 3002 (run npm run dev from Cosmix/).');
@@ -1424,6 +1531,53 @@ export default function ChatPage() {
       }
     });
   }, [user?.username]);
+
+  useEffect(() => {
+    if (!router.isReady || !bootstrapReady || !user?.username || urlHydratedRef.current) return;
+
+    skipUrlSyncRef.current = true;
+    const threadId = typeof router.query.thread === 'string' ? router.query.thread.trim() : '';
+    const dmUser = typeof router.query.dm === 'string' ? router.query.dm.trim() : '';
+    const view = typeof router.query.view === 'string' ? router.query.view.trim() : '';
+    const tab = typeof router.query.tab === 'string' ? router.query.tab.trim() : '';
+
+    if (tab === 'friends') setHubTab('friends');
+
+    if (threadId) {
+      const group = bootstrap.groups.find((entry) => entry.id === threadId);
+      if (group) {
+        const nextChat = { type: 'group', id: group.id, name: group.name, label: group.name };
+        activeChatRef.current = nextChat;
+        setActiveChat(nextChat);
+        if (view === 'invite') setShowInviteModal(true);
+        else if (view) setActivePanelTab(view);
+      }
+    } else if (dmUser) {
+      const friend = bootstrap.friends.find((entry) => normalizeUsername(entry) === normalizeUsername(dmUser));
+      if (friend) {
+        const nextChat = {
+          type: 'dm',
+          id: buildDmId(user.username, friend),
+          name: friend,
+          label: friend,
+        };
+        activeChatRef.current = nextChat;
+        setActiveChat(nextChat);
+      }
+    }
+
+    urlHydratedRef.current = true;
+    window.setTimeout(() => {
+      skipUrlSyncRef.current = false;
+    }, 0);
+  }, [bootstrap.groups, bootstrap.friends, bootstrapReady, router.isReady, router.query.dm, router.query.tab, router.query.thread, router.query.view, user?.username]);
+
+  useEffect(() => {
+    if (!router.isReady || !urlHydratedRef.current || skipUrlSyncRef.current) return;
+    const nextQuery = buildChatQuery({ chat: activeChat, panelTab: activePanelTab, hubTab, inviteModalOpen: showInviteModal });
+    if (chatQueriesMatch(router.query, nextQuery)) return;
+    router.replace({ pathname: '/chat', query: nextQuery }, undefined, { shallow: true });
+  }, [activeChat, activePanelTab, hubTab, router.isReady, showInviteModal]);
 
   useEffect(() => {
     if (!user?.username) return undefined;
@@ -1747,6 +1901,50 @@ export default function ChatPage() {
     return uploads[0];
   }
 
+  function openCreateThreadModal(parentGroupId = '') {
+    setGroupForm({ name: '', description: '', parentGroupId: parentGroupId || '', members: '', viewers: '' });
+    setThreadCoverFile(null);
+    setThreadCoverPreview('');
+    setShowCreateThreadModal(true);
+    setShowSidebar(false);
+    setSidebarPanel('');
+  }
+
+  function openJoinThreadModal() {
+    setShowJoinThreadModal(true);
+    setShowSidebar(false);
+    setSidebarPanel('');
+  }
+
+  async function handleMoveThread(threadId, parentGroupId) {
+    if (!user?.username || !threadId) return;
+    try {
+      await submitJson(`/groups/${threadId}/parent`, 'PUT', {
+        actorUsername: user.username,
+        parentGroupId: parentGroupId || null,
+      });
+      reportStatus(parentGroupId ? 'Thread nested inside parent.' : 'Thread moved to top level.');
+    } catch (error) {
+      reportError(error.message);
+    }
+  }
+
+  async function handleMoveFolder(folderId, parentFolderId) {
+    if (!selectedGroup || !user?.username || !folderId) return;
+    try {
+      await submitJson(`/groups/${selectedGroup.id}/folders/${folderId}/parent`, 'PUT', {
+        actorUsername: user.username,
+        parentFolderId: parentFolderId || null,
+      }, (payload) => {
+        const refreshed = payload.groups.find((group) => group.id === selectedGroup.id);
+        return refreshed ? { type: 'group', id: refreshed.id, name: refreshed.name, label: refreshed.name } : null;
+      });
+      reportStatus(parentFolderId ? 'Album nested inside folder.' : 'Album moved to top level.');
+    } catch (error) {
+      reportError(error.message);
+    }
+  }
+
   async function handleCreateGroup(event) {
     event.preventDefault();
     if (!groupForm.name.trim() || !user?.username) {
@@ -1807,9 +2005,10 @@ export default function ChatPage() {
       setThreadCoverFile(null);
       setThreadCoverPreview('');
       setSidebarPanel('');
+      setShowCreateThreadModal(false);
       const createdGroup = payload.groups?.find((group) => group.id === createdGroupId);
       if (createdGroup) {
-        openThread(createdGroup);
+        enterThread(createdGroup, 'chat');
         setActivePanelTab('invite');
       } else {
         setShowSidebar(false);
@@ -1865,6 +2064,7 @@ export default function ChatPage() {
         selectChat({ type: 'group', id: joinedGroup.id, name: joinedGroup.name, label: joinedGroup.name });
       }
       setInviteToken('');
+      setShowJoinThreadModal(false);
       reportStatus('Invite link accepted.');
     } catch (error) {
       reportError(error.message);
@@ -2127,25 +2327,57 @@ export default function ChatPage() {
     setActiveReplyMessageId('');
   }
 
+  function openInviteModal() {
+    setShowInviteModal(true);
+    if (isNarrowScreen) setActivePanelTab('');
+  }
+
+  function closeInviteModal() {
+    setShowInviteModal(false);
+  }
+
   function openThreadPanel(tab) {
+    if (tab === 'invite') {
+      openInviteModal();
+      return;
+    }
+    setShowInviteModal(false);
     setActivePanelTab(tab);
     if (isNarrowScreen) setShowSidebar(false);
   }
 
   function leaveActiveThread() {
     setActivePanelTab('');
+    setShowInviteModal(false);
+    activeChatRef.current = null;
     setActiveChat(null);
     setShowSidebar(false);
   }
 
-  function openThread(group) {
+  function enterThread(group, mode = 'chat') {
+    setShowThreadModeModal(false);
+    setThreadModePickerGroup(null);
     selectChat({ type: 'group', id: group.id, name: group.name, label: group.name });
-    setActivePanelTab('');
+    setShowInviteModal(false);
+    setActivePanelTab(mode === 'albums' ? 'albums' : '');
     setShowSidebar(false);
   }
 
+  function promptThreadDestination(group) {
+    setThreadModePickerGroup(group);
+    setShowThreadModeModal(true);
+  }
+
+  function openThread(group, mode = null) {
+    if (mode === null) {
+      promptThreadDestination(group);
+      return;
+    }
+    enterThread(group, mode);
+  }
+
   function selectGroup(group) {
-    openThread(group);
+    enterThread(group, 'chat');
   }
 
   function selectFriend(friendName) {
@@ -2261,101 +2493,16 @@ export default function ChatPage() {
   const isInCurrentCall = Boolean(callPresenceRoom && joinedCallRoom === callPresenceRoom);
   const isCurrentGroupMuted = Boolean(selectedGroup?.id && pushPreferences.mutedGroupIds.includes(selectedGroup.id));
   const isCurrentDmMuted = Boolean(activeChat?.type === 'dm' && pushPreferences.mutedUsernames.includes(normalizeUsername(activeChat.name)));
+  const threadCallUrl = selectedGroup?.id
+    ? `https://meet.jit.si/cosmix-thread-${String(selectedGroup.id).replace(/[^a-zA-Z0-9-]/g, '-')}`
+    : '';
+  const isAlbumsPanelOpen = activePanelTab === 'albums' || activePanelTab === 'folders' || activePanelTab === 'media';
+  const onMobileThreadChatView = !activePanelTab && !showInviteModal;
+  const showMobileChatTool = selectedGroup && isNarrowScreen && !onMobileThreadChatView;
+  const showMobileAlbumsTool = selectedGroup && isNarrowScreen && !isAlbumsPanelOpen;
+  const showMobileInviteTool = selectedGroup && isNarrowScreen && !showInviteModal;
 
   // ── panel render helpers ────────────────────────────────────────────────
-  function renderThreadFolderLibrary() {
-    const childCountFor = (groupId) => bootstrap.groups.filter((g) => g.parentGroupId === groupId).length;
-
-    return (
-      <div className="chat-thread-folder" style={styles.threadFolderScroll}>
-        <div style={styles.threadFolderHeader}>
-          <div>
-            <h2 style={styles.threadFolderTitle}>Your threads</h2>
-            <p style={styles.threadFolderSubtitle}>
-              Each thread has its own chat, photo albums, and share link. Tap a folder to open it.
-            </p>
-          </div>
-          <button
-            type="button"
-            style={{ ...styles.btn, width: 'auto', padding: '10px 12px', flexShrink: 0 }}
-            onClick={() => { setShowSidebar(true); setSidebarPanel('group'); }}
-          >
-            + New
-          </button>
-        </div>
-
-        {filteredTopLevelThreads.length ? (
-          <div className="chat-thread-folder-grid" style={styles.threadFolderGrid}>
-            {filteredTopLevelThreads.map((group) => {
-              const albumCount = (group.folders || []).length;
-              const mediaCount = (group.images || []).length;
-              const subs = childCountFor(group.id);
-              const chatKey = getChatKey({ type: 'group', id: group.id });
-              return (
-                <button key={group.id} type="button" style={styles.threadFolderCard} onClick={() => openThread(group)}>
-                  <div style={styles.threadFolderCover}>
-                    {group.coverImageUrl ? (
-                      group.coverMediaType === 'video' ? (
-                        <video src={group.coverImageUrl} style={{ width: '100%', height: '100%', objectFit: 'cover' }} muted playsInline />
-                      ) : (
-                        <img src={group.coverImageUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                      )
-                    ) : (
-                      <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', fontSize: '28px', opacity: 0.9 }}>🧵</div>
-                    )}
-                    {unreadCounts[chatKey] ? (
-                      <span style={{ position: 'absolute', top: '8px', right: '8px', ...styles.sidebarUnread }}>{unreadCounts[chatKey]}</span>
-                    ) : null}
-                  </div>
-                  <div style={styles.threadFolderBody}>
-                    <div style={styles.threadFolderName}>{group.name}</div>
-                    <div style={styles.threadFolderMeta}>
-                      {group.memberships?.length || 0} members · {albumCount} album{albumCount === 1 ? '' : 's'} · {mediaCount} media
-                      {subs > 0 ? ` · ${subs} sub-thread${subs === 1 ? '' : 's'}` : ''}
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        ) : (
-          <div style={styles.emptyState}>
-            <div style={{ fontSize: '44px', marginBottom: '6px' }}>📁</div>
-            <p style={{ fontSize: '15px', fontWeight: 800, color: theme.textHeading, margin: 0 }}>No threads yet</p>
-            <p style={{ fontSize: '13px', lineHeight: 1.6, margin: '8px 0 0', maxWidth: '300px' }}>
-              Create a thread for family, trips, or teams. Each thread keeps separate chat and albums.
-            </p>
-            <button type="button" style={{ ...styles.btn, width: 'auto', padding: '10px 16px', marginTop: '12px' }} onClick={() => { setShowSidebar(true); setSidebarPanel('group'); }}>
-              Create first thread
-            </button>
-          </div>
-        )}
-
-        {filteredFriends.length > 0 ? (
-          <div style={{ marginTop: '20px' }}>
-            <p style={styles.sidebarSectionLabel}>Direct messages</p>
-            <div style={{ display: 'grid', gap: '6px' }}>
-              {filteredFriends.map((friendName) => (
-                <button
-                  key={friendName}
-                  type="button"
-                  style={{ ...styles.sidebarItem, borderRadius: '14px', background: theme.cardBg, border: `1px solid ${theme.cardBorder}` }}
-                  onClick={() => selectFriend(friendName)}
-                >
-                  <div style={{ ...styles.sidebarItemAvatar, background: getUserColor(friendName, theme) }}>{friendName.slice(0, 2).toUpperCase()}</div>
-                  <div style={styles.sidebarItemText}>
-                    <div style={styles.sidebarItemName}>{friendName}</div>
-                    <div style={styles.sidebarItemMeta}>{isUserOnline(friendName) ? 'Online' : 'Offline'}</div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-
   function renderMembersPanel() {
     return (
       <>
@@ -2447,6 +2594,7 @@ export default function ChatPage() {
           onCommentDraftChange={(imageId, value) => setCommentDrafts((previous) => ({ ...previous, [imageId]: value }))}
           onPostComment={handleImageComment}
           canComment={canCommentInGroup}
+          onMoveFolder={canManageFolders ? handleMoveFolder : null}
         />
         <input ref={fileInputRef} type="file" multiple accept="image/*,video/*" style={{ display: 'none' }} onChange={handleGroupImageUpload} />
       </>
@@ -2725,9 +2873,9 @@ export default function ChatPage() {
             </>
           )}
 
-          {filteredGroups.length > 0 && (
+          {activeChat && filteredGroups.length > 0 && (
             <>
-              <p style={styles.sidebarSectionLabel}>Thread folders</p>
+              <p style={styles.sidebarSectionLabel}>In this thread tree</p>
               {filteredGroups.map(({ group, depth }) => {
                 const chatKey = getChatKey({ type: 'group', id: group.id });
                 const isActive = activeChat?.type === 'group' && activeChat?.id === group.id;
@@ -2751,7 +2899,13 @@ export default function ChatPage() {
             </>
           )}
 
-          {filteredFriends.length === 0 && filteredGroups.length === 0 && bootstrap.incomingRequests.length === 0 && (
+          {!activeChat && (
+            <div style={{ padding: '12px 14px', fontSize: 11, color: theme.textMuted, lineHeight: 1.5 }}>
+              Trip threads live in the main panel →
+            </div>
+          )}
+
+          {filteredFriends.length === 0 && !activeChat && bootstrap.incomingRequests.length === 0 && (
             <div style={{ padding: '24px 14px', textAlign: 'center', color: theme.textMuted, fontSize: '12px', lineHeight: 1.7 }}>
               {sidebarFilter ? 'No matches.' : 'No conversations yet.\nUse the buttons below to get started.'}
             </div>
@@ -2760,8 +2914,8 @@ export default function ChatPage() {
 
         <div style={styles.sidebarActions}>
           <button type="button" title="Add Buddy" style={{ ...styles.sidebarActionBtn, ...(sidebarPanel === 'buddy' ? styles.sidebarActionBtnActive : {}) }} onClick={() => setSidebarPanel(sidebarPanel === 'buddy' ? '' : 'buddy')}>👤</button>
-          <button type="button" title="Create Thread" style={{ ...styles.sidebarActionBtn, ...(sidebarPanel === 'group' ? styles.sidebarActionBtnActive : {}) }} onClick={() => setSidebarPanel(sidebarPanel === 'group' ? '' : 'group')}>💬</button>
-          <button type="button" title="Join Thread Link" style={{ ...styles.sidebarActionBtn, ...(sidebarPanel === 'token' ? styles.sidebarActionBtnActive : {}) }} onClick={() => setSidebarPanel(sidebarPanel === 'token' ? '' : 'token')}>🔗</button>
+          <button type="button" title="Create Thread" style={{ ...styles.sidebarActionBtn, ...(showCreateThreadModal ? styles.sidebarActionBtnActive : {}) }} onClick={() => openCreateThreadModal()}>💬</button>
+          <button type="button" title="Join Thread Link" style={{ ...styles.sidebarActionBtn, ...(showJoinThreadModal ? styles.sidebarActionBtnActive : {}) }} onClick={() => openJoinThreadModal()}>🔗</button>
         </div>
 
         {sidebarPanel === 'buddy' && (
@@ -2789,103 +2943,90 @@ export default function ChatPage() {
           </div>
         )}
 
-        {sidebarPanel === 'group' && (
-          <form className="expansion-panel-mobile" style={styles.expansionPanel} onSubmit={handleCreateGroup}>
-            <p style={styles.sectionTitle}>Create Thread</p>
-            <button type="button" style={{ ...styles.btn, ...styles.btnSecondary, width: 'auto', padding: '10px 12px' }} onClick={() => threadCoverInputRef.current?.click()}>
-              {threadCoverPreview ? 'Change cover photo/video' : '📷 Add cover photo/video'}
-            </button>
-            <input ref={threadCoverInputRef} type="file" accept="image/*,video/*" style={{ display: 'none' }} onChange={handleThreadCoverPick} />
-            {threadCoverPreview ? (
-              <div style={{ borderRadius: '14px', overflow: 'hidden', border: `1px solid ${theme.cardBorder}` }}>
-                {threadCoverFile && threadCoverFile.type.startsWith('video/') ? (
-                  <video src={threadCoverPreview} style={{ width: '100%', maxHeight: '140px', objectFit: 'cover', display: 'block' }} muted playsInline />
-                ) : (
-                  <img src={threadCoverPreview} alt="Thread cover preview" style={{ width: '100%', maxHeight: '140px', objectFit: 'cover', display: 'block' }} />
-                )}
-              </div>
-            ) : (
-              <p style={styles.helperText}>Cover appears on the invite link when you share on WhatsApp.</p>
-            )}
-            <input style={styles.input} value={groupForm.name} onChange={(e) => setGroupForm((p) => ({ ...p, name: e.target.value }))} placeholder="Thread name (e.g. Family trips)" />
-            <textarea style={{ ...styles.input, minHeight: '52px', resize: 'vertical' }} value={groupForm.description} onChange={(e) => setGroupForm((p) => ({ ...p, description: e.target.value }))} placeholder="What is this thread about?" />
-            <select style={styles.select} value={groupForm.parentGroupId} onChange={(e) => setGroupForm((p) => ({ ...p, parentGroupId: e.target.value }))}>
-              <option value="">Top-level thread</option>
-              {bootstrap.groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-            </select>
-            <input style={styles.input} value={groupForm.members} onChange={(e) => setGroupForm((p) => ({ ...p, members: e.target.value }))} placeholder="Members (comma separated)" />
-            <input style={styles.input} value={groupForm.viewers} onChange={(e) => setGroupForm((p) => ({ ...p, viewers: e.target.value }))} placeholder="Viewers (comma separated)" />
-            <button type="submit" style={styles.btn} disabled={creatingThread}>{creatingThread ? 'Creating…' : 'Create Thread'}</button>
-          </form>
-        )}
-
-        {sidebarPanel === 'token' && (
-          <form style={styles.expansionPanel} onSubmit={handleJoinByToken}>
-            <p style={styles.sectionTitle}>Join Thread</p>
-            <input style={styles.input} value={inviteToken} onChange={(e) => setInviteToken(e.target.value)} placeholder="Paste thread invite token" />
-            <button type="submit" style={styles.btn}>Join Thread</button>
-          </form>
-        )}
       </aside>
 
       {/* Main chat area */}
-      <main className="chat-main-area" style={styles.main}>
-        {/* Top bar */}
-        <div style={styles.topBar}>
-          {isNarrowScreen && activeChat ? (
-            <button type="button" className="chat-back-btn" style={styles.hamburger} onClick={leaveActiveThread} aria-label="Back to threads">←</button>
-          ) : (
-            <button type="button" className="hamburger-btn" style={styles.hamburger} onClick={() => setShowSidebar(true)}>☰</button>
-          )}
-          <div style={styles.topBarTitle}>
-            <h2 style={styles.chatName}>
-              {activeChat
-                ? activeChat.type === 'dm'
-                  ? `@${activeChat.label || activeChat.name}`
-                  : `#${activeChat.label || activeChat.name}`
-                : 'Cosmix Threads'}
-            </h2>
-            {activeChat && (
-              <p style={styles.chatMeta}>
-                {activeChat.type === 'dm'
-                  ? (isUserOnline(activeChat.name) ? 'Online' : 'Offline')
-                  : (selectedGroup?.description || `${selectedGroup?.memberships?.length || 0} members`)}
-              </p>
+      <main className={`chat-main-area${activeChat ? ' chat-main-area--thread' : ''}${activeChat && isNarrowScreen ? ' chat-main-area--thread-mobile' : ''}`} style={styles.main}>
+        <div className={`chat-top-shell${activeChat ? ' chat-top-shell--thread' : ''}`}>
+          <div style={styles.topBar} className="chat-top-bar">
+            {activeChat ? (
+              <button type="button" className="chat-back-btn" style={styles.hamburger} onClick={leaveActiveThread} aria-label="Back to threads">←</button>
+            ) : (
+              <button type="button" className="hamburger-btn" style={styles.hamburger} onClick={() => setShowSidebar(true)}>☰</button>
             )}
-          </div>
-          <div style={styles.topBarIcons}>
-            <button type="button" title="Dashboard" className="chat-top-icon chat-top-icon--desktop" style={styles.iconBtn} onClick={() => router.push('/dashboard')}>🏠</button>
-            <button type="button" title="Logout" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, padding: '0 10px', minWidth: '70px', fontSize: '11px', fontWeight: 800 }} onClick={handleLogout}>Logout</button>
-            {activeChat?.type === 'dm' ? (
-              <button
-                type="button"
-                title={isCurrentDmMuted ? 'Unmute DM push' : 'Mute DM push'}
-                style={{ ...styles.iconBtn, ...(isCurrentDmMuted ? styles.iconBtnActive : {}) }}
-                onClick={() => {
-                  const target = normalizeUsername(activeChat.name);
-                  const nextSet = new Set(pushPreferences.mutedUsernames || []);
-                  if (nextSet.has(target)) nextSet.delete(target);
-                  else nextSet.add(target);
-                  void updatePushPreferences({ mutedUsernames: Array.from(nextSet) });
-                }}
-              >
-                {isCurrentDmMuted ? '🔕' : '🔔'}
-              </button>
-            ) : null}
-            <div style={{ ...styles.connDot, background: connectionState === 'connected' ? theme.green : connectionState === 'connecting' ? theme.orange : theme.red }} title={connectionState} />
-            {selectedGroup && (
-              <>
-                <button type="button" title="Members" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(activePanelTab === 'members' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'members' ? '' : 'members')}>👥</button>
-                <button type="button" title="Albums" className="chat-top-icon" style={{ ...styles.iconBtn, ...(activePanelTab === 'albums' ? styles.iconBtnActive : {}) }} onClick={() => openThreadPanel(activePanelTab === 'albums' ? '' : 'albums')}>📸</button>
-                <button type="button" title="Bookmarks" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(activePanelTab === 'bookmarks' ? styles.iconBtnActive : {}) }} onClick={() => openThreadPanel(activePanelTab === 'bookmarks' ? '' : 'bookmarks')}>🔖</button>
-                <button type="button" title="Invite" className="chat-top-icon" style={{ ...styles.iconBtn, ...(activePanelTab === 'invite' ? styles.iconBtnActive : {}) }} onClick={() => openThreadPanel(activePanelTab === 'invite' ? '' : 'invite')}>🔗</button>
-                {isGroupOwner && <button type="button" title="Settings" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(activePanelTab === 'settings' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'settings' ? '' : 'settings')}>⚙️</button>}
-              </>
-            )}
+            <div style={styles.topBarTitle}>
+              <h2 style={styles.chatName}>
+                {activeChat
+                  ? activeChat.type === 'dm'
+                    ? `@${activeChat.label || activeChat.name}`
+                    : selectedGroup?.name || activeChat.label || activeChat.name
+                  : hubTab === 'friends' ? 'Friends' : 'Threads & trips'}
+              </h2>
+              {activeChat && !isNarrowScreen ? (
+                <p className="chat-top-meta-desktop" style={styles.chatMeta}>
+                  {activeChat.type === 'dm'
+                    ? (isUserOnline(activeChat.name) ? 'Online' : 'Offline')
+                    : (selectedGroup?.description || `${selectedGroup?.memberships?.length || 0} members`)}
+                </p>
+              ) : !activeChat ? (
+                <p style={styles.chatMeta}>
+                  {!bootstrapReady
+                    ? 'Loading…'
+                    : hubTab === 'friends'
+                      ? 'Tap a friend to chat'
+                      : 'Pick a thread to start'}
+                </p>
+              ) : null}
+            </div>
+            <div style={styles.topBarIcons} className="chat-top-bar-icons">
+              {selectedGroup && activeChat?.type === 'group' && isNarrowScreen ? (
+                <div className="chat-mobile-tools">
+                  {showMobileChatTool ? (
+                    <button type="button" title="Chat" className="chat-mobile-tool" onClick={() => { setActivePanelTab(''); setShowInviteModal(false); }}>💬</button>
+                  ) : null}
+                  {showMobileAlbumsTool ? (
+                    <button type="button" title="Albums" className="chat-mobile-tool" onClick={() => openThreadPanel('albums')}>📸</button>
+                  ) : null}
+                  {showMobileInviteTool ? (
+                    <button type="button" title="Invite" className="chat-mobile-tool" onClick={() => openInviteModal()}>🔗</button>
+                  ) : null}
+                  <button type="button" title="Video call" className="chat-mobile-tool chat-mobile-tool--call" onClick={() => handleJoinCall(threadCallUrl)}>📞</button>
+                </div>
+              ) : null}
+              <button type="button" title="Dashboard" className="chat-top-icon chat-top-icon--desktop" style={styles.iconBtn} onClick={() => router.push('/dashboard')}>🏠</button>
+              <button type="button" title="Logout" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, padding: '0 10px', minWidth: '70px', fontSize: '11px', fontWeight: 800 }} onClick={handleLogout}>Logout</button>
+              {activeChat?.type === 'dm' ? (
+                <button
+                  type="button"
+                  title={isCurrentDmMuted ? 'Unmute DM push' : 'Mute DM push'}
+                  className="chat-top-icon chat-top-icon--desktop"
+                  style={{ ...styles.iconBtn, ...(isCurrentDmMuted ? styles.iconBtnActive : {}) }}
+                  onClick={() => {
+                    const target = normalizeUsername(activeChat.name);
+                    const nextSet = new Set(pushPreferences.mutedUsernames || []);
+                    if (nextSet.has(target)) nextSet.delete(target);
+                    else nextSet.add(target);
+                    void updatePushPreferences({ mutedUsernames: Array.from(nextSet) });
+                  }}
+                >
+                  {isCurrentDmMuted ? '🔕' : '🔔'}
+                </button>
+              ) : null}
+              <div className="chat-conn-dot" style={{ ...styles.connDot, background: connectionState === 'connected' ? theme.green : connectionState === 'connecting' ? theme.orange : theme.red }} title={connectionState} />
+              {selectedGroup && !isNarrowScreen && (
+                <>
+                  <button type="button" title="Members" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(activePanelTab === 'members' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'members' ? '' : 'members')}>👥</button>
+                  <button type="button" title="Albums" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(activePanelTab === 'albums' ? styles.iconBtnActive : {}) }} onClick={() => openThreadPanel(activePanelTab === 'albums' ? '' : 'albums')}>📸</button>
+                  <button type="button" title="Bookmarks" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(activePanelTab === 'bookmarks' ? styles.iconBtnActive : {}) }} onClick={() => openThreadPanel(activePanelTab === 'bookmarks' ? '' : 'bookmarks')}>🔖</button>
+                  <button type="button" title="Invite" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(showInviteModal ? styles.iconBtnActive : {}) }} onClick={() => (showInviteModal ? closeInviteModal() : openInviteModal())}>🔗</button>
+                  {isGroupOwner && <button type="button" title="Settings" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(activePanelTab === 'settings' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'settings' ? '' : 'settings')}>⚙️</button>}
+                </>
+              )}
+            </div>
           </div>
         </div>
 
-        {selectedGroup?.shareToken && (
+        {selectedGroup?.shareToken && !isNarrowScreen ? (
           <div className="chat-thread-strip">
             <span className="chat-thread-strip-label">Thread link ready</span>
             <button
@@ -2904,30 +3045,58 @@ export default function ChatPage() {
               Copy join link
             </button>
           </div>
-        )}
-
-        {selectedGroup && childGroups.length > 0 && !mobilePanelOpen ? (
-          <div className="chat-thread-substrip" style={styles.threadSubStrip}>
-            {childGroups.map((g) => (
-              <button key={g.id} type="button" style={styles.threadSubChip} onClick={() => openThread(g)}>↳ {g.name}</button>
-            ))}
-          </div>
         ) : null}
 
         {/* Body: thread folder, messages, or full-screen panel */}
-        <div className={`chat-body${mobilePanelOpen ? ' chat-body--panel-open' : ''}`} style={styles.body}>
-          {mobileShowThreadFolder ? (
-            renderThreadFolderLibrary()
+        <div className={`chat-body${showChatHub ? ' chat-body--hub' : ''}${mobilePanelOpen ? ' chat-body--panel-open' : ''}`} style={styles.body}>
+          {showChatHub ? (
+            <ChatHomeHub
+              theme={theme}
+              user={user}
+              threadRows={filteredThreadRows}
+              allGroups={bootstrap.groups}
+              friends={filteredFriends}
+              recentMedia={recentThreadMedia}
+              unreadCounts={unreadCounts}
+              getChatKey={getChatKey}
+              isUserOnline={isUserOnline}
+              getUserColor={getUserColor}
+              incomingRequests={bootstrap.incomingRequests}
+              hubTab={hubTab}
+              onHubTabChange={setHubTab}
+              connectionState={connectionState}
+              onOpenThread={(group) => openThread(group)}
+              onOpenFriend={(friendName) => { selectFriend(friendName); setShowSidebar(false); }}
+              onCreateThread={() => openCreateThreadModal()}
+              onJoinThread={() => openJoinThreadModal()}
+              onAcceptBuddy={handleAcceptBuddy}
+              onMoveThread={handleMoveThread}
+              isBootstrapLoading={!bootstrapReady}
+            />
           ) : null}
 
-          {!mobileShowThreadFolder && !mobilePanelOpen ? (
-          <div ref={messagesContainerRef} className="chat-messages" style={styles.messages}>
+          {selectedGroup && activeChat?.type === 'group' && !showChatHub && !mobilePanelOpen && !isNarrowScreen && threadCallUrl ? (
+            <div className="chat-call-banner">
+              <div>
+                <div className="chat-call-banner-title">Thread video call</div>
+                <div className="chat-call-banner-meta">
+                  {callParticipants.length ? `${callParticipants.length} in call now` : 'Start or join the group video room'}
+                </div>
+              </div>
+              <button type="button" className="chat-call-banner-btn" onClick={() => handleJoinCall(threadCallUrl)}>
+                {isInCurrentCall ? 'Open call' : 'Join call'}
+              </button>
+            </div>
+          ) : null}
+
+          {!showChatHub && !mobilePanelOpen && (!isAlbumsPanelOpen || !isNarrowScreen) ? (
+          <div ref={messagesContainerRef} className={`chat-messages${activeChat ? ' chat-messages--thread' : ''}`} style={styles.messages}>
             {visibleMessages.length ? visibleMessages.map((message) => {
               const isOwn = message.user === user?.username;
               const parsed = parseReplyEnvelope(message.text || message.gif || '');
               return (
                 <div key={message.id || `${message.user}-${message.timestamp}`} className="msg-group" style={{ display: 'flex', flexDirection: 'column' }}>
-                  <div style={{ ...styles.msgRow, ...(isOwn ? styles.msgRowOwn : styles.msgRowOther) }}>
+                  <div className={isOwn ? 'msg-row-own' : 'msg-row-other'} style={{ ...styles.msgRow, ...(isOwn ? styles.msgRowOwn : styles.msgRowOther) }}>
                     {!isOwn && (
                       <div style={{ ...styles.msgAvatar, background: getUserColor(message.user || 'user', theme) }}>
                         {(message.user || 'U').slice(0, 2).toUpperCase()}
@@ -2982,8 +3151,8 @@ export default function ChatPage() {
                       Create threads, share join links, and build nested photo albums — Family → Ooty → Day 2 hikes.
                     </p>
                     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center', marginTop: '14px' }}>
-                      <button type="button" style={{ ...styles.btn, width: 'auto', padding: '10px 16px' }} onClick={() => { setShowSidebar(true); setSidebarPanel('group'); }}>+ New Thread</button>
-                      <button type="button" style={{ ...styles.btn, ...styles.btnSecondary, width: 'auto', padding: '10px 16px' }} onClick={() => { setShowSidebar(true); setSidebarPanel('token'); }}>Join Link</button>
+                      <button type="button" style={{ ...styles.btn, width: 'auto', padding: '10px 16px' }} onClick={() => openCreateThreadModal()}>+ New Thread</button>
+                      <button type="button" style={{ ...styles.btn, ...styles.btnSecondary, width: 'auto', padding: '10px 16px' }} onClick={() => openJoinThreadModal()}>Join Link</button>
                     </div>
                   </>
                 ) : (
@@ -3003,7 +3172,7 @@ export default function ChatPage() {
           </div>
           ) : null}
 
-          {activePanelTab && selectedGroup ? (
+          {activePanelTab && selectedGroup && activePanelTab !== 'invite' ? (
             <div className={`side-panel${activePanelTab === 'albums' || activePanelTab === 'folders' || activePanelTab === 'media' ? ' side-panel--albums' : ''}${mobilePanelOpen ? ' side-panel--mobile-full' : ''}`} style={mobilePanelOpen ? { ...styles.sidePanel, width: '100%', borderLeft: 'none' } : styles.sidePanel}>
               <div className="side-panel-header-wrap" style={styles.sidePanelHeader}>
                 <p style={styles.sidePanelTitle}>
@@ -3015,37 +3184,38 @@ export default function ChatPage() {
                 {activePanelTab === 'members' && renderMembersPanel()}
                 {(activePanelTab === 'albums' || activePanelTab === 'folders' || activePanelTab === 'media') && renderAlbumsPanel()}
                 {activePanelTab === 'bookmarks' && renderBookmarksPanel()}
-                {activePanelTab === 'invite' && renderInvitePanel()}
                 {activePanelTab === 'settings' && renderSettingsPanel()}
               </div>
             </div>
           ) : null}
         </div>
 
-        <div className="chat-bottom-stack">
+        <div className={`chat-bottom-stack${activeChat && isNarrowScreen ? ' chat-bottom-stack--thread-mobile' : ''}`}>
           {/* Typing bar */}
-          <div style={styles.typingBar}>
-            {typingUsers.length ? `${typingUsers.join(', ')} is typing…` : ''}
-          </div>
+          {typingUsers.length > 0 ? (
+            <div className="chat-typing-bar" style={styles.typingBar}>
+              {`${typingUsers.join(', ')} is typing…`}
+            </div>
+          ) : null}
 
-          {selectedGroup && activeChat?.type === 'group' ? (
+          {selectedGroup && activeChat?.type === 'group' && !isNarrowScreen ? (
             <div className="chat-thread-dock">
               {[
                 { id: '', icon: '💬', label: 'Chat' },
                 { id: 'albums', icon: '📸', label: 'Albums' },
-                { id: 'invite', icon: '🔗', label: 'Share' },
+                { id: 'invite', icon: '🔗', label: 'Invite' },
                 { id: 'members', icon: '👥', label: 'People' },
                 { id: 'bookmarks', icon: '🔖', label: 'Saved' },
                 ...(isGroupOwner ? [{ id: 'settings', icon: '⚙️', label: 'Admin' }] : []),
               ].map((item) => {
-                const isAlbums = item.id === 'albums' && (activePanelTab === 'albums' || activePanelTab === 'folders' || activePanelTab === 'media');
-                const isActive = item.id === '' ? !activePanelTab : (item.id === 'albums' ? isAlbums : activePanelTab === item.id);
+                const isAlbums = item.id === 'albums' && isAlbumsPanelOpen;
+                const isActive = item.id === '' ? !activePanelTab && !showInviteModal : (item.id === 'albums' ? isAlbums : item.id === 'invite' ? showInviteModal : activePanelTab === item.id);
                 return (
                   <button
                     key={item.id || 'chat'}
                     type="button"
                     className={`chat-thread-dock-btn${isActive ? ' chat-thread-dock-btn--active' : ''}`}
-                    onClick={() => openThreadPanel(item.id)}
+                    onClick={() => (item.id === 'invite' ? (showInviteModal ? closeInviteModal() : openInviteModal()) : openThreadPanel(item.id))}
                   >
                     <span>{item.icon}</span>
                     <span>{item.label}</span>
@@ -3067,11 +3237,134 @@ export default function ChatPage() {
               disabled={!activeChat}
               rows={1}
             />
-            <button type="submit" style={styles.sendBtn} disabled={!activeChat || !composerText.trim()}>➤</button>
+            <button type="submit" className="chat-send-btn" style={styles.sendBtn} disabled={!activeChat || !composerText.trim()}>➤</button>
           </form>
           ) : null}
         </div>
       </main>
+
+      {showCreateThreadModal ? (
+        <div style={styles.modalBackdrop} onClick={() => setShowCreateThreadModal(false)} role="presentation">
+          <form
+            style={styles.modalPanel}
+            onSubmit={handleCreateGroup}
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="create-thread-title"
+          >
+            <div style={styles.modalHead}>
+              <div>
+                <h2 id="create-thread-title" style={styles.modalTitle}>Create trip thread</h2>
+                <p style={{ ...styles.helperText, margin: '6px 0 0' }}>Example: Goa with family — then nest Day 1 albums inside.</p>
+              </div>
+              <button type="button" style={styles.modalCloseBtn} aria-label="Close" onClick={() => setShowCreateThreadModal(false)}>✕</button>
+            </div>
+            <button type="button" style={{ ...styles.btn, ...styles.btnSecondary, width: 'auto', padding: '10px 12px', marginBottom: '10px' }} onClick={() => threadCoverInputRef.current?.click()}>
+              {threadCoverPreview ? 'Change cover photo/video' : '📷 Add cover photo/video'}
+            </button>
+            <input ref={threadCoverInputRef} type="file" accept="image/*,video/*" style={{ display: 'none' }} onChange={handleThreadCoverPick} />
+            {threadCoverPreview ? (
+              <div style={{ borderRadius: '14px', overflow: 'hidden', border: `1px solid ${theme.cardBorder}`, marginBottom: '10px' }}>
+                {threadCoverFile && threadCoverFile.type.startsWith('video/') ? (
+                  <video src={threadCoverPreview} style={{ width: '100%', maxHeight: '160px', objectFit: 'cover', display: 'block' }} muted playsInline />
+                ) : (
+                  <img src={threadCoverPreview} alt="Thread cover preview" style={{ width: '100%', maxHeight: '160px', objectFit: 'cover', display: 'block' }} />
+                )}
+              </div>
+            ) : (
+              <p style={styles.helperText}>Cover appears on the invite link when you share on WhatsApp.</p>
+            )}
+            <input style={styles.input} value={groupForm.name} onChange={(e) => setGroupForm((p) => ({ ...p, name: e.target.value }))} placeholder="Thread name (e.g. Goa family 2026)" autoFocus />
+            <textarea style={{ ...styles.input, minHeight: '72px', resize: 'vertical' }} value={groupForm.description} onChange={(e) => setGroupForm((p) => ({ ...p, description: e.target.value }))} placeholder="What is this thread about?" />
+            <select style={styles.select} value={groupForm.parentGroupId} onChange={(e) => setGroupForm((p) => ({ ...p, parentGroupId: e.target.value }))}>
+              <option value="">Top-level thread</option>
+              {flattenedGroups.map(({ group, depth }) => (
+                <option key={group.id} value={group.id}>{`${'— '.repeat(depth)}${group.name}`}</option>
+              ))}
+            </select>
+            <input style={styles.input} value={groupForm.members} onChange={(e) => setGroupForm((p) => ({ ...p, members: e.target.value }))} placeholder="Members (comma separated)" />
+            <input style={styles.input} value={groupForm.viewers} onChange={(e) => setGroupForm((p) => ({ ...p, viewers: e.target.value }))} placeholder="Viewers (comma separated)" />
+            <button type="submit" style={{ ...styles.btn, marginTop: '4px' }} disabled={creatingThread}>{creatingThread ? 'Creating…' : 'Create Thread'}</button>
+          </form>
+        </div>
+      ) : null}
+
+      {showThreadModeModal && threadModePickerGroup ? (
+        <div style={styles.modalBackdrop} onClick={() => { setShowThreadModeModal(false); setThreadModePickerGroup(null); }} role="presentation">
+          <div
+            style={styles.modalPanel}
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="thread-mode-title"
+          >
+            <div style={styles.modalHead}>
+              <div>
+                <h2 id="thread-mode-title" style={styles.modalTitle}>{threadModePickerGroup.name}</h2>
+                <p style={{ ...styles.helperText, margin: '6px 0 0' }}>Open messages or photo albums for this thread.</p>
+              </div>
+              <button type="button" style={styles.modalCloseBtn} aria-label="Close" onClick={() => { setShowThreadModeModal(false); setThreadModePickerGroup(null); }}>✕</button>
+            </div>
+            <div className="chat-thread-mode-picker">
+              <button type="button" className="chat-thread-mode-picker-btn" onClick={() => enterThread(threadModePickerGroup, 'chat')}>
+                <span className="chat-thread-mode-picker-icon">💬</span>
+                <span className="chat-thread-mode-picker-label">Chat</span>
+                <span className="chat-thread-mode-picker-hint">Group messages</span>
+              </button>
+              <button type="button" className="chat-thread-mode-picker-btn" onClick={() => enterThread(threadModePickerGroup, 'albums')}>
+                <span className="chat-thread-mode-picker-icon">📸</span>
+                <span className="chat-thread-mode-picker-label">Albums</span>
+                <span className="chat-thread-mode-picker-hint">Photos & folders</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showInviteModal && selectedGroup ? (
+        <div style={styles.modalBackdrop} onClick={closeInviteModal} role="presentation">
+          <div
+            style={styles.modalPanel}
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="invite-thread-title"
+          >
+            <div style={styles.modalHead}>
+              <div>
+                <h2 id="invite-thread-title" style={styles.modalTitle}>Invite & video call</h2>
+                <p style={{ ...styles.helperText, margin: '6px 0 0' }}>Share {selectedGroup.name} or join the group video room.</p>
+              </div>
+              <button type="button" style={styles.modalCloseBtn} aria-label="Close" onClick={closeInviteModal}>✕</button>
+            </div>
+            {renderInvitePanel()}
+          </div>
+        </div>
+      ) : null}
+
+      {showJoinThreadModal ? (
+        <div style={styles.modalBackdrop} onClick={() => setShowJoinThreadModal(false)} role="presentation">
+          <form
+            style={styles.modalPanel}
+            onSubmit={handleJoinByToken}
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="join-thread-title"
+          >
+            <div style={styles.modalHead}>
+              <div>
+                <h2 id="join-thread-title" style={styles.modalTitle}>Join thread with link</h2>
+                <p style={{ ...styles.helperText, margin: '6px 0 0' }}>Paste the invite token from a friend.</p>
+              </div>
+              <button type="button" style={styles.modalCloseBtn} aria-label="Close" onClick={() => setShowJoinThreadModal(false)}>✕</button>
+            </div>
+            <input style={styles.input} value={inviteToken} onChange={(e) => setInviteToken(e.target.value)} placeholder="Paste thread invite token" autoFocus />
+            <button type="submit" style={styles.btn}>Join Thread</button>
+          </form>
+        </div>
+      ) : null}
 
       {/* Toasts */}
       {toasts.length > 0 && (
@@ -3085,18 +3378,26 @@ export default function ChatPage() {
         </div>
       )}
 
+      {!(activeChat && isNarrowScreen) ? (
       <MobileBottomNav
         theme={theme}
-        activeId="chat"
+        activeId={showChatHub ? (hubTab === 'friends' ? 'friends' : 'threads') : 'chat'}
         hideSpacer
-        items={[
+        items={showChatHub ? [
+          { id: 'threads', label: 'Threads', icon: '🧵', onClick: () => setHubTab('threads') },
+          { id: 'friends', label: 'Friends', icon: '👋', onClick: () => setHubTab('friends') },
+          { id: 'create', label: 'New', icon: '➕', onClick: () => openCreateThreadModal() },
+          { id: 'join', label: 'Join', icon: '🔗', onClick: () => openJoinThreadModal() },
           { id: 'home', label: 'Home', icon: '🏠', href: '/dashboard' },
-          { id: 'chat', label: 'Chat', icon: '💬', href: '/chat' },
+        ] : [
+          { id: 'home', label: 'Home', icon: '🏠', href: '/dashboard' },
+          { id: 'chat', label: 'Threads', icon: '🧵', href: '/chat' },
           { id: 'posts', label: 'Posts', icon: '📷', href: '/dashboard?tab=posts' },
           { id: 'nifty', label: 'Nifty', icon: '📊', href: '/nifty-strategies' },
           { id: 'wellness', label: 'Well', icon: '💪', href: '/wellness' },
         ]}
       />
+      ) : null}
 
       <style jsx>{`
         /* Mobile: sidebar is an overlay drawer; main fills the screen */
@@ -3161,8 +3462,86 @@ export default function ChatPage() {
         @media (hover: none) {
           .msg-actions { opacity: 1 !important; }
         }
+        .chat-body--hub {
+          flex: 1;
+          min-height: 0;
+          display: flex;
+          flex-direction: column;
+        }
         /* Side panel: overlay on mobile */
         @media (max-width: 720px) {
+          .chat-main-area--thread-mobile .chat-top-bar {
+            padding: 6px 10px;
+            min-height: 48px;
+            border-bottom: 1px solid ${theme.cardBorder};
+            background: ${theme.panelBg};
+          }
+          .chat-main-area--thread-mobile .chat-top-bar-icons {
+            gap: 2px;
+          }
+          .chat-mobile-tools {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            flex-shrink: 0;
+          }
+          .chat-mobile-tool {
+            width: 32px;
+            height: 32px;
+            border: none;
+            border-radius: 10px;
+            background: transparent;
+            color: ${theme.textSecondary};
+            font-size: 15px;
+            line-height: 1;
+            display: grid;
+            place-items: center;
+            cursor: pointer;
+            padding: 0;
+            font-family: ${theme.font};
+          }
+          .chat-mobile-tool--active {
+            background: ${theme.blue}22;
+            color: ${theme.blue};
+          }
+          .chat-mobile-tool--call {
+            background: ${theme.green}18;
+            color: ${theme.green};
+          }
+          .chat-conn-dot { display: none; }
+          .chat-thread-mode-picker {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+          }
+          .chat-thread-mode-picker-btn {
+            border: 1px solid ${theme.cardBorder};
+            background: ${theme.cardBg};
+            border-radius: 16px;
+            padding: 16px 12px;
+            cursor: pointer;
+            text-align: center;
+            font-family: inherit;
+            color: inherit;
+            display: grid;
+            gap: 6px;
+            justify-items: center;
+          }
+          .chat-thread-mode-picker-icon { font-size: 28px; }
+          .chat-thread-mode-picker-label { font-size: 15px; font-weight: 900; color: ${theme.textHeading}; }
+          .chat-thread-mode-picker-hint { font-size: 11px; color: ${theme.textMuted}; }
+          .chat-call-banner {
+            display: none;
+          }
+          .chat-messages--thread {
+            padding: 10px 10px 6px !important;
+            gap: 8px !important;
+            background: ${theme.pageBg};
+          }
+          .chat-messages--thread .msg-row-own,
+          .chat-messages--thread .msg-row-other {
+            max-width: 86% !important;
+          }
           .chat-body--panel-open {
             position: relative;
           }
@@ -3180,13 +3559,16 @@ export default function ChatPage() {
             flex-direction: column !important;
             overflow: hidden !important;
           }
+          .side-panel--albums.side-panel--mobile-full .side-panel-header-wrap {
+            display: none;
+          }
           .side-panel--albums.side-panel--mobile-full .side-panel-content {
             flex: 1 1 auto;
             min-height: 0;
             overflow-y: auto;
             -webkit-overflow-scrolling: touch;
             overscroll-behavior: contain;
-            padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+            padding: 8px 10px max(10px, env(safe-area-inset-bottom, 0px));
           }
           .side-panel--mobile-full .side-panel-header-wrap {
             flex-shrink: 0;
@@ -3200,38 +3582,47 @@ export default function ChatPage() {
           }
           .chat-top-icon--desktop { display: none !important; }
           .chat-back-btn { display: grid !important; }
-          .chat-thread-dock {
-            display: flex;
-            gap: 6px;
-            padding: 8px 10px;
-            border-top: 1px solid ${theme.cardBorder};
+          .chat-thread-dock { display: none !important; }
+          .chat-bottom-stack--thread-mobile {
+            padding-bottom: max(8px, env(safe-area-inset-bottom, 0px)) !important;
             background: ${theme.panelBg};
-            overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
+            border-top: 1px solid ${theme.cardBorder};
+            box-shadow: 0 -2px 12px ${theme.shadow};
           }
-          .chat-thread-dock-btn {
-            border: 1px solid ${theme.cardBorder};
-            background: ${theme.cardBg};
-            color: ${theme.textSecondary};
-            border-radius: 12px;
-            padding: 8px 10px;
-            font-size: 10px;
-            font-weight: 800;
-            font-family: ${theme.font};
-            cursor: pointer;
-            flex: 1 0 auto;
-            min-width: 64px;
-            display: grid;
-            gap: 2px;
-            justify-items: center;
+          .chat-bottom-stack--thread-mobile .chat-typing-bar {
+            min-height: 0;
+            padding: 0 12px;
+          }
+          .chat-bottom-stack--thread-mobile .chat-typing-bar:empty {
+            display: none;
+          }
+          .chat-main-area--thread-mobile .chat-composer {
+            padding: 6px 10px max(8px, env(safe-area-inset-bottom, 0px));
+            border-top: none;
+            gap: 6px;
+          }
+          .chat-main-area--thread-mobile .chat-composer textarea {
+            min-height: 38px !important;
+            max-height: 96px;
+            padding: 8px 14px !important;
+            font-size: 15px !important;
+            border-radius: 20px !important;
+          }
+          .chat-main-area--thread-mobile .chat-send-btn {
+            width: 38px !important;
+            height: 38px !important;
+            border-radius: 12px !important;
+            font-size: 16px !important;
+          }
+          .chat-main-area--thread-mobile {
+            min-height: 0;
+          }
+          .chat-main-area--thread-mobile .chat-body {
+            flex: 1;
+            min-height: 0;
           }
           .expansion-panel-mobile {
             max-height: min(52vh, 420px) !important;
-          }
-          .chat-thread-dock-btn--active {
-            background: ${theme.blue}22;
-            border-color: ${theme.blue};
-            color: ${theme.blue};
           }
           .chat-thread-strip {
             display: flex;
@@ -3263,15 +3654,39 @@ export default function ChatPage() {
           .chat-thread-dock { display: none; }
           .chat-thread-strip { display: none; }
         }
-        @media (max-width: 720px) {
-          .chat-thread-dock { display: flex; }
-        }
         @media (min-width: 721px) {
-          .chat-back-btn { display: none !important; }
+          .chat-back-btn { display: grid !important; }
+          .chat-mobile-tool { display: none; }
+          .chat-call-banner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin: 0 12px 8px;
+            padding: 10px 12px;
+            border-radius: 14px;
+            border: 1px solid ${theme.cardBorder};
+            background: ${theme.cardBg};
+            flex-shrink: 0;
+          }
+          .chat-call-banner-title { font-size: 13px; font-weight: 800; color: ${theme.textHeading}; }
+          .chat-call-banner-meta { font-size: 11px; color: ${theme.textMuted}; margin-top: 2px; }
+          .chat-call-banner-btn {
+            border: none;
+            border-radius: 999px;
+            padding: 8px 14px;
+            background: ${theme.green};
+            color: #fff;
+            font-size: 12px;
+            font-weight: 800;
+            cursor: pointer;
+            font-family: ${theme.font};
+            white-space: nowrap;
+          }
         }
-        /* Keep composer + send above fixed mobile bottom nav */
+        /* Keep composer above fixed mobile bottom nav (hub only) */
         @media (max-width: 720px) {
-          .chat-bottom-stack {
+          .chat-bottom-stack:not(.chat-bottom-stack--thread-mobile) {
             flex-shrink: 0;
             position: relative;
             z-index: 50;

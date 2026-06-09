@@ -7,10 +7,9 @@ const DATA_DIR = path.join(process.cwd(), 'data');
 const LEGACY_JSON_FILE = path.join(DATA_DIR, 'saved-options-strategies.json');
 const DB_FILE = path.join(DATA_DIR, 'saved-options-strategies.db');
 
+const globalForStrategy = globalThis;
+
 let dbPromise = null;
-let seededPostgresStrategiesPromise = null;
-let lastSeedRunAt = 0;
-const SEED_DEBOUNCE_MS = 30 * 1000; // re-run incremental sync at most every 30s
 
 const DEFAULT_STATUS = 'watching';
 
@@ -61,14 +60,12 @@ async function getDb() {
   return dbPromise;
 }
 
-async function seedPostgresStrategiesIfNeeded() {
+async function seedPostgresStrategiesIfNeeded({ force = false } = {}) {
   if (!hasPostgresStorage()) return;
-  const now = Date.now();
-  if (seededPostgresStrategiesPromise && now - lastSeedRunAt < SEED_DEBOUNCE_MS) {
-    return seededPostgresStrategiesPromise;
-  }
-  lastSeedRunAt = now;
-  seededPostgresStrategiesPromise = (async () => {
+  if (globalForStrategy.__cosmixStrategyBootstrapDone && !force) return;
+  if (globalForStrategy.__cosmixStrategySeedPromise) return globalForStrategy.__cosmixStrategySeedPromise;
+  globalForStrategy.__cosmixStrategySeedPromise = (async () => {
+    try {
       const pool = await ensureWebStorage();
 
       // Seed from local JSON file into option_strategies if that table is empty
@@ -123,9 +120,16 @@ async function seedPostgresStrategiesIfNeeded() {
         };
         await upsertNormalizedStrategy(pool, strategy, ownerId);
       }
+      globalForStrategy.__cosmixStrategyBootstrapDone = true;
+    } catch (error) {
+      globalForStrategy.__cosmixStrategyBootstrapDone = false;
+      throw error;
+    } finally {
+      globalForStrategy.__cosmixStrategySeedPromise = null;
+    }
   })();
 
-  await seededPostgresStrategiesPromise;
+  await globalForStrategy.__cosmixStrategySeedPromise;
 }
 
 function normalizeStrategyInput(input, existing, ownerId) {

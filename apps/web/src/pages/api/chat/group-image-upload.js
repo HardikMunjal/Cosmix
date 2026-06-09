@@ -1,6 +1,7 @@
 import AWS from 'aws-sdk';
 import formidable from 'formidable';
 import fs from 'fs';
+import path from 'path';
 
 const MAX_IMAGE_UPLOAD_BYTES = 15 * 1024 * 1024;
 const MAX_VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024;
@@ -22,11 +23,34 @@ export const config = {
   },
 };
 
+function loadEnvFile(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return {};
+    const entries = {};
+    fs.readFileSync(filePath, 'utf8').split(/\r?\n/).forEach((line) => {
+      const trimmed = String(line || '').trim();
+      if (!trimmed || trimmed.startsWith('#')) return;
+      const index = trimmed.indexOf('=');
+      if (index < 1) return;
+      const key = trimmed.slice(0, index).trim();
+      const value = trimmed.slice(index + 1).trim();
+      if (key) entries[key] = value;
+    });
+    return entries;
+  } catch (_) {
+    return {};
+  }
+}
+
 function resolveAwsUploadConfig() {
-  const accessKeyId = process.env.AWS_ACCESS_KEY || process.env.AWS_ACCESS_KEY_ID || '';
-  const secretAccessKey = process.env.AWS_SECRET_KEY || process.env.AWS_SECRET_ACCESS_KEY || '';
-  const region = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || '';
-  const bucket = process.env.AWS_BUCKET || process.env.AWS_S3_BUCKET || process.env.CHAT_S3_BUCKET || '';
+  const repoRootEnv = loadEnvFile(path.resolve(process.cwd(), '../../.env'));
+  const webRootEnv = loadEnvFile(path.resolve(process.cwd(), '.env'));
+  const env = { ...repoRootEnv, ...webRootEnv, ...process.env };
+
+  const accessKeyId = env.AWS_ACCESS_KEY || env.AWS_ACCESS_KEY_ID || '';
+  const secretAccessKey = env.AWS_SECRET_KEY || env.AWS_SECRET_ACCESS_KEY || '';
+  const region = env.AWS_REGION || env.AWS_DEFAULT_REGION || '';
+  const bucket = env.AWS_BUCKET || env.AWS_S3_BUCKET || env.CHAT_S3_BUCKET || '';
 
   return {
     accessKeyId,

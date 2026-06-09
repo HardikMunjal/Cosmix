@@ -516,7 +516,7 @@ export async function getAuthenticatedUser(req, res) {
   if (!token) return null;
 
   if (hasPostgresStorage()) {
-    await ensureSeededUser();
+    await ensureWebStorage();
     const pool = getWebPool();
     const tokenHash = hashSessionToken(token);
     const sessionResult = await pool.query('SELECT * FROM app_sessions WHERE token_hash = $1 LIMIT 1', [tokenHash]);
