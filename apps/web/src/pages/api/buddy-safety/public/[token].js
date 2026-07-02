@@ -1,4 +1,4 @@
-import { getTripByShareToken } from '../../../server/buddySafetyStore';
+import { getTripByShareToken } from '../../../../server/buddySafetyStore';
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') {
