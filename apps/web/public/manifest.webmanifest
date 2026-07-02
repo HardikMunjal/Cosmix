@@ -1,0 +1,17 @@
+{
+  "name": "Cosmix",
+  "short_name": "Cosmix",
+  "description": "Threads, chat, albums, and wellness",
+  "start_url": "/chat",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "icons": [
+    {
+      "src": "/cosmix-share-logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

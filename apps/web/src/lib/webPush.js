@@ -13,7 +13,7 @@ function chatApiBase() {
   if (typeof window === 'undefined') return '';
   const host = window.location.hostname;
   const isLocalHost = host === 'localhost' || host === '127.0.0.1';
-  return isLocalHost ? `http://${host}:3002/chat` : '/chat-api/chat';
+  return isLocalHost ? `http://${host}:3002/chat` : `${window.location.origin}/chat-api/chat`;
 }
 
 const subscribedUsers = new Set();
@@ -22,11 +22,12 @@ const subscribedUsers = new Set();
  * Register this browser for Web Push (chat DMs, groups, friend requests).
  * Safe to call multiple times; runs once per username per page load.
  */
-export async function subscribeToWebPush(username) {
+export async function subscribeToWebPush(username, { force = false } = {}) {
   if (typeof window === 'undefined') return { ok: false, reason: 'no-window' };
   const actor = String(username || '').trim();
   if (!actor) return { ok: false, reason: 'no-user' };
-  if (subscribedUsers.has(actor)) return { ok: true, reason: 'already-subscribed' };
+  if (force) subscribedUsers.delete(actor);
+  if (!force && subscribedUsers.has(actor)) return { ok: true, reason: 'already-subscribed' };
   if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
     return { ok: false, reason: 'unsupported' };
   }
@@ -66,7 +67,7 @@ export async function subscribeToWebPush(username) {
 
     subscribedUsers.add(actor);
     return { ok: true, reason: 'subscribed' };
-  } catch (_) {
-    return { ok: false, reason: 'error' };
+  } catch (error) {
+    return { ok: false, reason: 'error', detail: String(error?.message || error) };
   }
 }

@@ -251,13 +251,14 @@ export function ChatHomeHub({
         .chat-hub-thread-row {
           display: grid;
           grid-template-columns: auto 1fr;
-          gap: 10px;
+          gap: 8px;
           align-items: center;
           border-radius: 16px;
           border: 1px solid ${theme.cardBorder};
           background: ${theme.cardBg};
           padding: 8px 10px;
           transition: border-color 0.15s ease, box-shadow 0.15s ease;
+          min-width: 0;
         }
         .chat-hub-thread-row.is-drop-target {
           border-color: ${theme.blue};
@@ -432,6 +433,31 @@ export function ChatHomeHub({
         @media (max-width: 720px) {
           .chat-hub-tabs,
           .chat-hub-actions { display: none; }
+        }
+        @media (min-width: 721px) {
+          .chat-hub {
+            max-width: 920px;
+            margin: 0 auto;
+            width: 100%;
+            padding: 20px 20px calc(24px + env(safe-area-inset-bottom, 0px));
+          }
+          .chat-hub-thread-list {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+          }
+          .chat-hub-thread-row {
+            margin-left: 0 !important;
+          }
+          .chat-hub-drag-handle {
+            width: 28px;
+            height: 28px;
+            font-size: 12px;
+          }
+        }
+        @media (min-width: 1100px) {
+          .chat-hub-thread-list {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
         }
         @media (min-width: 900px) {
           .chat-hub { padding: 22px 24px calc(24px + env(safe-area-inset-bottom, 0px)); }

@@ -28,6 +28,8 @@ secret-transfer.bundle.enc
 out/
 apps/web/data/sessions.db
 apps/web/data/users.db
+apps/web/data/buddy-safety-profiles.db
+apps/web/data/buddy-safety-trips.db
 
 # Expo / React Native
 .expo/

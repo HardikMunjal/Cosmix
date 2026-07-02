@@ -628,41 +628,7 @@ export function OptionsStrategyPage({ embedded = false, hideBackButton = false, 
   const pricingInputsRef = useRef({ ivInput: '', rateInput: '' });
   useEffect(() => { pricingInputsRef.current = { ivInput, rateInput }; }, [ivInput, rateInput]);
   const pricingHydratedRef = useRef(false);
-  const [optimizerResult, setOptimizerResult] = useState(null);
-  const [optimizerLoading, setOptimizerLoading] = useState(false);
-  const [optimizerError, setOptimizerError] = useState('');
-  const [calendarResult, setCalendarResult] = useState(null);
-  const [calendarLoading, setCalendarLoading] = useState(false);
-  const [calendarError, setCalendarError] = useState('');
-  const [calSellExpiry, setCalSellExpiry] = useState('');
-  const [calBuyExpiry, setCalBuyExpiry] = useState('');
-
-  const runOptimizer = async () => {
-    setOptimizerLoading(true);
-    setOptimizerError('');
-    setOptimizerResult(null);
-    try {
-      const response = await fetch('/api/options-best-strategies', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          spot: spotPrice,
-          lotSize,
-          pricingSource,
-          rate: effectiveRate,
-          iv: Number(ivInput) || 14,
-          expiry: selectedExpiry || 0,
-          strikeRange: 2000,
-        }),
-      });
-      const data = await parseApiJsonResponse(response, 'Optimizer failed');
-      setOptimizerResult(data);
-    } catch (err) {
-      setOptimizerError(err.message);
-    } finally {
-      setOptimizerLoading(false);
-    }
-  };
+  const [optimizerHandoffNote, setOptimizerHandoffNote] = useState('');
 
   const loadOptimizedStrategy = (strategy) => {
     const hydratedLegs = strategy.legs.map((leg) => ({
@@ -681,37 +647,22 @@ export function OptionsStrategyPage({ embedded = false, hideBackButton = false, 
     setSaveMessage('');
   };
 
-  const runCalendarOptimizer = async () => {
-    if (!calSellExpiry || !calBuyExpiry) {
-      setCalendarError('Please select both Sell Expiry and Buy Expiry before running.');
-      return;
-    }
-    setCalendarLoading(true);
-    setCalendarError('');
-    setCalendarResult(null);
+  useEffect(() => {
+    if (!user || router.query?.fromOptimizer !== '1') return;
     try {
-      const response = await fetch('/api/options-best-strategies', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          spot: spotPrice,
-          lotSize,
-          pricingSource,
-          rate: Number(rateInput) || 6,
-          iv: Number(ivInput) || 14,
-          calendar: true,
-          sellExpiry: Number(calSellExpiry),
-          buyExpiry: Number(calBuyExpiry),
-        }),
-      });
-      const data = await parseApiJsonResponse(response, 'Calendar optimizer failed');
-      setCalendarResult(data);
-    } catch (err) {
-      setCalendarError(err.message);
-    } finally {
-      setCalendarLoading(false);
-    }
-  };
+      const raw = sessionStorage.getItem('nifty-optimizer-handoff');
+      if (!raw) return;
+      const payload = JSON.parse(raw);
+      if (payload.strategy?.legs?.length) {
+        loadOptimizedStrategy(payload.strategy);
+      }
+      if (payload.strategyName) setStrategyName(payload.strategyName);
+      if (payload.expiry) handleDefaultExpirySelection(payload.expiry);
+      setOptimizerHandoffNote('Loaded optimized strategy from Strategy Optimizer.');
+      sessionStorage.removeItem('nifty-optimizer-handoff');
+    } catch (_) { /* ignore */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, router.query?.fromOptimizer]);
 
   const buildChainUrl = (expiryValue) => {
     const params = new URLSearchParams({ symbol: 'NIFTY' });
@@ -1727,227 +1678,16 @@ export function OptionsStrategyPage({ embedded = false, hideBackButton = false, 
         </div>
 
         <div style={styles.card}>
-          <h2 style={styles.sectionTitle}>🔍 Strategy Optimizer — Find Best Shorting Strategies</h2>
+          <h2 style={styles.sectionTitle}>Strategy Optimizer</h2>
           <p style={styles.explanation}>
-            The optimizer exhaustively searches hundreds of thousands of combinations across 11 strategy families (Iron Condor, Iron Butterfly, Jade Lizard, Twisted Sister, Ratio Condor, Strangle+Wings, Ratio Spread, Double Condor, Bear Call Ladder, Bull Put Ladder, Layered Condor) with 3–8 legs. It evaluates every viable combination and ranks the best for 6 scoring profiles. Lot size = {lotSize || 65} (1 lot = {lotSize || 65} qty).
+            Run the VIX-aware multi-factor optimizer in its own module — single expiry and cross-expiry calendar spreads, payoff dashboards, India/global macro context, and hedging scores.
           </p>
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', marginTop: 12, marginBottom: 12 }}>
-            <button onClick={runOptimizer} disabled={optimizerLoading} style={optimizerLoading ? { ...styles.applyButton, opacity: 0.6, cursor: 'not-allowed' } : styles.applyButton}>
-              {optimizerLoading ? 'Analyzing…' : 'Run Optimizer'}
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 12 }}>
+            <button type="button" onClick={() => router.push('/strategy-optimizer')} style={styles.applyButton}>
+              Open Strategy Optimizer
             </button>
-            {optimizerResult && !optimizerLoading ? (
-              <span style={{ color: theme.green, fontSize: 13 }}>
-                ✓ Evaluated {optimizerResult.totalCombinationsEvaluated?.toLocaleString()} combinations · {optimizerResult.viableCandidates?.toLocaleString()} viable{optimizerResult.computeTimeMs ? ` · ${(optimizerResult.computeTimeMs / 1000).toFixed(1)}s` : ''}
-              </span>
-            ) : null}
           </div>
-          {optimizerLoading ? (
-            <div style={styles.loaderWrap}>
-              <div style={styles.loaderOuter}>
-                <div style={styles.loaderInner} />
-              </div>
-              <div style={styles.loaderText}>
-                <div style={{ fontSize: 15, fontWeight: 'bold', color: theme.textPrimary, marginBottom: 6 }}>Finding best strategies…</div>
-                <div style={{ fontSize: 12, color: theme.textSecondary }}>Evaluating Iron Condors, Butterflies, Jade Lizards, Ratio Spreads, Call/Put Ladders, Layered Condors and more across all combinations</div>
-              </div>
-              <style>{`
-                @keyframes optimizerSpin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-                @keyframes optimizerPulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
-              `}</style>
-            </div>
-          ) : null}
-          {optimizerError ? <div style={{ ...styles.saveMessage, borderColor: `${theme.red}50`, color: theme.red, background: `${theme.red}15` }}>{optimizerError}</div> : null}
-          {optimizerResult && !optimizerLoading ? (
-            <div>
-              <details style={{ marginBottom: 14, background: theme.panelDarkBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 10, padding: '10px 14px' }}>
-                <summary style={{ cursor: 'pointer', color: theme.textSecondary, fontSize: 13, fontWeight: 'bold' }}>
-                  📊 Combination Details — {optimizerResult.totalCombinationsEvaluated?.toLocaleString()} total checked, {optimizerResult.viableCandidates?.toLocaleString()} viable{optimizerResult.computeTimeMs ? ` (${(optimizerResult.computeTimeMs / 1000).toFixed(1)}s)` : ''}
-                </summary>
-                <div style={{ marginTop: 10, fontSize: 12, color: theme.textMid }}>
-                  <div style={{ marginBottom: 8, color: theme.textPrimary, fontWeight: 'bold' }}>Combinations checked per family:</div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 6 }}>
-                    {Object.entries(optimizerResult.familyCounts || {}).map(([family, count]) => (
-                      <div key={family} style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 6, padding: '6px 10px', fontSize: 11 }}>
-                        <strong style={{ color: theme.cyan }}>{family}</strong>: {count.toLocaleString()} combinations
-                      </div>
-                    ))}
-                  </div>
-                  {optimizerResult.bestPerFamily && optimizerResult.bestPerFamily.length > 0 ? (
-                    <div style={{ marginTop: 12 }}>
-                      <div style={{ color: theme.textPrimary, fontWeight: 'bold', marginBottom: 6 }}>Best strategy found per family (best overall score):</div>
-                      {optimizerResult.bestPerFamily.map((bpf) => (
-                        <div key={bpf.family} style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 8, padding: '8px 10px', marginBottom: 6, fontSize: 11, color: theme.textMid }}>
-                          <strong style={{ color: theme.cyan }}>{bpf.family}</strong> ({bpf.legCount} legs): {bpf.legs.map(l => `${l.side} ${l.strike} ${l.type}`).join(' / ')} — Max Profit: <span style={{ color: theme.green }}>Rs. {bpf.maxProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>, Max Loss: <span style={{ color: theme.red }}>Rs. {Math.abs(bpf.maxLoss).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>, Zone: {bpf.profitZoneWidth} pts
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              </details>
-              {(optimizerResult.profiles || []).map((profile) => (
-                <details key={profile.key} style={{ marginBottom: 12 }} open={profile.key === 'balanced'}>
-                  <summary style={{ cursor: 'pointer', color: theme.textHeading, fontSize: 15, fontWeight: 'bold', padding: '8px 0' }}>
-                    {profile.label} <span style={{ fontWeight: 'normal', color: theme.textSecondary, fontSize: 12 }}>— {profile.description}</span>
-                  </summary>
-                  <div style={{ display: 'grid', gap: 10, marginTop: 8 }}>
-                    {(profile.strategies || []).map((strat) => (
-                      <div key={`${profile.key}-${strat.rank}`} style={{ background: theme.panelDarkBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 12, padding: 14 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
-                          <div>
-                            <span style={{ color: theme.cyan, fontWeight: 'bold', fontSize: 14 }}>#{strat.rank} {strat.family}</span>
-                            <span style={{ color: theme.textSecondary, fontSize: 12, marginLeft: 8 }}>{strat.legCount} legs · {strat.totalLots} lots</span>
-                          </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                            <span style={{ background: `${theme.green}26`, border: `1px solid ${theme.green}66`, borderRadius: 8, padding: '4px 12px', color: theme.green, fontWeight: 'bold', fontSize: 15 }}>Profit: Rs. {strat.maxProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
-                            <button
-                              onClick={() => loadOptimizedStrategy(strat)}
-                              style={{ ...styles.applyButton, padding: '6px 14px', fontSize: 12 }}
-                            >
-                              Use This Strategy
-                            </button>
-                          </div>
-                        </div>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
-                          {strat.legs.map((leg, li) => (
-                            <span
-                              key={li}
-                              style={{
-                                display: 'inline-block',
-                                padding: '4px 10px',
-                                borderRadius: 999,
-                                fontSize: 11,
-                                fontWeight: 'bold',
-                                background: leg.side === 'SELL' ? `${theme.red}26` : `${theme.green}26`,
-                                color: leg.side === 'SELL' ? theme.red : theme.green,
-                                border: `1px solid ${leg.side === 'SELL' ? theme.red : theme.green}66`,
-                              }}
-                            >
-                              {leg.side} {leg.quantity > 1 ? `${leg.quantity}x ` : ''}{leg.strike} {leg.type} @ {leg.premium.toFixed(2)}
-                            </span>
-                          ))}
-                        </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8, fontSize: 12 }}>
-                          <div style={{ color: theme.textSecondary }}>Credit: <span style={{ color: theme.green, fontWeight: 'bold' }}>Rs. {strat.entryCredit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span></div>
-                          <div style={{ color: theme.textSecondary }}>Max Profit: <span style={{ color: theme.green, fontWeight: 'bold' }}>Rs. {strat.maxProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span> <span style={{ fontSize: 10, color: theme.textMuted }}>(1 lot × {optimizerResult.lotSize || 65} qty)</span></div>
-                          <div style={{ color: theme.textSecondary }}>Max Loss: <span style={{ color: theme.red, fontWeight: 'bold' }}>Rs. {Math.abs(strat.maxLoss).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span> <span style={{ fontSize: 10, color: theme.textMuted }}>(1 lot × {optimizerResult.lotSize || 65} qty)</span></div>
-                          <div style={{ color: theme.textSecondary }}>Profit Zone: <span style={{ color: theme.yellow, fontWeight: 'bold' }}>{strat.profitZoneWidth} pts</span></div>
-                          <div style={{ color: theme.textSecondary }}>Risk:Reward: <span style={{ color: theme.blue, fontWeight: 'bold' }}>{strat.rewardToRisk ? `1:${strat.rewardToRisk}` : '—'}</span></div>
-                          <div style={{ color: theme.textSecondary }}>Break-evens: <span style={{ color: theme.textPrimary }}>{strat.breakEvens.length ? strat.breakEvens.join(', ') : '—'}</span></div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </details>
-              ))}
-            </div>
-          ) : null}
-        </div>
-
-        <div style={styles.card}>
-          <h2 style={styles.sectionTitle}>📅 Calendar Spread Optimizer — Cross-Expiry Strategies</h2>
-          <p style={styles.explanation}>
-            Calendar spreads sell options on a near-term expiry and buy on a far-term expiry to capture time decay difference. For example, sell 13th Apr CE and buy 21st Apr CE. This searches thousands of cross-expiry combos to find the best calendar strategies.
-          </p>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10, marginTop: 12, marginBottom: 12, alignItems: 'end' }}>
-            <div>
-              <label style={{ color: theme.textSecondary, fontSize: 12, display: 'block', marginBottom: 4 }}>Sell Expiry (near-term)</label>
-              <select value={calSellExpiry} onChange={(e) => setCalSellExpiry(e.target.value)} style={styles.input}>
-                <option value="">Select expiry to sell</option>
-                {expiryOptions.map((d) => (
-                  <option key={`sell-${d}`} value={d}>{formatExpiryDisplay(d)}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label style={{ color: theme.textSecondary, fontSize: 12, display: 'block', marginBottom: 4 }}>Buy Expiry (far-term)</label>
-              <select value={calBuyExpiry} onChange={(e) => setCalBuyExpiry(e.target.value)} style={styles.input}>
-                <option value="">Select expiry to buy</option>
-                {expiryOptions.map((d) => (
-                  <option key={`buy-${d}`} value={d}>{formatExpiryDisplay(d)}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <button onClick={runCalendarOptimizer} disabled={calendarLoading} style={calendarLoading ? { ...styles.applyButton, opacity: 0.6, cursor: 'not-allowed' } : styles.applyButton}>
-                {calendarLoading ? 'Analyzing…' : 'Run Calendar Optimizer'}
-              </button>
-            </div>
-          </div>
-          {calendarLoading ? (
-            <div style={styles.loaderWrap}>
-              <div style={styles.loaderOuter}>
-                <div style={styles.loaderInner} />
-              </div>
-              <div style={styles.loaderText}>
-                <div style={{ fontSize: 15, fontWeight: 'bold', color: theme.textPrimary, marginBottom: 6 }}>Analyzing calendar spreads…</div>
-                <div style={{ fontSize: 12, color: theme.textSecondary }}>Comparing premiums across expiries and evaluating Calendar CE, Calendar PE, Double Calendar and Calendar Condor structures</div>
-              </div>
-              <style>{`
-                @keyframes optimizerSpin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-                @keyframes optimizerPulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
-              `}</style>
-            </div>
-          ) : null}
-          {calendarError ? <div style={{ ...styles.saveMessage, borderColor: `${theme.red}50`, color: theme.red, background: `${theme.red}15` }}>{calendarError}</div> : null}
-          {calendarResult && !calendarLoading ? (
-            <div>
-              <div style={{ color: theme.green, fontSize: 13, marginBottom: 12 }}>
-                ✓ Evaluated {calendarResult.totalCombinationsEvaluated?.toLocaleString()} calendar combinations · {calendarResult.viableCandidates?.toLocaleString()} viable · Sell {calendarResult.sellExpiryDays}d / Buy {calendarResult.buyExpiryDays}d
-              </div>
-              {(calendarResult.profiles || []).map((profile) => (
-                <details key={profile.key} style={{ marginBottom: 12 }} open={profile.key === 'cal-balanced'}>
-                  <summary style={{ cursor: 'pointer', color: theme.textHeading, fontSize: 15, fontWeight: 'bold', padding: '8px 0' }}>
-                    {profile.label} <span style={{ fontWeight: 'normal', color: theme.textSecondary, fontSize: 12 }}>— {profile.description}</span>
-                  </summary>
-                  <div style={{ display: 'grid', gap: 10, marginTop: 8 }}>
-                    {(profile.strategies || []).map((strat) => (
-                      <div key={`${profile.key}-${strat.rank}`} style={{ background: theme.panelDarkBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 12, padding: 14 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
-                          <div>
-                            <span style={{ color: theme.purple, fontWeight: 'bold', fontSize: 14 }}>#{strat.rank} {strat.family}</span>
-                            <span style={{ color: theme.textSecondary, fontSize: 12, marginLeft: 8 }}>{strat.legCount} legs · {strat.totalLots} lots</span>
-                          </div>
-                          <button
-                            onClick={() => loadOptimizedStrategy(strat)}
-                            style={{ ...styles.applyButton, padding: '6px 14px', fontSize: 12, background: theme.purple, color: theme.textHeading }}
-                          >
-                            Use This Strategy
-                          </button>
-                        </div>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
-                          {strat.legs.map((leg, li) => (
-                            <span
-                              key={li}
-                              style={{
-                                display: 'inline-block',
-                                padding: '4px 10px',
-                                borderRadius: 999,
-                                fontSize: 11,
-                                fontWeight: 'bold',
-                                background: leg.side === 'SELL' ? `${theme.red}26` : `${theme.green}26`,
-                                color: leg.side === 'SELL' ? theme.red : theme.green,
-                                border: `1px solid ${leg.side === 'SELL' ? theme.red : theme.green}66`,
-                              }}
-                            >
-                              {leg.side} {leg.quantity > 1 ? `${leg.quantity}x ` : ''}{leg.strike} {leg.type} @ {leg.premium.toFixed(2)}
-                            </span>
-                          ))}
-                        </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8, fontSize: 12 }}>
-                          <div style={{ color: theme.textSecondary }}>Credit: <span style={{ color: theme.green, fontWeight: 'bold' }}>Rs. {strat.entryCredit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span></div>
-                          <div style={{ color: theme.textSecondary }}>Max Profit: <span style={{ color: theme.green, fontWeight: 'bold' }}>Rs. {strat.maxProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span></div>
-                          <div style={{ color: theme.textSecondary }}>Max Loss: <span style={{ color: theme.red, fontWeight: 'bold' }}>Rs. {Math.abs(strat.maxLoss).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span></div>
-                          <div style={{ color: theme.textSecondary }}>Profit Zone: <span style={{ color: theme.yellow, fontWeight: 'bold' }}>{strat.profitZoneWidth} pts</span></div>
-                          <div style={{ color: theme.textSecondary }}>Risk:Reward: <span style={{ color: theme.blue, fontWeight: 'bold' }}>{strat.rewardToRisk ? `1:${strat.rewardToRisk}` : '—'}</span></div>
-                          <div style={{ color: theme.textSecondary }}>Break-evens: <span style={{ color: theme.textPrimary }}>{strat.breakEvens.length ? strat.breakEvens.join(', ') : '—'}</span></div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </details>
-              ))}
-            </div>
-          ) : null}
+          {optimizerHandoffNote ? <div style={{ ...styles.saveMessage, marginTop: 12, color: theme.infoText, background: `${theme.cyan}1a`, borderColor: `${theme.cyan}50` }}>{optimizerHandoffNote}</div> : null}
         </div>
 
         {legs.length > 0 && (

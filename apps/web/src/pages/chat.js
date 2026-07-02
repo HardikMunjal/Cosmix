@@ -4,6 +4,8 @@ import { getCachedClientUser, logoutClientSession, persistClientUser } from '../
 import { ChatAlbumGallery } from '../lib/ChatAlbumGallery';
 import { ChatHomeHub } from '../lib/ChatHomeHub';
 import { MobileBottomNav } from '../lib/MobileNav';
+import { subscribeToWebPush } from '../lib/webPush';
+import { CallParticipantStrip, VideoCallPanel } from '../lib/VideoCallPanel';
 import { useTheme } from '../lib/ThemePicker';
 
 function resolveChatSocketClient() {
@@ -196,13 +198,6 @@ function parseReplyEnvelope(text) {
 
 function normalizeUsername(value) {
   return String(value || '').trim().toLowerCase();
-}
-
-function base64UrlToUint8Array(base64String) {
-  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  const raw = window.atob(base64);
-  return Uint8Array.from(raw, (char) => char.charCodeAt(0));
 }
 
 function createStyles(theme) {
@@ -1044,6 +1039,7 @@ export default function ChatPage() {
   const [bootstrapReady, setBootstrapReady] = useState(false);
   const [callParticipants, setCallParticipants] = useState([]);
   const [joinedCallRoom, setJoinedCallRoom] = useState('');
+  const [showVideoCall, setShowVideoCall] = useState(false);
   const [callStatusByGroup, setCallStatusByGroup] = useState({});
   const [pushPreferences, setPushPreferences] = useState({
     muteAll: false,
@@ -1063,7 +1059,7 @@ export default function ChatPage() {
   const previousMessageCountRef = useRef(0);
   const incomingRequestsRef = useRef([]);
   const permissionAskedRef = useRef(false);
-  const pushSubscribedRef = useRef(false);
+  const [pushSetupStatus, setPushSetupStatus] = useState('pending');
   const callRoomRef = useRef('');
   const socketRef = useRef(null);
   const socketConnectErrorShownRef = useRef(false);
@@ -1214,49 +1210,35 @@ export default function ChatPage() {
   }, [callPresenceRoom]);
 
   useEffect(() => {
-    if (typeof window === 'undefined' || !user?.username || pushSubscribedRef.current) return;
-    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return;
-
+    if (!user?.username) return undefined;
     let cancelled = false;
     (async () => {
-      try {
-        const permission = window.Notification.permission === 'default'
-          ? await window.Notification.requestPermission()
-          : window.Notification.permission;
-        if (permission !== 'granted') return;
-
-        const registration = await navigator.serviceWorker.register('/push-sw.js');
-        const readyRegistration = await navigator.serviceWorker.ready;
-        const keyResponse = await fetch(`${chatApiBase}/push/public-key`);
-        const keyPayload = await readJsonResponse(keyResponse);
-        const publicKey = String(keyPayload?.publicKey || '').trim();
-        if (!publicKey) return;
-
-        const existingSubscription = await readyRegistration.pushManager.getSubscription();
-        const subscription = existingSubscription || await readyRegistration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: base64UrlToUint8Array(publicKey),
-        });
-
-        await fetch(`${chatApiBase}/push/subscribe`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ actorUsername: user.username, subscription }),
-        }).then(readJsonResponse);
-
-        if (!cancelled) {
-          pushSubscribedRef.current = true;
-          reportStatus('Web push notifications enabled.');
-        }
-      } catch (_) {
-        // Push setup is best-effort and should not break chat.
+      const result = await subscribeToWebPush(user.username);
+      if (!cancelled) {
+        setPushSetupStatus(result.ok ? 'ready' : (result.reason || 'error'));
       }
     })();
+    return () => { cancelled = true; };
+  }, [user?.username]);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [chatApiBase, user?.username]);
+  async function enablePushNotifications() {
+    if (!user?.username) return;
+    const result = await subscribeToWebPush(user.username, { force: true });
+    setPushSetupStatus(result.ok ? 'ready' : (result.reason || 'error'));
+    if (result.ok) {
+      reportStatus('Push notifications enabled.');
+      return;
+    }
+    if (result.reason === 'permission-denied') {
+      reportError('Allow notifications in browser settings to get message alerts.');
+      return;
+    }
+    if (result.reason === 'no-vapid-key') {
+      reportError('Push is not configured on the server yet.');
+      return;
+    }
+    reportError('Could not enable push on this device. Use Chrome/Safari with HTTPS.');
+  }
 
   function pushToast(title, body = '') {
     const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -1742,6 +1724,7 @@ export default function ChatPage() {
       chatSocket.emit('call_leave', { room: joinedCallRoom });
     }
     setJoinedCallRoom('');
+    setShowVideoCall(false);
   }, [callPresenceRoom, connectionState, joinedCallRoom]);
 
   useEffect(() => {
@@ -2347,6 +2330,14 @@ export default function ChatPage() {
   }
 
   function leaveActiveThread() {
+    if (joinedCallRoom) {
+      const chatSocket = socketRef.current;
+      if (chatSocket?.connected) {
+        chatSocket.emit('call_leave', { room: joinedCallRoom });
+      }
+      setJoinedCallRoom('');
+    }
+    setShowVideoCall(false);
     setActivePanelTab('');
     setShowInviteModal(false);
     activeChatRef.current = null;
@@ -2370,7 +2361,11 @@ export default function ChatPage() {
 
   function openThread(group, mode = null) {
     if (mode === null) {
-      promptThreadDestination(group);
+      if (isNarrowScreen) {
+        promptThreadDestination(group);
+        return;
+      }
+      enterThread(group, 'chat');
       return;
     }
     enterThread(group, mode);
@@ -2463,25 +2458,22 @@ export default function ChatPage() {
   }
 
   function handleJoinCall(callUrl) {
+    if (!callUrl) return;
     const chatSocket = socketRef.current;
-    if (!callPresenceRoom || !chatSocket?.connected) {
-      if (callUrl) {
-        window.open(callUrl, '_blank', 'noopener,noreferrer');
-      }
-      return;
+    if (callPresenceRoom && chatSocket?.connected) {
+      chatSocket.emit('call_join', { room: callPresenceRoom });
+      setJoinedCallRoom(callPresenceRoom);
     }
-    chatSocket.emit('call_join', { room: callPresenceRoom });
-    setJoinedCallRoom(callPresenceRoom);
-    if (callUrl) {
-      window.open(callUrl, '_blank', 'noopener,noreferrer');
-    }
+    setShowVideoCall(true);
   }
 
   function handleLeaveCall() {
     const chatSocket = socketRef.current;
-    if (!joinedCallRoom || !chatSocket?.connected) return;
-    chatSocket.emit('call_leave', { room: joinedCallRoom });
+    if (joinedCallRoom && chatSocket?.connected) {
+      chatSocket.emit('call_leave', { room: joinedCallRoom });
+    }
     setJoinedCallRoom('');
+    setShowVideoCall(false);
   }
 
   const canPostToGroup = selectedMembership?.canPost;
@@ -2746,15 +2738,12 @@ export default function ChatPage() {
                   </button>
                 ) : null}
                 <div style={styles.formRow}>
-                  <p style={styles.label}>In Call ({callParticipants.length})</p>
-                  {callParticipants.length ? callParticipants.map((participant) => (
-                    <div key={`${participant.username}-${participant.joinedAt}`} style={styles.listItem}>
-                      <div style={styles.listItemText}>
-                        <div style={styles.listItemTitle}>{participant.username}</div>
-                        <div style={styles.listItemMeta}>Joined call</div>
-                      </div>
-                    </div>
-                  )) : <p style={styles.helperText}>No one is in the thread call yet.</p>}
+                  <CallParticipantStrip
+                    participants={callParticipants}
+                    theme={theme}
+                    getUserColor={getUserColor}
+                    title="In call"
+                  />
                 </div>
               </>
             ) : null}
@@ -3048,8 +3037,25 @@ export default function ChatPage() {
         ) : null}
 
         {/* Body: thread folder, messages, or full-screen panel */}
-        <div className={`chat-body${showChatHub ? ' chat-body--hub' : ''}${mobilePanelOpen ? ' chat-body--panel-open' : ''}`} style={styles.body}>
+        <div className={`chat-body${showChatHub ? ' chat-body--hub' : ''}${mobilePanelOpen ? ' chat-body--panel-open' : ''}${showVideoCall ? ' chat-body--in-call' : ''}`} style={styles.body}>
           {showChatHub ? (
+            <>
+              {pushSetupStatus !== 'ready' && pushSetupStatus !== 'pending' && user?.username ? (
+                <div className="chat-push-banner">
+                  <span className="chat-push-banner-text">
+                    {pushSetupStatus === 'permission-denied'
+                      ? 'Notifications are blocked — allow them to get message alerts when the app is closed.'
+                      : pushSetupStatus === 'unsupported'
+                        ? 'This browser does not support background push notifications.'
+                        : 'Enable push notifications to get DM and group message alerts.'}
+                  </span>
+                  {pushSetupStatus !== 'unsupported' ? (
+                    <button type="button" className="chat-push-banner-btn" onClick={() => void enablePushNotifications()}>
+                      Enable alerts
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
             <ChatHomeHub
               theme={theme}
               user={user}
@@ -3073,15 +3079,27 @@ export default function ChatPage() {
               onMoveThread={handleMoveThread}
               isBootstrapLoading={!bootstrapReady}
             />
+            </>
           ) : null}
 
-          {selectedGroup && activeChat?.type === 'group' && !showChatHub && !mobilePanelOpen && !isNarrowScreen && threadCallUrl ? (
+          {selectedGroup && activeChat?.type === 'group' && !showChatHub && !mobilePanelOpen && !isNarrowScreen && threadCallUrl && !showVideoCall ? (
             <div className="chat-call-banner">
-              <div>
+              <div style={{ flex: 1, minWidth: 0 }}>
                 <div className="chat-call-banner-title">Thread video call</div>
                 <div className="chat-call-banner-meta">
                   {callParticipants.length ? `${callParticipants.length} in call now` : 'Start or join the group video room'}
                 </div>
+                {callParticipants.length ? (
+                  <div style={{ marginTop: '8px' }}>
+                    <CallParticipantStrip
+                      participants={callParticipants}
+                      theme={theme}
+                      getUserColor={getUserColor}
+                      compact
+                      title="On call"
+                    />
+                  </div>
+                ) : null}
               </div>
               <button type="button" className="chat-call-banner-btn" onClick={() => handleJoinCall(threadCallUrl)}>
                 {isInCurrentCall ? 'Open call' : 'Join call'}
@@ -3089,7 +3107,21 @@ export default function ChatPage() {
             </div>
           ) : null}
 
-          {!showChatHub && !mobilePanelOpen && (!isAlbumsPanelOpen || !isNarrowScreen) ? (
+          {showVideoCall && threadCallUrl && selectedGroup && activeChat?.type === 'group' && !showChatHub && !mobilePanelOpen ? (
+            <div className="chat-video-call-shell">
+              <VideoCallPanel
+                callUrl={threadCallUrl}
+                user={user}
+                threadName={selectedGroup?.name || activeChat?.name}
+                participants={callParticipants}
+                onLeave={handleLeaveCall}
+                theme={theme}
+                getUserColor={getUserColor}
+              />
+            </div>
+          ) : null}
+
+          {!showVideoCall && !showChatHub && !mobilePanelOpen && (!isAlbumsPanelOpen || !isNarrowScreen) ? (
           <div ref={messagesContainerRef} className={`chat-messages${activeChat ? ' chat-messages--thread' : ''}`} style={styles.messages}>
             {visibleMessages.length ? visibleMessages.map((message) => {
               const isOwn = message.user === user?.username;
@@ -3190,7 +3222,7 @@ export default function ChatPage() {
           ) : null}
         </div>
 
-        <div className={`chat-bottom-stack${activeChat && isNarrowScreen ? ' chat-bottom-stack--thread-mobile' : ''}`}>
+        <div className={`chat-bottom-stack${activeChat && isNarrowScreen ? ' chat-bottom-stack--thread-mobile' : ''}${showVideoCall ? ' chat-bottom-stack--hidden' : ''}`}>
           {/* Typing bar */}
           {typingUsers.length > 0 ? (
             <div className="chat-typing-bar" style={styles.typingBar}>
@@ -3290,7 +3322,7 @@ export default function ChatPage() {
         </div>
       ) : null}
 
-      {showThreadModeModal && threadModePickerGroup ? (
+      {showThreadModeModal && threadModePickerGroup && isNarrowScreen ? (
         <div style={styles.modalBackdrop} onClick={() => { setShowThreadModeModal(false); setThreadModePickerGroup(null); }} role="presentation">
           <div
             style={styles.modalPanel}
@@ -3468,6 +3500,67 @@ export default function ChatPage() {
           display: flex;
           flex-direction: column;
         }
+        .chat-push-banner {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          flex-wrap: wrap;
+          margin: 10px 14px 0;
+          padding: 10px 12px;
+          border-radius: 12px;
+          border: 1px solid ${theme.cardBorder};
+          background: ${theme.blue}14;
+          flex-shrink: 0;
+        }
+        .chat-push-banner-text {
+          font-size: 12px;
+          color: ${theme.textSecondary};
+          line-height: 1.45;
+          flex: 1;
+          min-width: 200px;
+        }
+        .chat-push-banner-btn {
+          border: none;
+          border-radius: 999px;
+          padding: 8px 14px;
+          background: ${theme.blue};
+          color: #fff;
+          font-size: 11px;
+          font-weight: 800;
+          cursor: pointer;
+          font-family: ${theme.font};
+          flex-shrink: 0;
+        }
+        .chat-thread-mode-picker {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+        }
+        .chat-thread-mode-picker-btn {
+          border: 1px solid ${theme.cardBorder};
+          background: ${theme.cardBg};
+          border-radius: 16px;
+          padding: 16px 12px;
+          cursor: pointer;
+          text-align: center;
+          font-family: inherit;
+          color: inherit;
+          display: grid;
+          gap: 6px;
+          justify-items: center;
+        }
+        .chat-thread-mode-picker-icon { font-size: 28px; }
+        .chat-thread-mode-picker-label { font-size: 15px; font-weight: 900; color: ${theme.textHeading}; }
+        .chat-thread-mode-picker-hint { font-size: 11px; color: ${theme.textMuted}; }
+        @media (min-width: 721px) {
+          .chat-push-banner {
+            max-width: 920px;
+            margin-left: auto;
+            margin-right: auto;
+            width: calc(100% - 28px);
+          }
+        }
         /* Side panel: overlay on mobile */
         @media (max-width: 720px) {
           .chat-main-area--thread-mobile .chat-top-bar {
@@ -3509,27 +3602,6 @@ export default function ChatPage() {
             color: ${theme.green};
           }
           .chat-conn-dot { display: none; }
-          .chat-thread-mode-picker {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 10px;
-          }
-          .chat-thread-mode-picker-btn {
-            border: 1px solid ${theme.cardBorder};
-            background: ${theme.cardBg};
-            border-radius: 16px;
-            padding: 16px 12px;
-            cursor: pointer;
-            text-align: center;
-            font-family: inherit;
-            color: inherit;
-            display: grid;
-            gap: 6px;
-            justify-items: center;
-          }
-          .chat-thread-mode-picker-icon { font-size: 28px; }
-          .chat-thread-mode-picker-label { font-size: 15px; font-weight: 900; color: ${theme.textHeading}; }
-          .chat-thread-mode-picker-hint { font-size: 11px; color: ${theme.textMuted}; }
           .chat-call-banner {
             display: none;
           }

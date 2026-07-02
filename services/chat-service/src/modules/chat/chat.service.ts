@@ -1513,7 +1513,7 @@ export class ChatService {
             void this.sendPushToUsers(recipients, {
                 title: `New message in ${chatMessage.chat.name}`,
                 body: `${senderUsername}: ${String(chatMessage.text || chatMessage.gif || 'New message')}`,
-                url: '/chat',
+                url: `/chat?thread=${encodeURIComponent(groupId)}`,
                 tag: `group-${groupId}-${chatMessage.id}`,
             }, {
                 type: 'group',
@@ -2571,10 +2571,11 @@ export class ChatService {
                 ],
             );
             if (chatMessage.chat.type === 'dm') {
+                const dmPeer = this.normalizeUsername(chatMessage.chat.name);
                 void this.sendPushToUsers([chatMessage.chat.name], {
                     title: `New message from ${senderUsername}`,
                     body: String(chatMessage.text || chatMessage.gif || 'Sent you a message.'),
-                    url: '/chat',
+                    url: `/chat?dm=${encodeURIComponent(dmPeer)}`,
                     tag: `dm-${chatMessage.id}`,
                 }, {
                     type: 'dm',
@@ -2588,10 +2589,11 @@ export class ChatService {
 
         this.messages.push(chatMessage);
         if (chatMessage.chat.type === 'dm') {
+            const dmPeer = this.normalizeUsername(chatMessage.chat.name);
             void this.sendPushToUsers([chatMessage.chat.name], {
                 title: `New message from ${senderUsername}`,
                 body: String(chatMessage.text || chatMessage.gif || 'Sent you a message.'),
-                url: '/chat',
+                url: `/chat?dm=${encodeURIComponent(dmPeer)}`,
                 tag: `dm-${chatMessage.id}`,
             }, {
                 type: 'dm',

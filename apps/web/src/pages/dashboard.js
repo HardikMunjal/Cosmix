@@ -1,5 +1,5 @@
 import { useRouter } from 'next/router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { resolveAvatarPresentation } from '../lib/avatarProfile';
 import { getCachedClientUser, restoreUserSession } from '../lib/auth-client';
 import { useTheme } from '../lib/ThemePicker';
@@ -15,6 +15,7 @@ const tradingDeskModules = [
   { icon: 'NT', title: 'Nifty Tracker', desc: 'Track saved strategies, live payoff movement, and execution snapshots.', path: '/nifty-strategies', accent: '#22c55e' },
   { icon: '📋', title: 'Strategy History', desc: 'View all past strategies with start/end dates, duration, and realized P/L.', path: '/strategy-history', accent: '#a78bfa' },
   { icon: 'SB', title: 'Strategy Builder', desc: 'Build option structures and save them back into your running book.', path: '/options-strategy', accent: '#2563eb' },
+  { icon: 'SO', title: 'Strategy Optimizer', desc: 'VIX-aware multi-factor optimizer with payoff dashboards and calendar spreads.', path: '/strategy-optimizer', accent: '#7c3aed' },
   { icon: 'OP', title: 'Option Pricing', desc: 'Compare expected option prices across models and expiries.', path: '/expected-option-prices', accent: '#e11d48' },
 ];
 
@@ -22,6 +23,7 @@ const wellnessClubModules = [
   { title: 'Running Dashboard', path: '/running-analytics', accent: '#38bdf8' },
   { title: 'Leaderboard', path: '/leaderboard', accent: '#f97316' },
   { title: 'Wellness Dashboard', path: '/wellness', accent: '#22c55e' },
+  { title: 'Buddy Safety', path: '/buddy-safety', accent: '#f43f5e' },
   { title: 'Threads', path: '/chat', accent: '#a78bfa' },
   { title: 'Media', path: '/media', accent: '#ec4899' },
 ];
@@ -30,6 +32,7 @@ const niftyClubModules = [
   { title: 'Nifty Tracker', path: '/nifty-strategies', accent: '#22c55e' },
   { title: 'Strategy History', path: '/strategy-history', accent: '#a78bfa' },
   { title: 'Strategy Builder', path: '/options-strategy', accent: '#2563eb' },
+  { title: 'Strategy Optimizer', path: '/strategy-optimizer', accent: '#7c3aed' },
   { title: 'Option Pricing', path: '/expected-option-prices', accent: '#e11d48' },
 ];
 
@@ -57,6 +60,22 @@ function buildCumulativeSeries(scores = []) {
       cumulative: Number(cumulative.toFixed(2)),
     };
   });
+}
+
+function computeLinearTrend(values = []) {
+  const n = values.length;
+  if (n < 2) return values.map((value) => Number(value || 0));
+  const meanX = (n - 1) / 2;
+  const meanY = values.reduce((sum, value) => sum + Number(value || 0), 0) / n;
+  let numerator = 0;
+  let denominator = 0;
+  for (let index = 0; index < n; index += 1) {
+    numerator += (index - meanX) * (values[index] - meanY);
+    denominator += (index - meanX) ** 2;
+  }
+  const slope = denominator ? numerator / denominator : 0;
+  const intercept = meanY - slope * meanX;
+  return values.map((_, index) => intercept + slope * index);
 }
 
 function isGenericMonthlyPlanName(value) {
@@ -157,6 +176,91 @@ function displayLongestRunMeta(longestRun) {
     ? String(longestRun.date)
     : date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
   return `${minutesText} • ${dateText}`;
+}
+
+function getTimeGreeting() {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'Good morning';
+  if (hour < 17) return 'Good afternoon';
+  return 'Good evening';
+}
+
+function DashboardHero({ user, theme, notificationCount, activeTab, onTabChange, onToggleNotifications, onOpenSettings }) {
+  const greeting = getTimeGreeting();
+  const displayName = user?.name || user?.username || 'there';
+
+  return (
+    <section className="dashboard-hero dashboard-glass" aria-label="Dashboard header">
+      <div className="dashboard-hero-aurora" aria-hidden="true">
+        <span className="dashboard-hero-orb dashboard-hero-orb-a" />
+        <span className="dashboard-hero-orb dashboard-hero-orb-b" />
+        <span className="dashboard-hero-orb dashboard-hero-orb-c" />
+      </div>
+      <div className="dashboard-hero-grid" aria-hidden="true" />
+      <div className="dashboard-hero-inner">
+        <header className="dashboard-header">
+          <div className="dashboard-header-intro">
+            <div className="dashboard-header-eyebrow">
+              <span className="dashboard-hero-pulse" />
+              {greeting}
+            </div>
+            <h1 className="dashboard-title">
+              <span className="dashboard-title-gradient">{displayName}</span>
+            </h1>
+            <p className="dashboard-header-sub">
+              Your wellness &amp; market cockpit — track progress, buddies, and signals in one place.
+            </p>
+          </div>
+
+          <div className="dashboard-header-actions">
+            <button
+              type="button"
+              className="dashboard-hero-action"
+              onClick={onToggleNotifications}
+              aria-label={`Notifications${notificationCount ? `, ${notificationCount} unread` : ''}`}
+            >
+              <BellIcon color="currentColor" />
+              {notificationCount > 0 ? (
+                <span className="dashboard-hero-badge">{notificationCount}</span>
+              ) : null}
+            </button>
+            <button
+              type="button"
+              className="dashboard-hero-action"
+              onClick={onOpenSettings}
+              aria-label="Open settings"
+              title="Settings"
+            >
+              <SettingsIcon color="currentColor" />
+            </button>
+          </div>
+        </header>
+
+        <div className="dashboard-tab-row" role="tablist" aria-label="Dashboard sections">
+          {[
+            { id: 'home', label: 'Home', icon: '🏠' },
+            { id: 'posts', label: 'Fitstagram', icon: '📷' },
+            { id: 'buddies', label: 'Buddies', icon: '👥' },
+          ].map((tab) => {
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                className={`dashboard-tab-btn${isActive ? ' is-active' : ''}`}
+                onClick={() => onTabChange(tab.id)}
+              >
+                <span className="dashboard-tab-icon" aria-hidden="true">{tab.icon}</span>
+                <span className="dashboard-tab-label">{tab.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function MetricList({ items, theme, compact = false }) {
@@ -398,6 +502,170 @@ function LineChart({ points, theme, height = 220, emptyLabel = 'No data yet', va
         </defs>
       ) : null}
     </svg>
+  );
+}
+
+function WellnessScrollableTrendChart({
+  points,
+  theme,
+  height = 128,
+  emptyLabel = 'Add wellness entries to see your trend',
+  color,
+  gradientId = 'wellness-line-fill',
+  pointSpacing = 12,
+  annotationFormatter = (value) => `${value >= 0 ? '+' : ''}${Number(value || 0).toFixed(1)}`,
+}) {
+  const scrollRef = useRef(null);
+
+  const chartWidth = useMemo(() => {
+    if (!points.length) return 280;
+    const pad = { left: 12, right: 18 };
+    const plotWidth = Math.max(180, (points.length - 1) * pointSpacing);
+    return pad.left + plotWidth + pad.right;
+  }, [points.length, pointSpacing]);
+
+  useLayoutEffect(() => {
+    const node = scrollRef.current;
+    if (!node) return;
+    node.scrollLeft = node.scrollWidth - node.clientWidth;
+  }, [chartWidth, points]);
+
+  useEffect(() => {
+    const node = scrollRef.current;
+    if (!node) return undefined;
+    const onWheel = (event) => {
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      node.scrollLeft += event.deltaY;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    node.addEventListener('wheel', onWheel, { passive: false });
+    return () => node.removeEventListener('wheel', onWheel);
+  }, [chartWidth]);
+
+  if (!points.length) {
+    return <div style={{ minHeight: `${height}px`, display: 'grid', placeItems: 'center', color: theme.textSecondary, fontSize: '13px' }}>{emptyLabel}</div>;
+  }
+
+  const pad = { left: 12, right: 18, top: 14, bottom: 22 };
+  const values = points.map((point) => Number(point.value || 0));
+  const trendValues = computeLinearTrend(values);
+  const rawMin = Math.min(...values, ...trendValues, 0);
+  const rawMax = Math.max(...values, ...trendValues, 0);
+  const rawRange = rawMax - rawMin || 1;
+  const yPad = rawRange * 0.1;
+  const min = rawMin - yPad;
+  const max = rawMax + yPad;
+  const range = max - min || 1;
+  const plotWidth = Math.max(180, (points.length - 1) * pointSpacing);
+  const width = pad.left + plotWidth + pad.right;
+  const plotHeight = height - pad.top - pad.bottom;
+  const xFor = (index) => pad.left + (index * pointSpacing);
+  const yFor = (value) => pad.top + plotHeight - (((value - min) / range) * plotHeight);
+  const clampY = (value) => Math.min(pad.top + plotHeight, Math.max(pad.top, yFor(value)));
+  const stroke = color || theme.blue;
+  const polyline = points.map((_, index) => `${xFor(index)},${clampY(values[index])}`).join(' ');
+  const trendLine = trendValues.map((value, index) => `${xFor(index)},${clampY(value)}`).join(' ');
+  const zeroY = yFor(0);
+  const lastIndex = points.length - 1;
+  const labelEvery = points.length > 28 ? Math.ceil(points.length / 8) : points.length > 14 ? 3 : points.length > 7 ? 2 : 1;
+  const showDots = points.length <= 28;
+  const clipId = `${gradientId}-plot-clip`;
+
+  return (
+    <div
+      className="dashboard-wellness-chart-shell"
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => event.stopPropagation()}
+      role="presentation"
+    >
+      <div className="dashboard-wellness-chart-meta">
+        <span className="dashboard-wellness-trend-key">
+          <span className="dashboard-wellness-trend-swatch" />
+          Trend
+        </span>
+        <span className="dashboard-wellness-latest">
+          {annotationFormatter(values[lastIndex], points[lastIndex])}
+        </span>
+      </div>
+      <div
+        className="dashboard-wellness-chart-scroll"
+        ref={scrollRef}
+      >
+        <div className="dashboard-wellness-chart-track" style={{ width: `${width}px` }}>
+          <svg
+            width={width}
+            height={height}
+            viewBox={`0 0 ${width} ${height}`}
+            style={{ display: 'block' }}
+            aria-label="Wellness score trend"
+          >
+            <defs>
+              <linearGradient id={gradientId} x1="0" x2="1" y1="0" y2="1">
+                <stop offset="0%" stopColor="#22c55e" stopOpacity="0.22" />
+                <stop offset="45%" stopColor="#06b6d4" stopOpacity="0.12" />
+                <stop offset="100%" stopColor="#f59e0b" stopOpacity="0.04" />
+              </linearGradient>
+              <linearGradient id={`${gradientId}-stroke`} x1="0" x2="1" y1="0" y2="0">
+                <stop offset="0%" stopColor="#22c55e" />
+                <stop offset="50%" stopColor="#06b6d4" />
+                <stop offset="100%" stopColor="#38bdf8" />
+              </linearGradient>
+              <clipPath id={clipId}>
+                <rect x={pad.left} y={pad.top} width={plotWidth} height={plotHeight} />
+              </clipPath>
+            </defs>
+            <rect x={pad.left} y={pad.top} width={plotWidth} height={plotHeight} rx="10" fill="rgba(15,23,42,0.35)" stroke="rgba(148,163,184,0.12)" />
+            <line x1={pad.left} y1={zeroY} x2={width - pad.right} y2={zeroY} stroke={theme.graphGridLine} strokeDasharray="4 4" />
+            {points.map((point, index) => {
+              if (index !== 0 && index !== lastIndex && index % labelEvery !== 0) return null;
+              const x = xFor(index);
+              return (
+                <g key={`grid-${point.label}-${index}`}>
+                  <line x1={x} y1={pad.top} x2={x} y2={height - pad.bottom} stroke={theme.graphGridLine} strokeOpacity="0.14" />
+                  <text x={x} y={height - 6} textAnchor="middle" fill={theme.textMuted} fontSize="9">{point.label}</text>
+                </g>
+              );
+            })}
+            <g clipPath={`url(#${clipId})`}>
+              <polygon fill={`url(#${gradientId})`} points={`${pad.left},${zeroY} ${polyline} ${width - pad.right},${zeroY}`} />
+              <polyline
+                fill="none"
+                stroke={`url(#${gradientId}-stroke)`}
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                points={polyline}
+              />
+              <polyline
+                fill="none"
+                stroke={theme.orange || '#f59e0b'}
+                strokeWidth="1.4"
+                strokeDasharray="5 4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                points={trendLine}
+                opacity="0.95"
+              />
+              {showDots ? points.map((point, index) => (
+                <circle
+                  key={`dot-${point.label}-${index}`}
+                  cx={xFor(index)}
+                  cy={clampY(values[index])}
+                  r={index === lastIndex ? '3.2' : '2'}
+                  fill={index === lastIndex ? stroke : '#fff'}
+                  stroke={stroke}
+                  strokeWidth={index === lastIndex ? '0' : '1'}
+                />
+              )) : (
+                <circle cx={xFor(lastIndex)} cy={clampY(values[lastIndex])} r="3.2" fill={stroke} />
+              )}
+            </g>
+          </svg>
+        </div>
+      </div>
+      <div className="dashboard-wellness-chart-hint">Swipe left for older days</div>
+    </div>
   );
 }
 
@@ -914,9 +1182,10 @@ export default function Dashboard() {
     const entries = Array.isArray(wellnessData.entries) ? wellnessData.entries : [];
     const cumulativeSeries = buildCumulativeSeries(wellnessData.dailyScores || []);
 
-    const trendPoints = cumulativeSeries.slice(-14).map((point) => ({
+    const trendPoints = cumulativeSeries.map((point) => ({
       label: point.date.slice(5),
       value: point.cumulative,
+      date: point.date,
     }));
 
     const latestCumulative = cumulativeSeries[cumulativeSeries.length - 1]?.cumulative ?? 0;
@@ -1200,25 +1469,243 @@ export default function Dashboard() {
 
   return (
     <div style={{ minHeight: '100vh', padding: '24px', background: theme.pageBg, color: theme.textPrimary, fontFamily: theme.font }} className="dashboard-page">
+      <div className="dashboard-backdrop" aria-hidden="true" />
       <style>{`
         * { box-sizing: border-box; }
         html, body, #__next { min-height: 100%; margin: 0; }
+        .dashboard-page {
+          position: relative;
+          overflow-x: hidden;
+          perspective: 1200px;
+        }
+        .dashboard-backdrop {
+          position: fixed;
+          inset: 0;
+          pointer-events: none;
+          z-index: 0;
+          background:
+            radial-gradient(ellipse 70% 45% at 12% -8%, rgba(56,189,248,0.16), transparent 55%),
+            radial-gradient(ellipse 55% 40% at 88% 8%, rgba(249,115,22,0.14), transparent 52%),
+            radial-gradient(ellipse 50% 35% at 50% 100%, rgba(34,197,94,0.1), transparent 55%);
+        }
+        .dashboard-backdrop::after {
+          content: '';
+          position: absolute;
+          inset: 0;
+          opacity: 0.28;
+          background-image:
+            linear-gradient(rgba(148,163,184,0.05) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(148,163,184,0.05) 1px, transparent 1px);
+          background-size: 44px 44px;
+          mask-image: radial-gradient(ellipse 75% 65% at 50% 20%, black, transparent);
+        }
+        .dashboard-shell {
+          position: relative;
+          z-index: 1;
+        }
+        .dashboard-panel {
+          position: relative;
+          transform-style: preserve-3d;
+          transition: transform 0.28s cubic-bezier(0.22,1,0.36,1), box-shadow 0.28s ease, border-color 0.28s ease;
+          min-width: 0;
+        }
+        .dashboard-panel::before {
+          content: '';
+          position: absolute;
+          inset: 0;
+          border-radius: inherit;
+          pointer-events: none;
+          background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, transparent 42%, transparent 58%, rgba(255,255,255,0.04) 100%);
+          opacity: 0.55;
+        }
+        @media (hover: hover) and (pointer: fine) {
+          .dashboard-panel:hover {
+            transform: translateY(-3px) translateZ(8px);
+            box-shadow: 0 28px 56px rgba(0,0,0,0.32) !important;
+          }
+        }
+        .dashboard-glass {
+          backdrop-filter: blur(16px);
+          -webkit-backdrop-filter: blur(16px);
+        }
+        .dashboard-hero {
+          position: relative;
+          overflow: hidden;
+          border-radius: 28px;
+          border: 1px solid rgba(148,163,184,0.18);
+          background:
+            linear-gradient(145deg, rgba(15,23,42,0.88) 0%, rgba(15,23,42,0.72) 48%, rgba(30,41,59,0.65) 100%);
+          box-shadow:
+            0 24px 60px rgba(0,0,0,0.35),
+            inset 0 1px 0 rgba(255,255,255,0.08);
+        }
+        .dashboard-hero-aurora {
+          position: absolute;
+          inset: 0;
+          pointer-events: none;
+          overflow: hidden;
+        }
+        .dashboard-hero-orb {
+          position: absolute;
+          border-radius: 50%;
+          filter: blur(42px);
+          opacity: 0.75;
+        }
+        .dashboard-hero-orb-a {
+          width: 220px;
+          height: 220px;
+          top: -80px;
+          left: -40px;
+          background: rgba(56,189,248,0.35);
+        }
+        .dashboard-hero-orb-b {
+          width: 180px;
+          height: 180px;
+          top: -50px;
+          right: 8%;
+          background: rgba(249,115,22,0.28);
+        }
+        .dashboard-hero-orb-c {
+          width: 140px;
+          height: 140px;
+          bottom: -60px;
+          left: 42%;
+          background: rgba(34,197,94,0.22);
+        }
+        .dashboard-hero-grid {
+          position: absolute;
+          inset: 0;
+          pointer-events: none;
+          opacity: 0.35;
+          background-image:
+            linear-gradient(rgba(148,163,184,0.07) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(148,163,184,0.07) 1px, transparent 1px);
+          background-size: 32px 32px;
+          mask-image: linear-gradient(180deg, black 0%, transparent 88%);
+        }
+        .dashboard-hero-inner {
+          position: relative;
+          z-index: 1;
+          display: grid;
+          gap: 16px;
+          padding: 20px 20px 16px;
+        }
+        .dashboard-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 16px;
+          flex-wrap: wrap;
+        }
+        .dashboard-header-intro {
+          min-width: 0;
+          flex: 1;
+        }
+        .dashboard-header-eyebrow {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 10px;
+          padding: 6px 12px 6px 8px;
+          border-radius: 999px;
+          font-size: 11px;
+          font-weight: 800;
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+          color: #94a3b8;
+          border: 1px solid rgba(148,163,184,0.2);
+          background: rgba(2,6,23,0.45);
+        }
+        .dashboard-hero-pulse {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          background: #22c55e;
+          box-shadow: 0 0 0 0 rgba(34,197,94,0.55);
+          animation: dashboard-pulse 2s ease infinite;
+        }
+        @keyframes dashboard-pulse {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.45); }
+          50% { box-shadow: 0 0 0 8px rgba(34,197,94,0); }
+        }
+        .dashboard-title {
+          margin: 0;
+          font-size: clamp(26px, 5vw, 36px);
+          font-weight: 900;
+          line-height: 1.05;
+          letter-spacing: -0.03em;
+        }
+        .dashboard-title-gradient {
+          background: linear-gradient(135deg, #fff 0%, #fda4af 42%, #38bdf8 100%);
+          -webkit-background-clip: text;
+          background-clip: text;
+          color: transparent;
+        }
+        .dashboard-header-sub {
+          margin: 10px 0 0;
+          max-width: 520px;
+          font-size: 13px;
+          line-height: 1.55;
+          color: #94a3b8;
+        }
+        .dashboard-header-actions {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-shrink: 0;
+        }
+        .dashboard-hero-action {
+          position: relative;
+          appearance: none;
+          display: inline-grid;
+          place-items: center;
+          width: 46px;
+          height: 46px;
+          border-radius: 14px;
+          border: 1px solid rgba(148,163,184,0.22);
+          background: rgba(2,6,23,0.55);
+          color: #e2e8f0;
+          cursor: pointer;
+          box-shadow: 0 8px 22px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.06);
+          transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+        }
+        .dashboard-hero-action:hover {
+          transform: translateY(-2px);
+          border-color: rgba(56,189,248,0.45);
+          background: rgba(15,23,42,0.85);
+        }
+        .dashboard-hero-badge {
+          position: absolute;
+          top: -4px;
+          right: -4px;
+          min-width: 18px;
+          height: 18px;
+          padding: 0 5px;
+          border-radius: 999px;
+          display: inline-grid;
+          place-items: center;
+          background: linear-gradient(135deg, #f97316, #fb7185);
+          color: #fff;
+          font-size: 10px;
+          font-weight: 900;
+          border: 2px solid rgba(15,23,42,0.9);
+        }
         .dashboard-tab-row {
           display: grid;
           grid-template-columns: repeat(3, minmax(0, 1fr));
           gap: 8px;
-          margin-top: 16px;
           padding: 6px;
           border-radius: 18px;
-          background: rgba(15,23,42,0.42);
-          border: 1px solid rgba(148,163,184,0.2);
+          background: rgba(2,6,23,0.42);
+          border: 1px solid rgba(148,163,184,0.16);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
         }
         .dashboard-tab-btn {
           appearance: none;
           border: 1px solid transparent;
           border-radius: 14px;
           background: transparent;
-          color: inherit;
+          color: #cbd5e1;
           padding: 11px 12px;
           cursor: pointer;
           font-size: 12px;
@@ -1228,20 +1715,99 @@ export default function Dashboard() {
           align-items: center;
           justify-content: center;
           gap: 4px;
-          transition: background 0.15s, border-color 0.15s, transform 0.12s;
+          transition: background 0.18s, border-color 0.18s, transform 0.15s, color 0.18s;
+        }
+        .dashboard-tab-btn:hover {
+          color: #f8fafc;
+          background: rgba(148,163,184,0.08);
         }
         .dashboard-tab-btn.is-active {
-          background: rgba(59,130,246,0.2);
-          border-color: rgba(59,130,246,0.45);
-          box-shadow: 0 8px 20px rgba(59,130,246,0.18);
+          color: #fff;
+          border-color: rgba(56,189,248,0.4);
+          background: linear-gradient(135deg, rgba(56,189,248,0.22), rgba(34,197,94,0.14));
+          box-shadow: 0 10px 24px rgba(56,189,248,0.16), inset 0 1px 0 rgba(255,255,255,0.08);
         }
         .dashboard-tab-icon { font-size: 18px; line-height: 1; }
         .dashboard-tab-label { letter-spacing: 0.04em; }
+        .dashboard-wellness-chart-shell {
+          display: grid;
+          gap: 6px;
+          min-width: 0;
+        }
+        .dashboard-wellness-chart-meta {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 10px;
+          padding: 0 2px;
+        }
+        .dashboard-wellness-trend-key {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 10px;
+          font-weight: 700;
+          color: #94a3b8;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+        }
+        .dashboard-wellness-trend-swatch {
+          width: 18px;
+          height: 0;
+          border-top: 2px dashed #f59e0b;
+        }
+        .dashboard-wellness-latest {
+          font-size: 12px;
+          font-weight: 800;
+          color: #f8fafc;
+        }
+        .dashboard-wellness-chart-scroll {
+          overflow-x: auto;
+          overflow-y: hidden;
+          -webkit-overflow-scrolling: touch;
+          overscroll-behavior-x: contain;
+          touch-action: pan-x;
+          scrollbar-width: none;
+          -ms-overflow-style: none;
+          border-radius: 14px;
+          border: 1px solid rgba(148,163,184,0.14);
+          background: rgba(2,6,23,0.35);
+          cursor: grab;
+          max-width: 100%;
+        }
+        .dashboard-wellness-chart-scroll::-webkit-scrollbar {
+          display: none;
+        }
+        .dashboard-wellness-chart-scroll:active {
+          cursor: grabbing;
+        }
+        .dashboard-wellness-chart-track {
+          flex-shrink: 0;
+          display: block;
+        }
+        .dashboard-wellness-chart-hint {
+          font-size: 10px;
+          color: #64748b;
+          text-align: right;
+          padding-right: 2px;
+        }
+        .dashboard-wellness-open {
+          appearance: none;
+          border: 1px solid rgba(148,163,184,0.22);
+          background: rgba(15,23,42,0.55);
+          color: #e2e8f0;
+          border-radius: 999px;
+          padding: 7px 12px;
+          font-size: 11px;
+          font-weight: 800;
+          cursor: pointer;
+          letter-spacing: 0.04em;
+        }
         @media (max-width: 1024px) {
           .dashboard-top-grid, .dashboard-market-grid, .dashboard-lower-grid { grid-template-columns: 1fr !important; }
-          .dashboard-header { align-items: flex-start !important; }
-          .dashboard-profile-shell { grid-template-columns: 1fr !important; }
-          .dashboard-profile-meta { align-content: start !important; }
+          .dashboard-profile-shell { grid-template-columns: 1fr !important; justify-items: center !important; }
+          .dashboard-profile-meta { align-content: start !important; width: 100% !important; }
+          .dashboard-avatar-wrap { min-height: 140px !important; width: 100% !important; max-width: 280px !important; }
         }
         @media (max-width: 720px) {
           .dashboard-page { padding: 12px 12px 88px !important; }
@@ -1263,49 +1829,36 @@ export default function Dashboard() {
             justify-content: center;
             margin-top: 4px;
           }
-          .dashboard-top-shell {
-            display: grid !important;
-            gap: 10px !important;
-            padding: 12px 14px !important;
-            border-radius: 18px !important;
-            border: 1px solid rgba(148,163,184,0.18) !important;
-            background: linear-gradient(135deg, rgba(15,23,42,0.92), rgba(30,41,59,0.78)) !important;
-            box-shadow: 0 12px 32px rgba(0,0,0,0.22) !important;
+          .dashboard-hero-inner {
+            padding: 14px 14px 12px !important;
+            gap: 12px !important;
           }
           .dashboard-header {
             display: grid !important;
             grid-template-columns: minmax(0, 1fr) auto !important;
-            align-items: center !important;
+            align-items: start !important;
             gap: 10px !important;
-            margin: 0 !important;
           }
           .dashboard-header-intro { min-width: 0 !important; }
-          .dashboard-header-eyebrow { margin-bottom: 4px !important; font-size: 10px !important; }
-          .dashboard-title { font-size: 22px !important; line-height: 1.1 !important; }
-          .dashboard-header-actions {
-            width: auto !important;
-            order: 0 !important;
-            gap: 8px !important;
-            flex-wrap: nowrap !important;
+          .dashboard-header-eyebrow {
+            margin-bottom: 8px !important;
+            font-size: 10px !important;
+            padding: 5px 10px 5px 7px !important;
           }
-          .dashboard-header-actions button {
-            min-width: 44px !important;
-            min-height: 44px !important;
-            padding: 10px !important;
+          .dashboard-title { font-size: 22px !important; }
+          .dashboard-header-sub {
+            font-size: 12px !important;
+            margin-top: 8px !important;
+          }
+          .dashboard-header-actions { gap: 8px !important; }
+          .dashboard-hero-action {
+            width: 44px !important;
+            height: 44px !important;
           }
           .dashboard-tab-row {
             position: sticky;
             top: 0;
             z-index: 40;
-            display: grid !important;
-            grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
-            gap: 6px !important;
-            margin-top: 0 !important;
-            padding: 6px !important;
-            border-radius: 16px !important;
-            background: rgba(15,23,42,0.55) !important;
-            border: 1px solid rgba(148,163,184,0.18) !important;
-            backdrop-filter: blur(10px);
           }
           .dashboard-tab-btn {
             min-width: 0 !important;
@@ -1317,19 +1870,24 @@ export default function Dashboard() {
           .dashboard-module-grid, .dashboard-scorecard-grid, .dashboard-market-modules { grid-template-columns: 1fr !important; }
           .dashboard-club-grid { grid-template-columns: 1fr !important; }
           .dashboard-profile-shell {
-            grid-template-columns: 88px minmax(0, 1fr) !important;
+            grid-template-columns: 1fr !important;
             gap: 12px !important;
             align-items: start !important;
+            justify-items: center !important;
           }
           .dashboard-avatar-wrap {
-            min-height: 0 !important;
-            padding: 4px !important;
-            align-self: start !important;
+            min-height: 112px !important;
+            max-width: 220px !important;
+            padding: 8px !important;
+            align-self: center !important;
           }
-          .dashboard-avatar-glow { width: 72px !important; height: 72px !important; }
+          .dashboard-avatar-glow { width: 88px !important; height: 88px !important; }
           .dashboard-avatar-stage { display: none !important; }
+          .dashboard-profile-meta { text-align: center !important; }
           .dashboard-profile-meta .dashboard-profile-name { font-size: 20px !important; }
           .dashboard-profile-meta .dashboard-profile-quote { font-size: 12px !important; line-height: 1.45 !important; }
+          .dashboard-top-grid { gap: 12px !important; }
+          .dashboard-wellness-chart-hint { text-align: center !important; }
         }
         @media (max-width: 560px) {
           .dashboard-page { padding: 10px 10px 88px !important; }
@@ -1375,41 +1933,21 @@ export default function Dashboard() {
         }
       `}</style>
 
-      <div style={{ maxWidth: '1320px', margin: '0 auto', display: 'grid', gap: '18px' }}>
-        <div className="dashboard-top-shell">
-        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '18px', flexWrap: 'wrap' }} className="dashboard-header">
-          <div className="dashboard-header-intro">
-            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.14em', color: theme.textMuted, fontWeight: 800, marginBottom: '8px' }} className="dashboard-header-eyebrow">Cosmix dashboard</div>
-            <h1 style={{ margin: 0, fontSize: '34px', color: theme.textHeading }} className="dashboard-title">Welcome back, {user.username}</h1>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }} className="dashboard-header-actions">
-            {/* Notifications — standalone pill */}
-            <div style={{ position: 'relative' }}>
-              <button
-                type="button"
-                onClick={() => setShowNotifications((v) => !v)}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: '10px', borderRadius: '999px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, color: theme.textHeading, padding: '10px 14px', cursor: 'pointer', fontSize: '12px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.09em', boxShadow: `0 4px 14px ${theme.shadow}` }}
-              >
-                <BellIcon color={theme.textHeading} />
-                <span style={{ minWidth: '22px', height: '22px', borderRadius: '999px', display: 'inline-grid', placeItems: 'center', background: notificationCount > 0 ? theme.orange : theme.cardBorder, color: notificationCount > 0 ? '#fff' : theme.textMuted, fontSize: '11px', fontWeight: 900 }}>{notificationCount}</span>
-              </button>
-            </div>
-
-            {/* Settings — separate standalone pill */}
-            <button
-              type="button"
-              onClick={() => { setShowNotifications(false); router.push('/settings'); }}
-              aria-label="Open settings"
-              title="Settings"
-              className="dashboard-settings-icon-btn"
-              style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '44px', height: '44px', borderRadius: '14px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, color: theme.textHeading, padding: 0, cursor: 'pointer', boxShadow: `0 4px 14px ${theme.shadow}` }}
-            >
-              <SettingsIcon color={theme.textHeading} />
-            </button>
-          </div>
-        </header>
-        </div>
+      <div className="dashboard-shell" style={{ maxWidth: '1320px', margin: '0 auto', display: 'grid', gap: '18px' }}>
+        <DashboardHero
+          user={user}
+          theme={theme}
+          notificationCount={notificationCount}
+          activeTab={activeTab}
+          onTabChange={(tabId) => {
+            setActiveTab(tabId);
+            if (router.isReady) {
+              router.push({ pathname: '/dashboard', query: { ...router.query, tab: tabId } }, undefined, { shallow: true });
+            }
+          }}
+          onToggleNotifications={() => setShowNotifications((v) => !v)}
+          onOpenSettings={() => { setShowNotifications(false); router.push('/settings'); }}
+        />
 
         {showNotifications ? (
           <NotificationModule
@@ -1421,37 +1959,9 @@ export default function Dashboard() {
           />
         ) : null}
 
-        <div className="dashboard-tab-row" role="tablist" aria-label="Dashboard sections">
-          {[
-            { id: 'home', label: 'Home', icon: '🏠' },
-            { id: 'posts', label: 'Fitstagram', icon: '📷' },
-            { id: 'buddies', label: 'Buddies', icon: '👥' },
-          ].map((tab) => {
-            const isActive = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                role="tab"
-                aria-selected={isActive}
-                className={`dashboard-tab-btn${isActive ? ' is-active' : ''}`}
-                onClick={() => {
-                  setActiveTab(tab.id);
-                  if (router.isReady) {
-                    router.push({ pathname: '/dashboard', query: { ...router.query, tab: tab.id } }, undefined, { shallow: true });
-                  }
-                }}
-              >
-                <span className="dashboard-tab-icon" aria-hidden="true">{tab.icon}</span>
-                <span className="dashboard-tab-label">{tab.label}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        <section style={{ display: activeTab === 'home' ? 'grid' : 'none', gridTemplateColumns: 'minmax(0, 1.12fr) minmax(320px, 0.88fr)', gap: '16px' }} className="dashboard-top-grid">
-          <div style={{ borderRadius: '30px', border: `1px solid ${theme.cardBorder}`, background: `radial-gradient(circle at top left, ${theme.orange}20, transparent 24%), radial-gradient(circle at 78% 16%, ${theme.cyan}16, transparent 22%), linear-gradient(135deg, ${theme.cardBg}, ${theme.cyan}08, ${theme.orange}08)`, padding: '18px', boxShadow: `0 24px 64px ${theme.shadow}`, display: 'grid', gap: '16px' }} className="dashboard-panel">
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) minmax(0, 1fr)', gap: '14px', alignItems: 'stretch' }} className="dashboard-profile-shell">
+        <section style={{ display: activeTab === 'home' ? 'grid' : 'none', gridTemplateColumns: 'minmax(0, 1.12fr) minmax(280px, 0.88fr)', gap: '16px' }} className="dashboard-top-grid">
+          <div style={{ borderRadius: '30px', border: `1px solid ${theme.cardBorder}`, background: `radial-gradient(circle at top left, ${theme.orange}20, transparent 24%), radial-gradient(circle at 78% 16%, ${theme.cyan}16, transparent 22%), linear-gradient(135deg, ${theme.cardBg}, ${theme.cyan}08, ${theme.orange}08)`, padding: '18px', boxShadow: `0 24px 64px ${theme.shadow}`, display: 'grid', gap: '16px' }} className="dashboard-panel dashboard-glass">
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) minmax(0, 1fr)', gap: '14px', alignItems: 'stretch', position: 'relative', zIndex: 1 }} className="dashboard-profile-shell">
               <div style={{ borderRadius: '24px', padding: '12px', background: 'transparent', border: 'none', display: 'grid', placeItems: 'center', position: 'relative', overflow: 'hidden', minHeight: '260px' }} className="dashboard-avatar-wrap">
                 <div style={{ position: 'absolute', inset: '26px 18px 0', borderRadius: '28px 28px 0 0', background: `linear-gradient(180deg, ${theme.panelBg}, transparent)`, border: `1px solid ${theme.cardBorder}`, borderBottom: 'none', opacity: 0.75 }} className="dashboard-avatar-stage" />
                 <div style={{ position: 'absolute', width: '220px', height: '220px', borderRadius: '50%', filter: 'blur(38px)', background: `${theme.blue}44` }} className="dashboard-avatar-glow" />
@@ -1471,31 +1981,21 @@ export default function Dashboard() {
           </div>
 
           <div
-            style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '14px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '8px', cursor: 'pointer' }}
-            className="dashboard-panel"
-            role="button"
-            tabIndex={0}
-            onClick={() => router.push('/wellness')}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') router.push('/wellness');
-            }}
+            style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '14px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '8px' }}
+            className="dashboard-panel dashboard-glass"
           >
-            <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', position: 'relative', zIndex: 1 }}>
               <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Wellness</div>
+              <button type="button" className="dashboard-wellness-open" onClick={() => router.push('/wellness')}>Open →</button>
             </div>
 
-            <SectionLoadingShell loading={showWellnessSectionLoader} label="Loading wellness trend..." theme={theme} height={156}>
-              <LineChart
+            <SectionLoadingShell loading={showWellnessSectionLoader} label="Loading wellness trend..." theme={theme} height={148}>
+              <WellnessScrollableTrendChart
                 points={wellnessSummary.trendPoints}
                 theme={theme}
                 emptyLabel="Add wellness entries to see your trend"
                 color={theme.blue}
-                gradientId="wellness-line-fill"
-                vivid
-                height={156}
-                valueAccessor={(point) => Number(point.value || 0)}
-                labelAccessor={(point) => String(point.label || '')}
-                annotationFormatter={(value) => `${value >= 0 ? '+' : ''}${Number(value || 0).toFixed(1)}`}
+                height={128}
               />
             </SectionLoadingShell>
 
@@ -1506,6 +2006,7 @@ export default function Dashboard() {
         <section style={{ display: activeTab === 'home' ? 'grid' : 'none', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '16px' }} className="dashboard-top-grid">
           <div
             style={{ borderRadius: '24px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '14px', display: 'grid', gap: '10px', boxShadow: `0 18px 40px ${theme.shadow}` }}
+            className="dashboard-panel dashboard-glass"
             role="button"
             tabIndex={0}
             onClick={() => router.push('/wellness')}
@@ -1535,6 +2036,7 @@ export default function Dashboard() {
 
           <div
             style={{ borderRadius: '24px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '14px', display: 'grid', gap: '10px', boxShadow: `0 18px 40px ${theme.shadow}` }}
+            className="dashboard-panel dashboard-glass"
             role="button"
             tabIndex={0}
             onClick={() => router.push('/nifty-strategies')}
