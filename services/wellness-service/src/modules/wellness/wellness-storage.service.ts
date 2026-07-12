@@ -72,10 +72,20 @@ type WellnessDerivedCache = {
   planTransactions: WellnessPlanTransaction[];
 };
 
+type RunningShoeRecord = {
+  id: string;
+  name: string;
+  brand?: string;
+  notes?: string;
+  createdAt?: string;
+  retired?: boolean;
+};
+
 type WellnessStoredState = {
   entries: WellnessEntry[];
   form: Record<string, any> | null;
   plans: WellnessPlanRecord[];
+  runningShoes?: RunningShoeRecord[];
   derived?: WellnessDerivedCache | null;
   updatedAt?: string;
 };
@@ -85,6 +95,7 @@ type WellnessState = {
   form: Record<string, any> | null;
   plan: WellnessPlan;
   plans: WellnessPlanRecord[];
+  runningShoes: RunningShoeRecord[];
   dailyScores: WellnessDailyScore[];
   planTransactions: WellnessPlanTransaction[];
 };
@@ -479,6 +490,7 @@ export class WellnessStorageService {
       entries: [],
       form: null,
       plans: [],
+      runningShoes: [],
       derived: null,
       updatedAt: this.nowIso(),
     };
@@ -528,6 +540,20 @@ export class WellnessStorageService {
     };
   }
 
+  private normalizeRunningShoes(shoes: RunningShoeRecord[] | null | undefined): RunningShoeRecord[] {
+    if (!Array.isArray(shoes)) return [];
+    return shoes
+      .map((shoe) => ({
+        id: String(shoe?.id || '').trim(),
+        name: String(shoe?.name || '').trim(),
+        brand: String(shoe?.brand || '').trim(),
+        notes: String(shoe?.notes || '').trim(),
+        createdAt: shoe?.createdAt || this.nowIso(),
+        retired: Boolean(shoe?.retired),
+      }))
+      .filter((shoe) => shoe.id && shoe.name);
+  }
+
   private normalizeStore(data: Partial<WellnessStoredState> | null | undefined): WellnessStoredState {
     const plans = this.sortPlans((data?.plans || [])
       .map((plan) => this.normalizePlanRecord(plan))
@@ -538,6 +564,7 @@ export class WellnessStorageService {
       entries,
       form: data?.form || null,
       plans,
+      runningShoes: this.normalizeRunningShoes(data?.runningShoes),
       derived: data?.derived || null,
       updatedAt: data?.updatedAt || this.nowIso(),
     };
@@ -842,6 +869,7 @@ export class WellnessStorageService {
       form: this.resolveForm(derived.entries, derived.store.form),
       plan: derived.plan,
       plans: this.sortPlans(derived.store.plans),
+      runningShoes: this.normalizeRunningShoes(derived.store.runningShoes),
       dailyScores: derived.dailyScores,
       planTransactions: derived.planTransactions,
     };
@@ -1015,15 +1043,23 @@ export class WellnessStorageService {
     return this.buildPublicState(derived.store, scoringRules);
   }
 
-  async save(userId: string, payload: { entries: WellnessEntry[]; form: Record<string, any> | null; plan?: WellnessPlan | null }): Promise<WellnessState> {
+  async save(userId: string, payload: {
+    entries?: WellnessEntry[];
+    form?: Record<string, any> | null;
+    plan?: WellnessPlan | null;
+    runningShoes?: RunningShoeRecord[];
+  }): Promise<WellnessState> {
     const [store, scoringRules] = await Promise.all([this.loadStore(userId), this.loadScoringRules()]);
     const normalizedStore = this.normalizeStore(store);
     const activePlan = payload.plan === undefined
       ? this.activePlanForStore(normalizedStore)
       : this.normalizePlanRecord(payload.plan || null);
 
-    const incomingEntries = this.sortEntries(Array.isArray(payload.entries) ? payload.entries : []);
-    const mergedEntries = this.mergeActiveEntries(normalizedStore.entries, incomingEntries, activePlan?.id || null);
+    const hasIncomingEntries = Array.isArray(payload.entries);
+    const incomingEntries = hasIncomingEntries ? this.sortEntries(payload.entries || []) : [];
+    const mergedEntries = hasIncomingEntries
+      ? this.mergeActiveEntries(normalizedStore.entries, incomingEntries, activePlan?.id || null)
+      : normalizedStore.entries;
     const updatedPlans = activePlan
       ? this.sortPlans(normalizedStore.plans.map((plan) => (
           plan.id === activePlan.id ? { ...plan, ...activePlan, updatedAt: this.nowIso() } : plan
@@ -1032,8 +1068,11 @@ export class WellnessStorageService {
 
     const nextStore = this.normalizeStore({
       entries: mergedEntries,
-      form: payload.form || normalizedStore.form,
+      form: payload.form === undefined ? normalizedStore.form : payload.form,
       plans: updatedPlans,
+      runningShoes: payload.runningShoes === undefined
+        ? normalizedStore.runningShoes
+        : this.normalizeRunningShoes(payload.runningShoes),
       updatedAt: this.nowIso(),
     });
 

@@ -29,15 +29,22 @@ self.addEventListener('notificationclick', (event) => {
 
   event.waitUntil((async () => {
     const allClients = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const target = new URL(targetUrl);
+
     for (const client of allClients) {
-      if (client.url.includes(rawUrl) || client.url.includes('/buddy-safety') || client.url.includes('/chat')) {
+      try {
+        const clientUrl = new URL(client.url);
+        if (clientUrl.origin !== target.origin) continue;
         await client.focus();
         if ('navigate' in client) {
           try { await client.navigate(targetUrl); } catch (_) { /* ignore */ }
         }
         return;
+      } catch (_) {
+        // ignore malformed client URLs
       }
     }
+
     await clients.openWindow(targetUrl);
   })());
 });

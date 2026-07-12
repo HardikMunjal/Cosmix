@@ -485,6 +485,60 @@ export class ChatService {
         return formatter.format(new Date());
     }
 
+    private offsetDateInTimezone(timeZone: string, dayOffset: number) {
+        const anchor = this.dateInTimezone(timeZone);
+        const date = new Date(`${anchor}T12:00:00Z`);
+        date.setUTCDate(date.getUTCDate() + dayOffset);
+        return date.toISOString().slice(0, 10);
+    }
+
+    private hasWellnessActivity(entry: Record<string, unknown> | null | undefined) {
+        if (!entry) return false;
+        const fields = [
+            'runningMinutes', 'runningDistanceKm', 'cyclingMinutes', 'walkingMinutes', 'walkingDistanceKm',
+            'exerciseMinutes', 'yogaMinutes', 'badmintonMinutes', 'footballMinutes',
+            'cricketMinutes', 'swimmingMinutes', 'meditationMinutes', 'whiskyPegs',
+            'fastFoodServings', 'sugarServings', 'headacheLevel', 'sleepHours',
+        ];
+        return fields.some((field) => Number(entry[field] || 0) > 0);
+    }
+
+    private async userLoggedWellnessActivityOnDate(userId: string, activityDate: string) {
+        const pool = await this.ensureSchema();
+        if (!pool || !userId || !activityDate) return false;
+
+        const scoreResult = await pool.query(
+            `SELECT 1
+             FROM wellness_daily_scores
+             WHERE user_id = $1
+               AND score_date = $2::date
+               AND source = 'entry'
+             LIMIT 1`,
+            [userId, activityDate],
+        );
+        if (scoreResult?.rows?.[0]) return true;
+
+        const activityResult = await pool.query(
+            `SELECT 1
+             FROM wellness_plan_transactions
+             WHERE user_id = $1
+               AND entry_date = $2::date
+               AND source = 'activity'
+             LIMIT 1`,
+            [userId, activityDate],
+        );
+        if (activityResult?.rows?.[0]) return true;
+
+        const stateResult = await pool.query(
+            'SELECT payload FROM wellness_user_state WHERE user_id = $1 LIMIT 1',
+            [userId],
+        );
+        const payload = stateResult?.rows?.[0]?.payload || null;
+        const entries = Array.isArray(payload?.entries) ? payload.entries : [];
+        const entry = entries.find((row: { date?: string }) => String(row?.date || '').slice(0, 10) === activityDate);
+        return this.hasWellnessActivity(entry);
+    }
+
     private startWellnessReminderScheduler() {
         if (this.reminderTimer) return;
         this.reminderTimer = setInterval(() => {
@@ -496,11 +550,12 @@ export class ChatService {
     private async runDailyWellnessReminderTick() {
         if (!this.webPushEnabled() || !this.hasDatabase()) return;
 
-        const reminderTime = String(process.env.WELLNESS_REMINDER_LOCAL_TIME || '20:00').trim();
+        const reminderTime = String(process.env.WELLNESS_REMINDER_LOCAL_TIME || '09:00').trim();
         const reminderTimezone = String(process.env.WELLNESS_REMINDER_TIMEZONE || 'Asia/Kolkata').trim();
         if (this.hmInTimezone(reminderTimezone) !== reminderTime) return;
 
         const reminderDate = this.dateInTimezone(reminderTimezone);
+        const missingActivityDate = this.offsetDateInTimezone(reminderTimezone, -1);
         const pool = await this.ensureSchema();
         const candidates = await pool?.query(
             `SELECT DISTINCT s.username,
@@ -518,13 +573,10 @@ export class ChatService {
             const username = this.normalizeUsername(row.username);
             const userId = String(row.user_id || '').trim();
 
-            if (userId) {
-                const hasEntryResult = await pool?.query(
-                    'SELECT 1 FROM wellness_daily_scores WHERE user_id = $1 AND score_date = $2::date LIMIT 1',
-                    [userId, reminderDate],
-                );
-                if (hasEntryResult?.rows?.[0]) continue;
-            }
+            if (!userId) continue;
+
+            const hasYesterdayActivity = await this.userLoggedWellnessActivityOnDate(userId, missingActivityDate);
+            if (hasYesterdayActivity) continue;
 
             const logInsert = await pool?.query(
                 `INSERT INTO chat_wellness_reminder_log (id, username, reminder_date, created_at)
@@ -535,10 +587,11 @@ export class ChatService {
             );
             if (!logInsert?.rows?.[0]) continue;
 
+            const addActivityUrl = `/wellness?addActivity=1&date=${encodeURIComponent(missingActivityDate)}`;
             await this.sendPushToUsers([username], {
-                title: 'Wellness reminder',
-                body: 'Please add your wellness data for today.',
-                url: '/wellness',
+                title: 'Missed yesterday\'s activity',
+                body: `You haven't logged wellness data for ${missingActivityDate}. Tap to add it now.`,
+                url: addActivityUrl,
                 tag: `wellness-${username}-${reminderDate}`,
             }, {
                 type: 'wellness',

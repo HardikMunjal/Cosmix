@@ -1263,6 +1263,7 @@ export default function Dashboard() {
 
     const activePlan = wellnessData.plan || (wellnessData.plans || []).find((plan) => plan?.status === 'active') || null;
     const currentWellnessScore = Number(latestCumulative.toFixed(1));
+    const totalRunningKm = entries.reduce((sum, entry) => sum + Number(entry.runningDistanceKm || 0), 0);
 
     return {
       trendPoints,
@@ -1271,6 +1272,7 @@ export default function Dashboard() {
       fastestRunPace,
       longestRun,
       longestRunningStreak,
+      totalRunningKm: Number(totalRunningKm.toFixed(1)),
       plannedGoals: activePlan ? 1 : 0,
       completedGoals: 0,
     };
@@ -1282,6 +1284,7 @@ export default function Dashboard() {
     fastestRunPace: wellnessSummary.fastestRunPace,
     longestRun: wellnessSummary.longestRun,
     longestRunningStreak: wellnessSummary.longestRunningStreak,
+    totalRunningKm: wellnessSummary.totalRunningKm,
     plannedGoals: wellnessSummary.plannedGoals,
     completedGoals: wellnessSummary.completedGoals,
   }), [wellnessSummary]);
@@ -1289,6 +1292,7 @@ export default function Dashboard() {
   const primaryStats = useMemo(() => ([
     { label: 'Wellness score', value: displayStatNumber(profileInsights.currentWellnessScore, { hideZero: false }), accent: theme.blue },
     { label: 'Max Wellness score', value: displayStatNumber(profileInsights.maxWellnessScore, { hideZero: false }), accent: theme.cyan },
+    { label: 'Lifetime km', value: displayDistance(profileInsights.totalRunningKm), accent: theme.green },
     { label: 'Fastest pace', value: displayPace(profileInsights.fastestRunPace), accent: theme.emerald },
     { label: 'Longest run', value: displayDistance(profileInsights.longestRun?.distanceKm), accent: theme.textHeading, meta: displayLongestRunMeta(profileInsights.longestRun) },
     { label: 'Longest running streak', value: `${displayStatNumber(profileInsights.longestRunningStreak)}${displayStatNumber(profileInsights.longestRunningStreak) === '--' ? '' : 'd'}`, accent: theme.orange },

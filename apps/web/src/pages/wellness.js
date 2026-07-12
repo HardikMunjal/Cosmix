@@ -21,6 +21,12 @@ import {
 } from '../lib/wellnessScoring';
 import { resolveAvatarPresentation } from '../lib/avatarProfile';
 import { MobileBottomNav } from '../lib/MobileNav';
+import {
+  findRunningShoe,
+  getRunningShoeLabel,
+  readRunningShoes,
+  saveRunningShoesLocal,
+} from '../lib/runningShoes';
 
 const STORAGE_LANG_KEY = 'cosmix-henna-language';
 function storageKey(userId, suffix) { return `cosmix-wellness-${userId}-${suffix}`; }
@@ -143,15 +149,19 @@ function summarizeAddedActivities(selectedDate, activityNames, updates) {
 function buildActivityFieldValues(activityId, entry = {}) {
   const actCfg = ACTIVITY_OPTIONS.find((activity) => activity.id === activityId);
   if (!actCfg) return {};
-  return actCfg.fields.reduce((values, field) => {
+  const values = actCfg.fields.reduce((acc, field) => {
     const rawValue = entry?.[field.key];
     if (field.input === 'textarea' || field.input === 'select') {
-      values[field.key] = rawValue != null ? String(rawValue) : '';
+      acc[field.key] = rawValue != null ? String(rawValue) : '';
     } else {
-      values[field.key] = rawValue != null && rawValue !== 0 ? String(rawValue) : '';
+      acc[field.key] = rawValue != null && rawValue !== 0 ? String(rawValue) : '';
     }
-    return values;
+    return acc;
   }, {});
+  if (activityId === 'running') {
+    values.runningShoeId = entry?.runningShoeId != null ? String(entry.runningShoeId) : '';
+  }
+  return values;
 }
 
 function inferActivityNamesFromUpdates(updates) {
@@ -260,6 +270,7 @@ function clearActivityFields(entry, activityConfig) {
     next[field.key] = field.input === 'textarea' || field.input === 'select' ? '' : 0;
   });
   if (activityConfig.id === 'headache') next.headacheLevel = 0;
+  if (activityConfig.id === 'running') next.runningShoeId = '';
   return next;
 }
 
@@ -404,6 +415,7 @@ export default function WellnessPage() {
   const buddyLoadedKeyRef = useRef('');
   const buddyLoadInFlightRef = useRef(false);
   const moreMenuRef = useRef(null);
+  const deepLinkHandledRef = useRef(false);
 
   const [user, setUser] = useState(null);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
@@ -442,6 +454,7 @@ export default function WellnessPage() {
   const [buddyPlanRows, setBuddyPlanRows] = useState([]);
   const [buddyPlanLoading, setBuddyPlanLoading] = useState(false);
   const [serverHydrated, setServerHydrated] = useState(false);
+  const [runningShoes, setRunningShoes] = useState([]);
 
   const showMicSecurityWarning = typeof window !== 'undefined' && !window.isSecureContext && window.location.hostname !== 'localhost';
 
@@ -499,6 +512,10 @@ export default function WellnessPage() {
     if (serverData.scoringRules) {
       setScoringRules(normalizeScoringRules(serverData.scoringRules));
     }
+    if (Array.isArray(serverData.runningShoes)) {
+      const nextShoes = saveRunningShoesLocal(userIdRef.current, serverData.runningShoes);
+      setRunningShoes(nextShoes);
+    }
     if (syncLocal && typeof window !== 'undefined' && userIdRef.current) {
       // Only overwrite local entries if the server returned real data.
       // If the server has empty entries but local has data, trust local — server may have lost data.
@@ -530,6 +547,7 @@ export default function WellnessPage() {
       setForm(resolvedForm);
       setSelectedDate(today);
       setPlanStartDate(today);
+      setRunningShoes(readRunningShoes(uid));
       const storedLanguage = localStorage.getItem(STORAGE_LANG_KEY);
       if (storedLanguage && LANGUAGE_OPTIONS.some((o) => o.value === storedLanguage)) setVoiceLanguage(storedLanguage);
       initDoneRef.current = true;
@@ -699,17 +717,16 @@ export default function WellnessPage() {
   }, [dailyScores, planInfo?.id, planInfo?.status, planInfo?.name, planInfo?.startDate]);
 
   /* ---- sync to server (debounced) ---- */
-  function syncToServer(newEntries, newForm) {
+  function syncToServer(newEntries, newForm, nextRunningShoes = runningShoes) {
     const uid = userIdRef.current;
     if (!uid) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      // Only sync persisted entries to avoid accidental form draft duplication across dates.
       const payloadEntries = Array.isArray(newEntries) ? newEntries : [];
       fetch(`${API_BASE}/wellness/data/${encodeURIComponent(uid)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entries: payloadEntries, form: newForm }),
+        body: JSON.stringify({ entries: payloadEntries, form: newForm, runningShoes: nextRunningShoes }),
       })
         .then((r) => {
           if (!r.ok) throw new Error(`Sync failed with status ${r.status}`);
@@ -907,6 +924,26 @@ export default function WellnessPage() {
   }, [entries]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (initDoneRef.current) localStorage.setItem(STORAGE_LANG_KEY, voiceLanguage); }, [voiceLanguage]);
 
+  useEffect(() => {
+    if (!router.isReady || loading || deepLinkHandledRef.current) return;
+    const shouldOpen = router.query.addActivity === '1' || router.query.addActivity === 'true';
+    if (!shouldOpen) return;
+
+    const dateParam = String(router.query.date || '').slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateParam)) {
+      setSelectedDate(dateParam);
+    }
+
+    deepLinkHandledRef.current = true;
+    setShowMoreMenu(false);
+    setInputMode('dropdown');
+    setSelectedActivity('');
+    setFieldValues({});
+    setCommandInput('');
+    setShowAddActivityModal(true);
+    router.replace('/wellness', undefined, { shallow: true });
+  }, [router.isReady, router.query.addActivity, router.query.date, loading, router]);
+
   /* ---- weather ---- */
   useEffect(() => {
     if (typeof window === 'undefined' || !navigator.geolocation) return;
@@ -1036,6 +1073,16 @@ export default function WellnessPage() {
         if (headacheSeverity && !updates.some((update) => update.key === 'headacheSeverity')) {
           updates.push({ key: 'headacheSeverity', label: 'Severity', unit: '', value: headacheSeverity });
         }
+      }
+    }
+    if (actCfg.id === 'running') {
+      const shoeId = String(fieldValues.runningShoeId || '').trim();
+      if (shoeId) {
+        next.runningShoeId = shoeId;
+        const shoe = findRunningShoe(runningShoes, shoeId);
+        updates.push({ key: 'runningShoeId', label: 'Shoes', unit: '', value: getRunningShoeLabel(shoe) || 'Shoes' });
+      } else {
+        next.runningShoeId = '';
       }
     }
     if (!updates.length) { setAssistantReply('Enter at least one value.'); return; }
@@ -1237,7 +1284,13 @@ export default function WellnessPage() {
   const todayActivities = useMemo(() => {
     const entry = selectedDateForm;
     const list = [];
-    if (Number(entry.runningDistanceKm || 0) > 0 || Number(entry.runningMinutes || 0) > 0) list.push({ id: 'running', icon: '🏃', label: 'Running', detail: `${formatMetric(entry.runningDistanceKm)} km · ${formatMetric(entry.runningMinutes)} mins` });
+    if (Number(entry.runningDistanceKm || 0) > 0 || Number(entry.runningMinutes || 0) > 0) {
+      const shoe = findRunningShoe(runningShoes, entry.runningShoeId);
+      const shoeLabel = getRunningShoeLabel(shoe);
+      const detailParts = [`${formatMetric(entry.runningDistanceKm)} km`, `${formatMetric(entry.runningMinutes)} mins`];
+      if (shoeLabel) detailParts.push(shoeLabel);
+      list.push({ id: 'running', icon: '🏃', label: 'Running', detail: detailParts.join(' · ') });
+    }
     if (Number(entry.cyclingMinutes || 0) > 0) list.push({ id: 'cycling', icon: '🚴', label: 'Cycling', detail: `${formatMetric(entry.cyclingMinutes)} mins` });
     if (Number(entry.walkingDistanceKm || 0) > 0 || Number(entry.walkingMinutes || 0) > 0) list.push({ id: 'walking', icon: '🚶', label: 'Walking', detail: `${formatMetric(entry.walkingDistanceKm)} km · ${formatMetric(entry.walkingMinutes)} mins` });
     if (Number(entry.exerciseMinutes || 0) > 0) list.push({ id: 'exercise', icon: '💪', label: 'Workout', detail: `${formatMetric(entry.exerciseMinutes)} mins` });
@@ -1263,7 +1316,7 @@ export default function WellnessPage() {
     }
     if (Number(entry.sleepHours || 0) > 0) list.push({ id: 'sleep', icon: '😴', label: 'Sleep', detail: `${formatMetric(entry.sleepHours)} hrs` });
     return list;
-  }, [selectedDateForm]);
+  }, [selectedDateForm, runningShoes]);
 
   /* ---- loading ---- */
   if (!user || loading) {
@@ -2119,6 +2172,26 @@ export default function WellnessPage() {
                             )}
                           </div>
                         ))}
+                        {selectedActivity === 'running' && (
+                          <div style={s.fieldGroup}>
+                            <label style={s.fieldLabel}>Shoes</label>
+                            <select
+                              value={fieldValues.runningShoeId || ''}
+                              onChange={(e) => setFieldValues((cur) => ({ ...cur, runningShoeId: e.target.value }))}
+                              style={s.fieldInput}
+                            >
+                              <option value="">Select shoes (optional)</option>
+                              {runningShoes.filter((shoe) => !shoe.retired).map((shoe) => (
+                                <option key={shoe.id} value={shoe.id}>{getRunningShoeLabel(shoe)}</option>
+                              ))}
+                            </select>
+                            {!runningShoes.length ? (
+                              <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>
+                                Add shoes in Running dashboard first.
+                              </div>
+                            ) : null}
+                          </div>
+                        )}
                         <button type="button" onClick={handleDropdownSave} style={s.addBtn} className="wellness-add-btn">+ Add activity</button>
                       </div>
                     )

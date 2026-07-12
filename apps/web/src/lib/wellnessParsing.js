@@ -27,6 +27,7 @@ export const DEFAULT_FORM = {
   date: new Date().toISOString().slice(0, 10),
   runningMinutes: 0,
   runningDistanceKm: 0,
+  runningShoeId: '',
   cyclingMinutes: 0,
   walkingMinutes: 0,
   walkingDistanceKm: 0,

@@ -36,7 +36,7 @@ export class WellnessController {
   }
 
   @Put('data/:userId')
-  async saveUserData(@Param('userId') userId: string, @Body() body: { entries: any[]; form: any }) {
+  async saveUserData(@Param('userId') userId: string, @Body() body: { entries?: any[]; form?: any; runningShoes?: any[] }) {
     const [state, scoringRules] = await Promise.all([
       this.storageService.save(userId, body),
       this.storageService.loadScoringRules(),

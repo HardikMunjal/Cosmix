@@ -168,7 +168,7 @@ export default function PushSettingsPage() {
           </label>
           <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <input type="checkbox" checked={prefs.wellnessReminderEnabled !== false} onChange={(e) => setPrefs((prev) => ({ ...prev, wellnessReminderEnabled: e.target.checked }))} />
-            Enable daily wellness reminder push
+            Enable daily reminder if yesterday's activity is missing
           </label>
         </section>
 

@@ -5,6 +5,16 @@ import { MarathonGoalModal, MarathonRaceHub } from '../lib/MarathonRaceHub';
 import { MobileBottomNav } from '../lib/MobileNav';
 import { useTheme } from '../lib/ThemePicker';
 import { computeRunningStats, computeWellnessStats, buildWellnessSummary } from '../lib/userInsights';
+import {
+  buildRunningRows,
+  computeShoeStats,
+  createRunningShoeId,
+  getRunningShoeLabel,
+  loadRunningShoesFromServer,
+  readRunningShoes,
+  saveRunningShoesLocal,
+  syncRunningShoesToServer,
+} from '../lib/runningShoes';
 
 // ─── helpers ─────────────────────────────────────────────
 function fmtDate(dateStr) {
@@ -427,7 +437,128 @@ function WeeklyMileageChart({ runRows, theme }) {
   );
 }
 
-// ─── sport tab panels ──────────────────────────────────────
+function RunningShoesPanel({ userId, shoes, onChange, theme }) {
+  const [name, setName] = useState('');
+  const [brand, setBrand] = useState('');
+
+  function handleAdd() {
+    const trimmedName = String(name || '').trim();
+    if (!trimmedName) return;
+    const next = [
+      ...shoes,
+      {
+        id: createRunningShoeId(),
+        name: trimmedName,
+        brand: String(brand || '').trim(),
+        createdAt: new Date().toISOString(),
+        retired: false,
+      },
+    ];
+    const saved = saveRunningShoesLocal(userId, next);
+    onChange(saved);
+    void syncRunningShoesToServer(userId, saved);
+    setName('');
+    setBrand('');
+  }
+
+  function handleRemove(shoeId) {
+    const next = shoes.filter((shoe) => shoe.id !== shoeId);
+    const saved = saveRunningShoesLocal(userId, next);
+    onChange(saved);
+    void syncRunningShoesToServer(userId, saved);
+  }
+
+  return (
+    <div style={{ display: 'grid', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8 }}>
+        <input value={brand} onChange={(e) => setBrand(e.target.value)} placeholder="Brand (optional)" style={{ padding: '10px 12px', borderRadius: 12, border: `1px solid ${theme.cardBorder}`, background: theme.cardBg, color: theme.textPrimary }} />
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Shoe name" style={{ padding: '10px 12px', borderRadius: 12, border: `1px solid ${theme.cardBorder}`, background: theme.cardBg, color: theme.textPrimary }} />
+        <button type="button" onClick={handleAdd} style={{ border: 'none', borderRadius: 12, padding: '10px 14px', background: theme.orange, color: '#fff', fontWeight: 800, cursor: 'pointer' }}>Add</button>
+      </div>
+      {!shoes.length ? (
+        <div style={{ fontSize: 13, color: theme.textMuted }}>No shoes yet. Add your running shoes to track km, pace, and speed per pair.</div>
+      ) : (
+        <div style={{ display: 'grid', gap: 8 }}>
+          {shoes.map((shoe) => (
+            <div key={shoe.id} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 10, alignItems: 'center', padding: '12px 14px', borderRadius: 14, border: `1px solid ${theme.cardBorder}`, background: theme.cardBg }}>
+              <div>
+                <div style={{ fontWeight: 800, color: theme.textHeading }}>{getRunningShoeLabel(shoe)}</div>
+              </div>
+              <button type="button" onClick={() => handleRemove(shoe.id)} style={{ border: `1px solid ${theme.cardBorder}`, borderRadius: 10, background: 'transparent', color: theme.textMuted, padding: '6px 10px', cursor: 'pointer' }}>Remove</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ShoeKmChart({ shoeStats, theme }) {
+  if (!shoeStats?.length) return null;
+  const maxKm = Math.max(...shoeStats.map((row) => row.totalKm), 1);
+  const W = 420;
+  const H = 110;
+  const colW = W / shoeStats.length;
+  const barW = Math.max(18, colW * 0.55);
+  const colors = [theme.orange, theme.blue, theme.green, theme.cyan, theme.purple];
+
+  return (
+    <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 18, padding: '16px 20px' }}>
+      <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.13em', color: theme.textMuted, marginBottom: 10 }}>Distance by shoe — km</div>
+      <div style={{ overflowX: 'auto' }}>
+        <svg viewBox={`0 0 ${W} ${H + 34}`} style={{ width: '100%', height: H + 34, minWidth: 220 }}>
+          {shoeStats.map((row, i) => {
+            const cx = i * colW + colW / 2;
+            const barH = Math.max(6, (row.totalKm / maxKm) * (H - 12));
+            const y = H - barH;
+            const fill = colors[i % colors.length];
+            return (
+              <g key={row.shoeId || row.label}>
+                <rect x={cx - barW / 2} y={y} width={barW} height={barH} rx="6" fill={fill} opacity={0.85} />
+                <text x={cx} y={y - 5} textAnchor="middle" fill={fill} fontSize="9" fontWeight="800">{row.totalKm}</text>
+                <text x={cx} y={H + 14} textAnchor="middle" fill={theme.textMuted} fontSize="8">{row.name.slice(0, 10)}</text>
+              </g>
+            );
+          })}
+          <line x1="0" x2={W} y1={H} y2={H} stroke={theme.cardBorder} />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+function ShoeStatsSection({ entries, shoes, theme }) {
+  const shoeStats = useMemo(() => computeShoeStats(entries, shoes), [entries, shoes]);
+  if (!shoeStats.length) {
+    return (
+      <div style={{ padding: 16, borderRadius: 16, border: `1px solid ${theme.cardBorder}`, color: theme.textMuted, fontSize: 13 }}>
+        Log runs with shoes selected to see per-shoe pace, speed, and distance stats.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'grid', gap: 12 }}>
+      <ShoeKmChart shoeStats={shoeStats} theme={theme} />
+      <div className="sport-3col" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 10 }}>
+        {shoeStats.map((row) => (
+          <div key={row.shoeId || row.label} style={{ padding: '14px 16px', borderRadius: 16, border: `1px solid ${theme.cardBorder}`, background: theme.cardBg }}>
+            <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', color: theme.textMuted }}>{row.label}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 10, fontSize: 12 }}>
+              <div><span style={{ color: theme.textMuted }}>Runs</span><div style={{ fontWeight: 800, color: theme.orange }}>{row.runs}</div></div>
+              <div><span style={{ color: theme.textMuted }}>Total km</span><div style={{ fontWeight: 800, color: theme.blue }}>{row.totalKm}</div></div>
+              <div><span style={{ color: theme.textMuted }}>Avg distance</span><div style={{ fontWeight: 800, color: theme.green }}>{row.avgDistance} km</div></div>
+              <div><span style={{ color: theme.textMuted }}>Avg pace</span><div style={{ fontWeight: 800, color: theme.cyan }}>{row.avgPace ? fmtPace(row.avgPace) : '--'}</div></div>
+              <div><span style={{ color: theme.textMuted }}>Avg speed</span><div style={{ fontWeight: 800, color: theme.purple }}>{row.avgSpeed} km/h</div></div>
+              <div><span style={{ color: theme.textMuted }}>Longest run</span><div style={{ fontWeight: 800, color: theme.textHeading }}>{row.longestRunKm} km</div></div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function CollapsibleBlock({ title, children, theme, defaultOpen = false }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
@@ -457,7 +588,7 @@ function CollapsibleBlock({ title, children, theme, defaultOpen = false }) {
   );
 }
 
-function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, userId, onOpenMarathonPlan, goalRefreshKey }) {
+function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, userId, onOpenMarathonPlan, goalRefreshKey, entries, runningShoes, onRunningShoesChange }) {
   const noData = !runStats || runStats.totalRuns === 0;
   const insights = useMemo(() => buildRunningInsights(runRows), [runRows]);
   const paceDelta = insights.avgPace7 && insights.avgPace30
@@ -467,6 +598,11 @@ function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, us
   return (
     <div style={{ display: 'grid', gap: '14px' }}>
       <MarathonRaceHub userId={userId} runRows={runRows} theme={theme} onOpenPlan={onOpenMarathonPlan} refreshKey={goalRefreshKey} compact />
+
+      <CollapsibleBlock title="My running shoes" theme={theme} defaultOpen>
+        <RunningShoesPanel userId={userId} shoes={runningShoes} onChange={onRunningShoesChange} theme={theme} />
+      </CollapsibleBlock>
+
       {noData ? <EmptyState sport="Running" theme={theme} /> : (
       <>
       <CollapsibleBlock title="Performance dashboards" theme={theme} defaultOpen>
@@ -543,6 +679,10 @@ function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, us
             ))}
           </div>
         </div>
+      </CollapsibleBlock>
+
+      <CollapsibleBlock title="Shoe analytics" theme={theme} defaultOpen={false}>
+        <ShoeStatsSection entries={entries} shoes={runningShoes} theme={theme} />
       </CollapsibleBlock>
       </>
       )}
@@ -697,6 +837,7 @@ export default function RunningAnalytics() {
   const [showMarathonModal, setShowMarathonModal] = useState(false);
   const [goalRefreshKey, setGoalRefreshKey] = useState(0);
   const [showOtherSports, setShowOtherSports] = useState(false);
+  const [runningShoes, setRunningShoes] = useState([]);
 
   useEffect(() => {
     restoreUserSession(router, setUser);
@@ -707,11 +848,20 @@ export default function RunningAnalytics() {
     if (router.query.setup === '1') setShowMarathonModal(true);
   }, [router.isReady, router.query.setup, user?.id]);
 
+  useEffect(() => {
+    if (!user?.id) return;
+    setRunningShoes(readRunningShoes(user.id));
+    void loadRunningShoesFromServer(user.id).then((shoes) => {
+      if (shoes?.length) setRunningShoes(shoes);
+    });
+  }, [user?.id]);
+
   const runStats = useMemo(() => (user?.id ? computeRunningStats(user.id) : null), [user?.id]);
   const wellStats = useMemo(() => (user?.id ? computeWellnessStats(user.id) : null), [user?.id]);
   const wellSummary = useMemo(() => (user?.id ? buildWellnessSummary(user.id) : null), [user?.id]);
 
   const entries = useMemo(() => wellSummary?.entries || [], [wellSummary]);
+  const runRows = useMemo(() => buildRunningRows(entries), [entries]);
 
   const allSportStats = useMemo(() => ({
     running: computeSportStats(entries, 'runningMinutes', 'runningDistanceKm'),
@@ -866,7 +1016,10 @@ export default function RunningAnalytics() {
             wellSummary={wellSummary}
             name={name}
             theme={theme}
-            runRows={allSportStats.running?.rows || []}
+            runRows={runRows}
+            entries={entries}
+            runningShoes={runningShoes}
+            onRunningShoesChange={setRunningShoes}
             userId={user?.id}
             onOpenMarathonPlan={() => setShowMarathonModal(true)}
             goalRefreshKey={goalRefreshKey}

@@ -2727,7 +2727,7 @@ export default function ChatPage() {
                           void updatePushPreferences({ wellnessReminderEnabled: event.target.checked });
                         }}
                       />
-                      {' '}Enable daily wellness reminder push
+                      {' '}Notify once daily if yesterday's activity is missing
                     </label>
                 <button
                   type="button"
