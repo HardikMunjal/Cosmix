@@ -62,6 +62,7 @@ export default function App({ Component, pageProps }) {
   }, []);
 
   useEffect(() => {
+    let loaderTimeout = null;
     let safetyTimeout = null;
 
     const handleStart = () => {
@@ -189,6 +190,9 @@ export default function App({ Component, pageProps }) {
           border-radius: 12px;
           cursor: pointer;
           min-height: 48px;
+          width: 100%;
+          touch-action: manipulation;
+          -webkit-tap-highlight-color: transparent;
           transition: background 0.15s ease, color 0.15s ease;
           text-decoration: none;
         }

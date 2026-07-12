@@ -1,106 +1,119 @@
 /**
  * Sport-specific images only — badminton posts use badminton photos, etc.
- * Sources: Pexels + Unsplash (direct CDN URLs).
+ * URLs are verified Pexels CDN links (200 OK).
  */
 
 function pexels(id) {
   return `https://images.pexels.com/photos/${id}/pexels-photo-${id}.jpeg?auto=compress&cs=tinysrgb&w=1200&h=720&fit=crop`;
 }
 
-function unsplash(photoId) {
-  return `https://images.unsplash.com/photo-${photoId}?auto=format&fit=crop&w=1200&h=720&q=80`;
-}
-
 export const SPORT_IMAGES = {
+  marathon: [
+    pexels(2402777),
+    pexels(28907552),
+    pexels(35388277),
+    pexels(35599356),
+  ],
   running: [
-    pexels(1571019),
-    pexels(3764013),
-    pexels(2526878),
-    pexels(1557241),
-    pexels(1461889),
-    pexels(2409895),
-    unsplash('1476480862128-209bf9258e58'),
-    unsplash('1571008887538-b2cf49c5286e'),
+    pexels(31675723),
+    pexels(13159246),
+    pexels(32996794),
+    pexels(36541474),
+    pexels(5457970),
   ],
   badminton: [
-    pexels(12887090),
-    pexels(5836877),
-    pexels(3661450),
-    pexels(4757482),
-    unsplash('1626224583764-f87db4efaa7b'),
-    unsplash('1612872087720-94dca6f9f714'),
-    unsplash('1622167518454-d0be8ec59fc0'),
-    unsplash('1592656091128-2f29c69d3c15'),
-    unsplash('1554068865-24cecd4e24de'),
-    'https://upload.wikimedia.org/wikipedia/commons/thumb/9/90/Shuttlecocks_L.jpg/1280px-Shuttlecocks_L.jpg',
-    'https://upload.wikimedia.org/wikipedia/commons/thumb/7/7d/Badminton_%28women%27s_doubles%29.jpg/1280px-Badminton_%28women%27s_doubles%29.jpg',
+    pexels(12886742),
+    pexels(8007417),
+    pexels(35246263),
+    pexels(8007411),
+    pexels(34910395),
   ],
   cycling: [
-    pexels(248547),
-    pexels(276517),
-    pexels(6802570),
-    pexels(100582),
-    pexels(2747946),
-    pexels(2157850),
+    pexels(18823756),
+    pexels(20500972),
+    pexels(30316461),
+    pexels(28810901),
   ],
   walking: [
-    pexels(147411),
-    pexels(1687845),
-    pexels(2409894),
-    pexels(775201),
-    pexels(775747),
-    pexels(1730390),
+    pexels(37273668),
+    pexels(37855557),
+    pexels(36598411),
   ],
   swimming: [
-    pexels(1263349),
-    pexels(2617986),
-    pexels(7375532),
-    pexels(1263348),
-    pexels(3775141),
-    pexels(2609000),
+    pexels(6011876),
+    pexels(30049366),
+    pexels(31820085),
+    pexels(13579965),
+    pexels(3775140),
   ],
   football: [
-    pexels(399187),
-    pexels(4679168),
-    pexels(274422),
-    pexels(2745068),
-    pexels(3621109),
-    pexels(1145542),
+    pexels(38024072),
+    pexels(36958062),
+    pexels(38024089),
+    pexels(37996637),
   ],
   strength: [
-    pexels(841130),
-    pexels(1954524),
-    pexels(1229356),
-    pexels(791763),
-    pexels(17840),
-    pexels(4164760),
+    pexels(14007903),
+    pexels(20769890),
+    pexels(16779470),
+    pexels(31500861),
   ],
   yoga: [
-    pexels(1051838),
-    pexels(3822906),
-    pexels(3094238),
-    pexels(4056723),
-    pexels(5385045),
-    pexels(3822621),
+    pexels(7663234),
+    pexels(3822525),
+    pexels(3822688),
+    pexels(4938111),
   ],
   default: [
-    pexels(841130),
-    pexels(1571019),
-    pexels(1051838),
+    pexels(31675723),
   ],
 };
 
+const SPORT_ALIASES = {
+  marathon: ['marathon', 'ultra', 'half marathon', 'half-marathon'],
+  running: ['running', 'run', 'jog', 'jogging', 'sprint', 'track'],
+  badminton: ['badminton', 'shuttle', 'shuttlecock'],
+  cycling: ['cycling', 'cycle', 'bike', 'biking', 'bicycle'],
+  walking: ['walking', 'walk', 'hike', 'hiking', 'trek'],
+  swimming: ['swimming', 'swim', 'pool', 'laps'],
+  football: ['football', 'soccer'],
+  strength: ['strength', 'gym', 'weight', 'weights', 'exercise', 'workout', 'lifting'],
+  yoga: ['yoga', 'pilates', 'stretch'],
+};
+
+const SPORT_MATCH_ORDER = [
+  'marathon',
+  'badminton',
+  'swimming',
+  'cycling',
+  'football',
+  'walking',
+  'strength',
+  'yoga',
+  'running',
+];
+
+function matchesSportAlias(key, alias) {
+  if (key === alias) return true;
+  if (alias.length <= 3) {
+    return new RegExp(`\\b${alias}\\b`).test(key);
+  }
+  return key.includes(alias);
+}
+
 export function normalizeSportKey(sport) {
-  const key = String(sport || '').toLowerCase();
-  if (key.includes('run')) return 'running';
-  if (key.includes('badminton')) return 'badminton';
-  if (key.includes('cycl') || key.includes('bike')) return 'cycling';
-  if (key.includes('walk')) return 'walking';
-  if (key.includes('swim')) return 'swimming';
-  if (key.includes('football') || key.includes('soccer')) return 'football';
-  if (key.includes('strength') || key.includes('gym') || key.includes('exercise')) return 'strength';
-  if (key.includes('yoga')) return 'yoga';
-  return SPORT_IMAGES[key] ? key : 'default';
+  const key = String(sport || '').toLowerCase().trim();
+  if (!key) return 'default';
+  if (SPORT_IMAGES[key]) return key;
+
+  for (const sportKey of SPORT_MATCH_ORDER) {
+    const aliases = SPORT_ALIASES[sportKey] || [];
+    if (aliases.some((alias) => matchesSportAlias(key, alias))) {
+      return sportKey;
+    }
+  }
+
+  return 'default';
 }
 
 function hashSeed(value) {
@@ -113,25 +126,54 @@ function hashSeed(value) {
   return Math.abs(hash);
 }
 
-export function pickSportImage(sport, postId) {
+export function resolvePostSport(post = {}) {
+  const candidates = [
+    post.sport,
+    post.activityType,
+    post.title,
+    post.body,
+    post.kind,
+  ];
+  for (const value of candidates) {
+    const sport = normalizeSportKey(value);
+    if (sport !== 'default') return sport;
+  }
+  return 'default';
+}
+
+export function getSportImagePool(sport) {
   const key = normalizeSportKey(sport);
-  const pool = SPORT_IMAGES[key] || SPORT_IMAGES.default;
+  return [...(SPORT_IMAGES[key] || SPORT_IMAGES.default)];
+}
+
+export function pickSportImage(sport, postId) {
+  const pool = getSportImagePool(sport);
   return pool[hashSeed(postId) % pool.length];
+}
+
+export function getPostImageCandidates(post = {}) {
+  const sport = resolvePostSport(post);
+  const pool = getSportImagePool(sport);
+  if (!pool.length) return { sport, candidates: SPORT_IMAGES.default };
+
+  const slot = hashSeed(post.id) % pool.length;
+  const candidates = [...pool.slice(slot), ...pool.slice(0, slot)];
+  return { sport, candidates };
 }
 
 export function assignDistinctPostImages(posts = []) {
   const sportCounters = {};
 
   return posts.map((post) => {
-    const sport = normalizeSportKey(post.sport || post.activityType);
-    const pool = [...(SPORT_IMAGES[sport] || SPORT_IMAGES.default)];
+    const sport = resolvePostSport(post);
+    const pool = getSportImagePool(sport);
     if (sportCounters[sport] == null) sportCounters[sport] = 0;
 
     const slot = sportCounters[sport] % pool.length;
     sportCounters[sport] += 1;
 
     const imageUrl = pool[slot];
-    const imageUrls = pool.slice(slot).concat(pool.slice(0, slot));
+    const imageUrls = [...pool.slice(slot), ...pool.slice(0, slot)];
 
     return {
       ...post,
@@ -144,9 +186,9 @@ export function assignDistinctPostImages(posts = []) {
 }
 
 export function pickSportImageRandom(sport, excludeUrls = []) {
-  const key = normalizeSportKey(sport);
+  const pool = getSportImagePool(sport);
   const exclude = new Set(Array.isArray(excludeUrls) ? excludeUrls : [excludeUrls].filter(Boolean));
-  const pool = (SPORT_IMAGES[key] || SPORT_IMAGES.default).filter((url) => !exclude.has(url));
-  if (!pool.length) return (SPORT_IMAGES[key] || SPORT_IMAGES.default)[0];
-  return pool[Math.floor(Math.random() * pool.length)];
+  const available = pool.filter((url) => !exclude.has(url));
+  if (!available.length) return pool[0];
+  return available[Math.floor(Math.random() * available.length)];
 }

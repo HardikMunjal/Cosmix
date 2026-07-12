@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { pickSportImage, normalizeSportKey } from '../../lib/sportImages';
+import { getPostImageCandidates } from '../../lib/sportImages';
 
 function formatTimeLabel(createdAt) {
   const created = createdAt ? new Date(createdAt) : null;
@@ -29,38 +29,54 @@ function formatStats(post) {
 }
 
 function PostImage({ post, theme }) {
-  const sport = normalizeSportKey(post.sport || post.activityType);
-  const candidates = useMemo(() => {
-    const fromApi = Array.isArray(post.imageUrls) ? post.imageUrls : [];
-    const primary = post.imageUrl ? [post.imageUrl] : [];
-    const merged = [...primary, ...fromApi];
-    if (!merged.length) merged.push(pickSportImage(sport, post.id));
-    return [...new Set(merged.filter(Boolean))];
-  }, [post.id, post.imageUrl, post.imageUrls, sport]);
+  const { sport, candidates } = useMemo(() => getPostImageCandidates(post), [post.id, post.sport, post.activityType, post.title, post.body]);
 
   const [index, setIndex] = useState(0);
+  const [failedAll, setFailedAll] = useState(false);
 
   useEffect(() => {
     setIndex(0);
-  }, [post.id]);
+    setFailedAll(false);
+  }, [post.id, sport]);
 
   const src = candidates[Math.min(index, candidates.length - 1)] || candidates[0];
 
   return (
     <div style={{ position: 'relative', minHeight: '280px', overflow: 'hidden', background: theme.cardBorder }}>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        key={`${post.id}-${src}`}
-        src={src}
-        alt={post.title || 'Fitness post'}
-        style={{ width: '100%', height: '280px', objectFit: 'cover', objectPosition: 'center', display: 'block' }}
-        onError={() => {
-          setIndex((current) => {
-            if (current + 1 < candidates.length) return current + 1;
-            return current;
-          });
-        }}
-      />
+      {failedAll || !src ? (
+        <div
+          style={{
+            width: '100%',
+            height: '280px',
+            display: 'grid',
+            placeItems: 'center',
+            background: `linear-gradient(135deg, ${theme.blue}22, ${theme.orange}18)`,
+            color: theme.textHeading,
+            fontSize: '13px',
+            fontWeight: 700,
+          }}
+        >
+          {sport} session
+        </div>
+      ) : (
+        /* eslint-disable-next-line @next/next/no-img-element */
+        <img
+          key={`${post.id}-${sport}-${index}-${src}`}
+          src={src}
+          alt={post.title || 'Fitness post'}
+          loading="lazy"
+          decoding="async"
+          referrerPolicy="no-referrer"
+          style={{ width: '100%', height: '280px', objectFit: 'cover', objectPosition: 'center', display: 'block' }}
+          onError={() => {
+            setIndex((current) => {
+              if (current + 1 < candidates.length) return current + 1;
+              setFailedAll(true);
+              return current;
+            });
+          }}
+        />
+      )}
       <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, padding: '16px', background: 'linear-gradient(180deg, transparent, rgba(15,23,42,0.92))' }}>
         <div style={{ fontSize: '16px', fontWeight: 900, color: '#fff', lineHeight: 1.2 }}>{post.title}</div>
         <div style={{ fontSize: '12px', color: 'rgba(255,255,255,0.9)', marginTop: '6px', lineHeight: 1.45 }}>{post.body}</div>

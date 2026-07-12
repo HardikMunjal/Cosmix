@@ -49,15 +49,17 @@ function buildActivityPosts(authorId, authorName, entries) {
     if (runKm > 0 && runMin > 0) {
       const pace = runMin / runKm;
       const speed = runKm / (runMin / 60);
+      const sport = runKm >= 21 ? 'marathon' : 'running';
+      const runLabel = runKm >= 21 ? 'marathon run' : 'run';
       const id = `fit-${authorId}-run-${date}`;
       posts.push({
         id,
         authorId,
         authorName,
         kind: 'activity',
-        activityType: 'Running',
-        sport: 'running',
-        title: `${authorName} logged a run`,
+        activityType: runKm >= 21 ? 'Marathon' : 'Running',
+        sport,
+        title: `${authorName} logged a ${runLabel}`,
         body: `${runKm.toFixed(1)} km in ${runMin} min · ${fmtPace(pace) || 'steady pace'} · ${speed.toFixed(1)} km/h`,
         createdAt: `${date}T18:00:00.000Z`,
         comments: [],
@@ -114,14 +116,15 @@ function buildAchievementPosts(authorId, authorName, entries) {
 
   const runStreak = computeStreak(entries, (e) => Number(e.runningDistanceKm || 0) > 0);
   if (runStreak >= 3 && Number(latest.runningDistanceKm || 0) > 0) {
+    const latestRunKm = Number(latest.runningDistanceKm || 0);
     const id = `fit-${authorId}-run-streak-${latestDate}`;
     posts.push({
       id,
       authorId,
       authorName,
       kind: 'streak',
-      activityType: 'Running streak',
-      sport: 'running',
+      activityType: latestRunKm >= 21 ? 'Marathon streak' : 'Running streak',
+      sport: latestRunKm >= 21 ? 'marathon' : 'running',
       title: `${authorName} is on a ${runStreak}-day running streak`,
       body: `Momentum is building — ${runStreak} days in a row with a run logged. Buddies are watching.`,
       createdAt: `${latestDate}T19:10:00.000Z`,
@@ -158,8 +161,8 @@ function buildAchievementPosts(authorId, authorName, entries) {
         authorId,
         authorName,
         kind: 'record',
-        activityType: 'Personal record',
-        sport: 'running',
+        activityType: maxDist >= 21 ? 'Marathon record' : 'Personal record',
+        sport: maxDist >= 21 ? 'marathon' : 'running',
         title: `${authorName} broke their max distance record`,
         body: `New longest run: ${maxDist.toFixed(1)} km. Previous bests are officially in the rear-view.`,
         createdAt: `${latestDate}T19:20:00.000Z`,
@@ -180,8 +183,8 @@ function buildAchievementPosts(authorId, authorName, entries) {
           authorId,
           authorName,
           kind: 'pace',
-          activityType: 'Fast run',
-          sport: 'running',
+          activityType: latestRun.distanceKm >= 21 ? 'Marathon pace' : 'Fast run',
+          sport: latestRun.distanceKm >= 21 ? 'marathon' : 'running',
           title: `${authorName} just hit their second fastest run`,
           body: `${latestRun.distanceKm.toFixed(1)} km at ${fmtPace(latestRun.pace)} — only one session was quicker all-time.`,
           createdAt: `${latestDate}T19:15:00.000Z`,
@@ -196,8 +199,8 @@ function buildAchievementPosts(authorId, authorName, entries) {
           authorId,
           authorName,
           kind: 'pace',
-          activityType: 'Fastest run',
-          sport: 'running',
+          activityType: latestRun.distanceKm >= 21 ? 'Marathon PR' : 'Fastest run',
+          sport: latestRun.distanceKm >= 21 ? 'marathon' : 'running',
           title: `${authorName} set a new fastest pace`,
           body: `${latestRun.distanceKm.toFixed(1)} km at ${fmtPace(latestRun.pace)} — a new personal speed benchmark.`,
           createdAt: `${latestDate}T19:18:00.000Z`,

@@ -185,7 +185,69 @@ function getTimeGreeting() {
   return 'Good evening';
 }
 
-function DashboardHero({ user, theme, notificationCount, activeTab, onTabChange, onToggleNotifications, onOpenSettings }) {
+const DASHBOARD_TABS = [
+  { id: 'home', label: 'Home', icon: '🏠', accent: '#38bdf8', glow: 'rgba(56,189,248,0.24)' },
+  { id: 'posts', label: 'Fitstagram', icon: '📷', accent: '#f472b6', glow: 'rgba(244,114,182,0.26)' },
+  { id: 'buddies', label: 'Buddies', icon: '👥', accent: '#a78bfa', glow: 'rgba(167,139,250,0.26)' },
+];
+
+function NotificationsModal({
+  open,
+  onClose,
+  theme,
+  notifications,
+  onOpenChat,
+  onOpenProfile,
+  onOpenFitstagram,
+}) {
+  useEffect(() => {
+    if (!open || typeof document === 'undefined') return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <div className="dashboard-notifications-backdrop" onClick={onClose} role="presentation">
+      <div
+        className="dashboard-notifications-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Notifications"
+      >
+        <div className="dashboard-notifications-modal-head">
+          <div>
+            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Notifications</div>
+            <div style={{ fontSize: '20px', fontWeight: 900, color: theme.textHeading, marginTop: '4px' }}>Alerts & Requests</div>
+          </div>
+          <button type="button" className="dashboard-notifications-close" onClick={onClose} aria-label="Close notifications">✕</button>
+        </div>
+        <div className="dashboard-notifications-modal-body">
+          <NotificationModule
+            embedded
+            theme={theme}
+            notifications={notifications}
+            onOpenChat={() => { onClose(); onOpenChat(); }}
+            onOpenProfile={() => { onClose(); onOpenProfile(); }}
+            onOpenFitstagram={(item) => { onClose(); onOpenFitstagram(item); }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DashboardHero({ user, theme, notificationCount, activeTab, onTabChange, onOpenNotifications, onOpenSettings }) {
   const greeting = getTimeGreeting();
   const displayName = user?.name || user?.username || 'there';
 
@@ -207,16 +269,13 @@ function DashboardHero({ user, theme, notificationCount, activeTab, onTabChange,
             <h1 className="dashboard-title">
               <span className="dashboard-title-gradient">{displayName}</span>
             </h1>
-            <p className="dashboard-header-sub">
-              Your wellness &amp; market cockpit — track progress, buddies, and signals in one place.
-            </p>
           </div>
 
           <div className="dashboard-header-actions">
             <button
               type="button"
               className="dashboard-hero-action"
-              onClick={onToggleNotifications}
+              onClick={onOpenNotifications}
               aria-label={`Notifications${notificationCount ? `, ${notificationCount} unread` : ''}`}
             >
               <BellIcon color="currentColor" />
@@ -237,11 +296,7 @@ function DashboardHero({ user, theme, notificationCount, activeTab, onTabChange,
         </header>
 
         <div className="dashboard-tab-row" role="tablist" aria-label="Dashboard sections">
-          {[
-            { id: 'home', label: 'Home', icon: '🏠' },
-            { id: 'posts', label: 'Fitstagram', icon: '📷' },
-            { id: 'buddies', label: 'Buddies', icon: '👥' },
-          ].map((tab) => {
+          {DASHBOARD_TABS.map((tab) => {
             const isActive = activeTab === tab.id;
             return (
               <button
@@ -249,8 +304,16 @@ function DashboardHero({ user, theme, notificationCount, activeTab, onTabChange,
                 type="button"
                 role="tab"
                 aria-selected={isActive}
-                className={`dashboard-tab-btn${isActive ? ' is-active' : ''}`}
+                className={`dashboard-tab-btn dashboard-tab-btn--${tab.id}${isActive ? ' is-active' : ''}`}
                 onClick={() => onTabChange(tab.id)}
+                style={isActive ? {
+                  borderColor: `${tab.accent}88`,
+                  background: `linear-gradient(135deg, ${tab.glow}, rgba(15,23,42,0.2))`,
+                  boxShadow: `0 10px 24px ${tab.glow}, inset 0 1px 0 rgba(255,255,255,0.08)`,
+                  color: '#fff',
+                } : {
+                  '--tab-accent': tab.accent,
+                }}
               >
                 <span className="dashboard-tab-icon" aria-hidden="true">{tab.icon}</span>
                 <span className="dashboard-tab-label">{tab.label}</span>
@@ -367,7 +430,7 @@ function PersonalCockpitPanel({
           </div>
         </div>
 
-        <div className="dashboard-cockpit-chart-panel">
+        <div className="dashboard-cockpit-chart-panel" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()} role="presentation">
           <div className="dashboard-cockpit-chart-head">
             <div className="dashboard-cockpit-chart-title">Wellness trend</div>
             {onOpenWellness ? (
@@ -424,23 +487,6 @@ function ClubModuleLink({ module, variant, onNavigate }) {
       {module.title}
     </button>
   );
-}
-
-const defaultPostImages = {
-  running: 'https://images.unsplash.com/photo-1517430816045-df4b7de11d14?auto=format&fit=crop&w=1200&q=80',
-  cycling: 'https://images.unsplash.com/photo-1508606572321-901ea4437072?auto=format&fit=crop&w=1200&q=80',
-  yoga: 'https://images.unsplash.com/photo-1517836357463-d25dfeac3438?auto=format&fit=crop&w=1200&q=80',
-  strength: 'https://images.unsplash.com/photo-1517836357463-d25dfeac3438?auto=format&fit=crop&w=1200&q=80',
-  default: 'https://images.unsplash.com/photo-1517836357463-d25dfeac3438?auto=format&fit=crop&w=1200&q=80',
-};
-
-function getDefaultPostImage(post) {
-  const type = String(post.activityType || post.title || post.body || '').toLowerCase();
-  if (type.includes('run') || type.includes('running') || type.includes('km')) return defaultPostImages.running;
-  if (type.includes('cycle') || type.includes('cycling') || type.includes('ride')) return defaultPostImages.cycling;
-  if (type.includes('yoga')) return defaultPostImages.yoga;
-  if (type.includes('lift') || type.includes('strength') || type.includes('weights') || type.includes('gym')) return defaultPostImages.strength;
-  return defaultPostImages.default;
 }
 
 const buddyImages = [
@@ -527,9 +573,10 @@ function ScrollableTrendChart({
   pointSpacing = 12,
   annotationFormatter = (value) => `${value >= 0 ? '+' : ''}${Number(value || 0).toFixed(1)}`,
   ariaLabel = 'Trend',
-  hintText = 'Swipe left for older days',
+  hintText = 'Scroll up/down or drag sideways for older days',
   variant = 'wellness',
 }) {
+  const shellRef = useRef(null);
   const scrollRef = useRef(null);
 
   const chartWidth = useMemo(() => {
@@ -546,17 +593,88 @@ function ScrollableTrendChart({
   }, [chartWidth, points]);
 
   useEffect(() => {
-    const node = scrollRef.current;
-    if (!node) return undefined;
-    const onWheel = (event) => {
-      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
-      node.scrollLeft += event.deltaY;
+    const scrollNode = scrollRef.current;
+    const shellNode = shellRef.current;
+    if (!scrollNode) return undefined;
+
+    const applyWheelScroll = (event) => {
+      const maxScroll = scrollNode.scrollWidth - scrollNode.clientWidth;
+      if (maxScroll <= 0) return;
+      const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+      scrollNode.scrollLeft = Math.max(0, Math.min(maxScroll, scrollNode.scrollLeft + delta));
       event.preventDefault();
       event.stopPropagation();
     };
-    node.addEventListener('wheel', onWheel, { passive: false });
-    return () => node.removeEventListener('wheel', onWheel);
-  }, [chartWidth]);
+
+    let dragging = false;
+    let dragStartX = 0;
+    let scrollStart = 0;
+
+    const onPointerDown = (event) => {
+      if (event.button !== 0) return;
+      dragging = true;
+      dragStartX = event.clientX;
+      scrollStart = scrollNode.scrollLeft;
+      scrollNode.setPointerCapture(event.pointerId);
+      scrollNode.classList.add('is-dragging');
+    };
+
+    const onPointerMove = (event) => {
+      if (!dragging) return;
+      scrollNode.scrollLeft = scrollStart - (event.clientX - dragStartX);
+    };
+
+    const endDrag = (event) => {
+      if (!dragging) return;
+      dragging = false;
+      scrollNode.classList.remove('is-dragging');
+      try { scrollNode.releasePointerCapture(event.pointerId); } catch (_) { /* ignore */ }
+    };
+
+    let touchStartX = 0;
+    let touchStartY = 0;
+    let touchScrollStart = 0;
+
+    const onTouchStart = (event) => {
+      touchStartX = event.touches[0].clientX;
+      touchStartY = event.touches[0].clientY;
+      touchScrollStart = scrollNode.scrollLeft;
+    };
+
+    const onTouchMove = (event) => {
+      const dx = touchStartX - event.touches[0].clientX;
+      const dy = touchStartY - event.touches[0].clientY;
+      if (Math.abs(dy) >= Math.abs(dx)) {
+        scrollNode.scrollLeft = touchScrollStart + dy;
+      } else {
+        scrollNode.scrollLeft = touchScrollStart + dx;
+      }
+      event.preventDefault();
+    };
+
+    const wheelTargets = [scrollNode, shellNode].filter(Boolean);
+    wheelTargets.forEach((node) => {
+      node.addEventListener('wheel', applyWheelScroll, { passive: false, capture: true });
+    });
+    scrollNode.addEventListener('pointerdown', onPointerDown);
+    scrollNode.addEventListener('pointermove', onPointerMove);
+    scrollNode.addEventListener('pointerup', endDrag);
+    scrollNode.addEventListener('pointercancel', endDrag);
+    scrollNode.addEventListener('touchstart', onTouchStart, { passive: true });
+    scrollNode.addEventListener('touchmove', onTouchMove, { passive: false });
+
+    return () => {
+      wheelTargets.forEach((node) => {
+        node.removeEventListener('wheel', applyWheelScroll, { capture: true });
+      });
+      scrollNode.removeEventListener('pointerdown', onPointerDown);
+      scrollNode.removeEventListener('pointermove', onPointerMove);
+      scrollNode.removeEventListener('pointerup', endDrag);
+      scrollNode.removeEventListener('pointercancel', endDrag);
+      scrollNode.removeEventListener('touchstart', onTouchStart);
+      scrollNode.removeEventListener('touchmove', onTouchMove);
+    };
+  }, [chartWidth, points]);
 
   if (!points.length) {
     return <div style={{ minHeight: `${height}px`, display: 'grid', placeItems: 'center', color: theme.textSecondary, fontSize: '13px' }}>{emptyLabel}</div>;
@@ -590,6 +708,7 @@ function ScrollableTrendChart({
 
   return (
     <div
+      ref={shellRef}
       className="dashboard-wellness-chart-shell"
       onClick={(event) => event.stopPropagation()}
       onKeyDown={(event) => event.stopPropagation()}
@@ -1681,6 +1800,150 @@ export default function Dashboard() {
           line-height: 1.55;
           color: #94a3b8;
         }
+        .dashboard-hero {
+          margin-bottom: 14px;
+        }
+        .dashboard-top-grid--lead {
+          margin-top: 10px;
+        }
+        .dashboard-notifications-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 1200;
+          display: grid;
+          place-items: center;
+          padding: 20px;
+          background: rgba(2, 6, 23, 0.62);
+          backdrop-filter: blur(8px);
+          -webkit-backdrop-filter: blur(8px);
+        }
+        .dashboard-notifications-modal {
+          width: min(520px, 100%);
+          max-height: min(78vh, 720px);
+          overflow: hidden;
+          display: grid;
+          grid-template-rows: auto 1fr;
+          border-radius: 22px;
+          border: 1px solid rgba(148,163,184,0.28);
+          background: linear-gradient(180deg, rgba(15,23,42,0.98), rgba(30,41,59,0.96));
+          box-shadow: 0 28px 60px rgba(0,0,0,0.45);
+        }
+        .dashboard-notifications-modal-head {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 12px;
+          padding: 16px 18px 12px;
+          border-bottom: 1px solid rgba(148,163,184,0.18);
+        }
+        .dashboard-notifications-close {
+          appearance: none;
+          border: 1px solid rgba(148,163,184,0.28);
+          border-radius: 12px;
+          width: 36px;
+          height: 36px;
+          background: rgba(2,6,23,0.55);
+          color: #e2e8f0;
+          cursor: pointer;
+          font-size: 16px;
+          line-height: 1;
+        }
+        .dashboard-notifications-modal-body {
+          overflow-y: auto;
+          padding: 14px 18px 18px;
+        }
+        .dashboard-tab-row {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 8px;
+          padding: 6px;
+          border-radius: 18px;
+          background: rgba(2,6,23,0.5);
+          border: 1px solid rgba(148,163,184,0.16);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+        }
+        .dashboard-tab-btn {
+          appearance: none;
+          border: 1px solid transparent;
+          border-radius: 14px;
+          background: rgba(15,23,42,0.35);
+          color: #cbd5e1;
+          padding: 11px 12px;
+          cursor: pointer;
+          font-size: 12px;
+          font-weight: 800;
+          display: inline-flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 4px;
+          transition: background 0.18s, border-color 0.18s, transform 0.15s, color 0.18s, box-shadow 0.18s;
+        }
+        .dashboard-tab-btn--home:not(.is-active):hover {
+          color: #bae6fd;
+          border-color: rgba(56,189,248,0.28);
+          background: rgba(56,189,248,0.08);
+        }
+        .dashboard-tab-btn--posts:not(.is-active):hover {
+          color: #fbcfe8;
+          border-color: rgba(244,114,182,0.28);
+          background: rgba(244,114,182,0.08);
+        }
+        .dashboard-tab-btn--buddies:not(.is-active):hover {
+          color: #ddd6fe;
+          border-color: rgba(167,139,250,0.28);
+          background: rgba(167,139,250,0.08);
+        }
+        .dashboard-tab-btn.is-active {
+          transform: translateY(-1px);
+        }
+        .dashboard-tab-surface--posts {
+          background:
+            radial-gradient(circle at top right, rgba(244,114,182,0.12), transparent 34%),
+            linear-gradient(180deg, rgba(30,41,59,0.96), rgba(15,23,42,0.98)) !important;
+          border-color: rgba(244,114,182,0.28) !important;
+        }
+        .dashboard-tab-surface--buddies {
+          background:
+            radial-gradient(circle at top left, rgba(167,139,250,0.14), transparent 36%),
+            linear-gradient(180deg, rgba(30,41,59,0.96), rgba(15,23,42,0.98)) !important;
+          border-color: rgba(167,139,250,0.28) !important;
+        }
+        .dashboard-tab-surface-head {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 12px;
+          flex-wrap: wrap;
+        }
+        .dashboard-tab-surface-eyebrow {
+          font-size: 11px;
+          text-transform: uppercase;
+          letter-spacing: 0.12em;
+          font-weight: 800;
+        }
+        .dashboard-tab-surface-eyebrow--posts { color: #f9a8d4; }
+        .dashboard-tab-surface-eyebrow--buddies { color: #c4b5fd; }
+        .dashboard-tab-surface-title {
+          font-size: 24px;
+          font-weight: 900;
+          margin-top: 6px;
+          line-height: 1.1;
+        }
+        .dashboard-tab-surface-title--posts {
+          background: linear-gradient(135deg, #fff 0%, #fbcfe8 55%, #f472b6 100%);
+          -webkit-background-clip: text;
+          background-clip: text;
+          color: transparent;
+        }
+        .dashboard-tab-surface-title--buddies {
+          background: linear-gradient(135deg, #fff 0%, #ddd6fe 55%, #a78bfa 100%);
+          -webkit-background-clip: text;
+          background-clip: text;
+          color: transparent;
+        }
+        .dashboard-tab-icon { font-size: 18px; line-height: 1; }
+        .dashboard-tab-label { letter-spacing: 0.04em; }
         .dashboard-header-actions {
           display: flex;
           align-items: center;
@@ -1723,45 +1986,6 @@ export default function Dashboard() {
           font-weight: 900;
           border: 2px solid rgba(15,23,42,0.9);
         }
-        .dashboard-tab-row {
-          display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 8px;
-          padding: 6px;
-          border-radius: 18px;
-          background: rgba(2,6,23,0.42);
-          border: 1px solid rgba(148,163,184,0.16);
-          box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
-        }
-        .dashboard-tab-btn {
-          appearance: none;
-          border: 1px solid transparent;
-          border-radius: 14px;
-          background: transparent;
-          color: #cbd5e1;
-          padding: 11px 12px;
-          cursor: pointer;
-          font-size: 12px;
-          font-weight: 800;
-          display: inline-flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          gap: 4px;
-          transition: background 0.18s, border-color 0.18s, transform 0.15s, color 0.18s;
-        }
-        .dashboard-tab-btn:hover {
-          color: #f8fafc;
-          background: rgba(148,163,184,0.08);
-        }
-        .dashboard-tab-btn.is-active {
-          color: #fff;
-          border-color: rgba(56,189,248,0.4);
-          background: linear-gradient(135deg, rgba(56,189,248,0.22), rgba(34,197,94,0.14));
-          box-shadow: 0 10px 24px rgba(56,189,248,0.16), inset 0 1px 0 rgba(255,255,255,0.08);
-        }
-        .dashboard-tab-icon { font-size: 18px; line-height: 1; }
-        .dashboard-tab-label { letter-spacing: 0.04em; }
         .dashboard-cockpit {
           position: relative;
           overflow: hidden;
@@ -2053,8 +2277,8 @@ export default function Dashboard() {
           overflow-x: auto;
           overflow-y: hidden;
           -webkit-overflow-scrolling: touch;
-          overscroll-behavior-x: contain;
-          touch-action: pan-x;
+          overscroll-behavior: contain;
+          touch-action: none;
           scrollbar-width: none;
           -ms-overflow-style: none;
           border-radius: 14px;
@@ -2062,6 +2286,10 @@ export default function Dashboard() {
           background: rgba(255,255,255,0.42);
           cursor: grab;
           max-width: 100%;
+        }
+        .dashboard-wellness-chart-scroll.is-dragging {
+          cursor: grabbing;
+          user-select: none;
         }
         .dashboard-wellness-chart-scroll::-webkit-scrollbar {
           display: none;
@@ -2269,21 +2497,21 @@ export default function Dashboard() {
               router.push({ pathname: '/dashboard', query: { ...router.query, tab: tabId } }, undefined, { shallow: true });
             }
           }}
-          onToggleNotifications={() => setShowNotifications((v) => !v)}
+          onOpenNotifications={() => setShowNotifications(true)}
           onOpenSettings={() => { setShowNotifications(false); router.push('/settings'); }}
         />
 
-        {showNotifications ? (
-          <NotificationModule
-            theme={theme}
-            notifications={notifications}
-            onOpenChat={() => router.push('/chat')}
-            onOpenProfile={() => router.push('/profile')}
-            onOpenFitstagram={openFitstagram}
-          />
-        ) : null}
+        <NotificationsModal
+          open={showNotifications}
+          onClose={() => setShowNotifications(false)}
+          theme={theme}
+          notifications={notifications}
+          onOpenChat={() => router.push('/chat')}
+          onOpenProfile={() => router.push('/profile')}
+          onOpenFitstagram={openFitstagram}
+        />
 
-        <section style={{ display: activeTab === 'home' ? 'grid' : 'none' }} className="dashboard-top-grid">
+        <section style={{ display: activeTab === 'home' ? 'grid' : 'none' }} className="dashboard-top-grid dashboard-top-grid--lead">
           <PersonalCockpitPanel
             user={user}
             theme={theme}
@@ -2359,12 +2587,12 @@ export default function Dashboard() {
 
         <section
           style={{ display: activeTab === 'buddies' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '12px' }}
-          className="dashboard-panel dashboard-buddies-panel"
+          className="dashboard-panel dashboard-buddies-panel dashboard-tab-surface dashboard-tab-surface--buddies"
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
+          <div className="dashboard-tab-surface-head">
             <div>
-              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Buddy showdown</div>
-              <div className="dashboard-buddies-title" style={{ fontSize: '24px', fontWeight: 800, color: theme.textHeading, marginTop: '6px' }}>{showdownTitle}</div>
+              <div className="dashboard-tab-surface-eyebrow dashboard-tab-surface-eyebrow--buddies">Buddy showdown</div>
+              <div className="dashboard-tab-surface-title dashboard-tab-surface-title--buddies">{showdownTitle}</div>
             </div>
             <div style={{ fontSize: '11px', color: theme.textMuted, fontWeight: 700 }}>{`${Math.max(0, comparisonTrendRows.length - 1)} rivals`}</div>
           </div>
@@ -2408,13 +2636,13 @@ export default function Dashboard() {
           </div>
         </section>
 
-        <section style={{ display: activeTab === 'posts' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '18px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '14px' }} className="dashboard-panel">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
+        <section style={{ display: activeTab === 'posts' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '18px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '14px' }} className="dashboard-panel dashboard-tab-surface dashboard-tab-surface--posts">
+          <div className="dashboard-tab-surface-head">
             <div>
-              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Buddy feed</div>
-              <div style={{ fontSize: '24px', fontWeight: 800, color: theme.textHeading, marginTop: '6px' }}>Fitstagram</div>
+              <div className="dashboard-tab-surface-eyebrow dashboard-tab-surface-eyebrow--posts">Buddy feed</div>
+              <div className="dashboard-tab-surface-title dashboard-tab-surface-title--posts">Fitstagram</div>
             </div>
-            <div style={{ fontSize: '11px', color: theme.textMuted, fontWeight: 700 }}>{`${feedPosts.filter((p) => !p.seen).length} new · ${feedPosts.length} posts · refreshes every 30s`}</div>
+            <div style={{ fontSize: '11px', color: theme.textMuted, fontWeight: 700, padding: '8px 12px', borderRadius: '999px', border: '1px solid rgba(244,114,182,0.28)', background: 'rgba(244,114,182,0.08)' }}>{`${feedPosts.filter((p) => !p.seen).length} new · ${feedPosts.length} posts`}</div>
           </div>
 
           <PostFeedModule posts={feedPosts.slice(0, 12)} theme={theme} onLike={likePost} onView={markPostViewed} />
@@ -2523,7 +2751,7 @@ export default function Dashboard() {
                   gradientId="market-line-fill"
                   annotationFormatter={(value) => formatCurrency(value)}
                   ariaLabel="Cumulative P/L trend"
-                  hintText="Swipe left for older trading days"
+                  hintText="Scroll up/down or drag sideways for older trading days"
                 />
               </SectionLoadingShell>
             </div>

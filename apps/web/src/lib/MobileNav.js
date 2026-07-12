@@ -1,11 +1,37 @@
-import Link from 'next/link';
 import { useRouter } from 'next/router';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 /**
  * Sticky bottom navigation for mobile-first pages.
  * items: { id, label, icon, href?, onClick?, matchPaths? }
  */
+function navigateToHref(router, href) {
+  const raw = String(href || '').trim();
+  if (!raw) return;
+
+  try {
+    const baseOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
+    const url = new URL(raw, baseOrigin);
+    const pathname = url.pathname;
+    const query = Object.fromEntries(url.searchParams.entries());
+    const hasQuery = Object.keys(query).length > 0;
+
+    if (!hasQuery && router.pathname === pathname) return;
+
+    if (hasQuery) {
+      const samePath = router.pathname === pathname;
+      const sameQuery = Object.entries(query).every(([key, value]) => String(router.query[key] || '') === String(value));
+      if (samePath && sameQuery) return;
+      void router.push({ pathname, query });
+      return;
+    }
+
+    void router.push(pathname);
+  } catch {
+    void router.push(raw);
+  }
+}
+
 export function MobileBottomNav({ theme, items = [], activeId, hideSpacer = false }) {
   const router = useRouter();
   const [hydrated, setHydrated] = useState(false);
@@ -14,7 +40,7 @@ export function MobileBottomNav({ theme, items = [], activeId, hideSpacer = fals
     setHydrated(true);
   }, []);
 
-  const resolveIsActive = (item) => {
+  const resolveIsActive = useCallback((item) => {
     if (activeId) return item.id === activeId;
     if (!hydrated) return false;
     const paths = item.matchPaths || (item.href ? [item.href] : []);
@@ -22,7 +48,17 @@ export function MobileBottomNav({ theme, items = [], activeId, hideSpacer = fals
       const base = String(path).split('?')[0];
       return router.pathname === base || router.asPath.startsWith(base);
     });
-  };
+  }, [activeId, hydrated, router.asPath, router.pathname]);
+
+  const handleNavClick = useCallback((item) => {
+    if (item.onClick) {
+      item.onClick();
+      return;
+    }
+    if (item.href) {
+      navigateToHref(router, item.href);
+    }
+  }, [router]);
 
   const navStyle = hydrated && theme
     ? {
@@ -45,35 +81,13 @@ export function MobileBottomNav({ theme, items = [], activeId, hideSpacer = fals
             const isActive = resolveIsActive(item);
             const className = `cosmix-mobile-nav-btn${isActive ? ' is-active' : ''}`;
 
-            if (item.href) {
-              return (
-                <Link
-                  key={item.id}
-                  href={item.href}
-                  className={className}
-                  aria-current={isActive ? 'page' : undefined}
-                  onClick={(event) => {
-                    const base = String(item.href).split('?')[0];
-                    if (router.pathname === base && !String(item.href).includes('?')) {
-                      event.preventDefault();
-                    }
-                  }}
-                >
-                  <span className="cosmix-mobile-nav-icon" aria-hidden="true">{item.icon}</span>
-                  <span className="cosmix-mobile-nav-label">{item.label}</span>
-                </Link>
-              );
-            }
-
             return (
               <button
                 key={item.id}
                 type="button"
                 className={className}
                 aria-current={isActive ? 'page' : undefined}
-                onClick={() => {
-                  if (item.onClick) item.onClick();
-                }}
+                onClick={() => handleNavClick(item)}
               >
                 <span className="cosmix-mobile-nav-icon" aria-hidden="true">{item.icon}</span>
                 <span className="cosmix-mobile-nav-label">{item.label}</span>
