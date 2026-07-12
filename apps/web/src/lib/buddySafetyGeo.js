@@ -102,6 +102,7 @@ export function buildPolylinePoints(coords = [], box, width = 100, height = 100)
  */
 export function evaluateTripProgress(trip, ping, options = {}) {
   const notifyEveryKm = Number(options.notifyEveryKm || trip.notifyEveryKm || 2);
+  const notifyIntervalMinutes = Number(options.notifyIntervalMinutes || trip.notifyIntervalMinutes || 15);
   const stallMinutes = Number(options.stallMinutes || trip.stallMinutes || 8);
   const stallToleranceKm = Number(options.stallToleranceKm || 0.15);
   const arriveRadiusKm = Number(options.arriveRadiusKm || 0.2);
@@ -131,6 +132,15 @@ export function evaluateTripProgress(trip, ping, options = {}) {
     });
   }
 
+  const lastIntervalAt = Number(trip.lastIntervalNotifyAt || trip.createdAt || 0);
+  if (trip.status === 'active' && (now - lastIntervalAt) >= notifyIntervalMinutes * 60 * 1000) {
+    events.push({
+      type: 'update',
+      message: `On the way — ${formatKm(Math.max(0, distanceToDest))} left to destination`,
+      at: now,
+    });
+  }
+
   if (distanceToDest <= arriveRadiusKm) {
     events.push({
       type: 'arrived',
@@ -149,7 +159,7 @@ export function evaluateTripProgress(trip, ping, options = {}) {
       events.push({
         type: 'stall',
         severity: 'high',
-        message: `Distance not decreasing for ${stallMinutes}+ min — still ${formatKm(distanceToDest)} from destination`,
+        message: `NOT MOVING for ${stallMinutes}+ minutes — still ${formatKm(distanceToDest)} from destination. Please check on them.`,
         at: now,
       });
     }
@@ -170,6 +180,7 @@ export function evaluateTripProgress(trip, ping, options = {}) {
     lastMilestoneKm: crossedKm > lastMilestone ? crossedKm : lastMilestone,
     lastProgressAt: madeProgress ? now : lastProgressAt,
     lastStallAlertAt: events.some((e) => e.type === 'stall') ? now : trip.lastStallAlertAt,
+    lastIntervalNotifyAt: events.some((e) => e.type === 'update') ? now : trip.lastIntervalNotifyAt,
     events,
     status: events.some((e) => e.type === 'arrived') ? 'completed' : trip.status,
   };

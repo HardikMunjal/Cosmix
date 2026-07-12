@@ -23,8 +23,16 @@ export default async function handler(req, res) {
     return res.status(200).json({ results: [] });
   }
 
+  const nearLat = req.query.nearLat ?? req.query.lat;
+  const nearLng = req.query.nearLng ?? req.query.lng;
+  const nearCity = String(req.query.nearCity || req.query.city || 'Bengaluru').trim();
+
   try {
-    const results = await searchPlaces(q);
+    const results = await searchPlaces(q, {
+      city: nearCity,
+      lat: nearLat != null ? Number(nearLat) : undefined,
+      lng: nearLng != null ? Number(nearLng) : undefined,
+    });
     return res.status(200).json({ results });
   } catch (error) {
     console.error('buddy-safety geocode failed:', error);

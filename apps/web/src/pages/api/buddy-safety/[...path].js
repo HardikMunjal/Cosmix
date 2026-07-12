@@ -18,7 +18,7 @@ export default async function handler(req, res) {
   }
 
   const segments = Array.isArray(req.query.path) ? req.query.path.filter(Boolean) : (req.query.path ? [req.query.path] : []);
-  const [head, tripId, action] = segments;
+  const [head, action] = segments;
 
   try {
     if (head === 'profile') {
@@ -55,6 +55,7 @@ export default async function handler(req, res) {
         ...req.body,
         watcherId: watcher?.id || null,
         watcherName: watcher?.name || watcher?.username || watcherUsername,
+        appOrigin: resolveAppOrigin(req),
       });
       return res.status(201).json({ trip });
     }

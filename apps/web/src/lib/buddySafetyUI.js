@@ -169,6 +169,14 @@ export function BuddySafetyStyles() {
         border-color: rgba(56,189,248,0.5);
         box-shadow: 0 0 0 3px rgba(56,189,248,0.12), inset 0 2px 8px rgba(0,0,0,0.25);
       }
+      .bs-select {
+        appearance: none;
+        background-image: linear-gradient(45deg, transparent 50%, #94a3b8 50%), linear-gradient(135deg, #94a3b8 50%, transparent 50%);
+        background-position: calc(100% - 18px) calc(50% - 2px), calc(100% - 12px) calc(50% - 2px);
+        background-size: 6px 6px, 6px 6px;
+        background-repeat: no-repeat;
+        padding-right: 32px;
+      }
       .bs-trip-row {
         display: flex; justify-content: space-between; gap: 10px; align-items: center;
         padding: 14px 16px; border-radius: 16px; cursor: pointer; text-align: left;
@@ -410,6 +418,441 @@ export function BuddySafetyStyles() {
       .bs-sticky-cta {
         display: none;
       }
+
+      /* ── Modal ── */
+      .bs-modal-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 200;
+        display: grid;
+        place-items: center;
+        padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+        background: rgba(2, 6, 23, 0.72);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        animation: bs-slide-up 0.25s ease both;
+      }
+      .bs-modal {
+        width: min(520px, 100%);
+        max-height: min(92vh, 720px);
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        border-radius: 22px;
+        border: 1px solid rgba(255,255,255,0.12);
+        background: linear-gradient(160deg, rgba(15,23,42,0.98), rgba(2,6,23,0.96));
+        box-shadow: 0 32px 80px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.08);
+      }
+      .bs-modal-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: flex-start;
+        padding: 18px 18px 10px;
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+      }
+      .bs-modal-close {
+        width: 40px;
+        height: 40px;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.12);
+        background: rgba(15,23,42,0.6);
+        color: #e2e8f0;
+        font-size: 22px;
+        line-height: 1;
+        cursor: pointer;
+      }
+      .bs-modal-steps {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 6px;
+        padding: 10px 14px;
+      }
+      .bs-modal-step {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        padding: 8px 4px;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.08);
+        background: rgba(2,6,23,0.45);
+        color: #94a3b8;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .bs-modal-step.is-active {
+        color: #f8fafc;
+        border-color: rgba(56,189,248,0.45);
+        background: rgba(56,189,248,0.12);
+      }
+      .bs-modal-step.is-done {
+        color: #86efac;
+        border-color: rgba(34,197,94,0.35);
+      }
+      .bs-modal-step-num {
+        width: 22px;
+        height: 22px;
+        border-radius: 999px;
+        display: grid;
+        place-items: center;
+        font-size: 11px;
+        background: rgba(255,255,255,0.08);
+      }
+      .bs-modal-body {
+        overflow-y: auto;
+        padding: 14px 18px 18px;
+        display: grid;
+        gap: 12px;
+        -webkit-overflow-scrolling: touch;
+      }
+      .bs-modal-lead {
+        margin: 0;
+        font-size: 14px;
+        line-height: 1.5;
+        color: #94a3b8;
+      }
+      .bs-modal-field {
+        display: grid;
+        gap: 6px;
+        font-size: 13px;
+        font-weight: 600;
+        color: #cbd5e1;
+      }
+      .bs-modal-success-chip {
+        padding: 10px 12px;
+        border-radius: 12px;
+        font-size: 13px;
+        color: #bbf7d0;
+        background: rgba(6,78,59,0.2);
+        border: 1px solid rgba(34,197,94,0.3);
+        line-height: 1.45;
+      }
+      .bs-modal-quick-picks {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .bs-modal-footer-row {
+        display: flex;
+        gap: 10px;
+        justify-content: space-between;
+        margin-top: 4px;
+      }
+      .bs-modal-footer-row .bs-btn-primary,
+      .bs-modal-footer-row .bs-btn-ghost {
+        flex: 1;
+      }
+      .bs-duration-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .bs-duration-btn {
+        padding: 12px 10px;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.1);
+        background: rgba(2,6,23,0.55);
+        color: #cbd5e1;
+        font-size: 13px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: border-color 0.2s ease, background 0.2s ease;
+      }
+      .bs-duration-btn.is-active {
+        color: #fff;
+        border-color: rgba(249,115,22,0.55);
+        background: linear-gradient(135deg, rgba(225,29,72,0.28), rgba(249,115,22,0.2));
+        box-shadow: 0 8px 20px rgba(225,29,72,0.18);
+      }
+      .bs-modal-buddy-list {
+        display: grid;
+        gap: 6px;
+        max-height: 140px;
+        overflow-y: auto;
+      }
+      .bs-start-card {
+        display: grid;
+        gap: 12px;
+        text-align: center;
+        padding: 24px 16px;
+      }
+      .bs-start-card p {
+        margin: 0;
+        font-size: 14px;
+        color: #94a3b8;
+        line-height: 1.5;
+      }
+      .bs-route-card {
+        display: grid;
+        gap: 0;
+        padding: 14px;
+        border-radius: 16px;
+        border: 1px solid rgba(56,189,248,0.22);
+        background: rgba(2,6,23,0.55);
+      }
+      .bs-route-card--compact {
+        padding: 12px;
+      }
+      .bs-route-row {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 10px;
+        align-items: center;
+      }
+      .bs-route-pin {
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        display: grid;
+        place-items: center;
+        font-size: 11px;
+        font-weight: 900;
+        flex-shrink: 0;
+      }
+      .bs-route-pin--from {
+        background: rgba(34,197,94,0.2);
+        color: #86efac;
+        border: 1px solid rgba(34,197,94,0.4);
+      }
+      .bs-route-pin--to {
+        background: rgba(249,115,22,0.2);
+        color: #fdba74;
+        border: 1px solid rgba(249,115,22,0.4);
+      }
+      .bs-route-text {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+      }
+      .bs-route-label {
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #64748b;
+      }
+      .bs-route-value {
+        font-size: 14px;
+        font-weight: 700;
+        color: #f1f5f9;
+        line-height: 1.35;
+        word-break: break-word;
+      }
+      .bs-route-value--muted {
+        color: #94a3b8;
+        font-weight: 600;
+      }
+      .bs-route-line {
+        width: 2px;
+        height: 14px;
+        margin-left: 13px;
+        background: linear-gradient(180deg, rgba(34,197,94,0.5), rgba(249,115,22,0.5));
+        border-radius: 999px;
+      }
+      .bs-route-refresh {
+        width: 36px;
+        height: 36px;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.12);
+        background: rgba(15,23,42,0.6);
+        color: #94a3b8;
+        font-size: 16px;
+        cursor: pointer;
+      }
+      .bs-route-refresh:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .bs-modal-section {
+        display: grid;
+        gap: 8px;
+      }
+      .bs-modal-section-title {
+        font-size: 13px;
+        font-weight: 800;
+        color: #e2e8f0;
+      }
+      .bs-modal-section-hint {
+        margin: 0;
+        font-size: 12px;
+        color: #64748b;
+        line-height: 1.4;
+      }
+      .bs-modal-checks {
+        display: grid;
+        gap: 4px;
+      }
+      .bs-quick-pick {
+        padding: 10px 14px;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.1);
+        background: rgba(15,23,42,0.5);
+        color: #e2e8f0;
+        font-size: 13px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .bs-quick-pick.is-active {
+        border-color: rgba(56,189,248,0.5);
+        background: rgba(56,189,248,0.12);
+        color: #fff;
+      }
+      .bs-advanced-toggle {
+        padding: 8px 0;
+        border: none;
+        background: none;
+        color: #64748b;
+        font-size: 12px;
+        font-weight: 700;
+        text-align: left;
+        cursor: pointer;
+      }
+      .bs-active-trip {
+        display: grid;
+        gap: 12px;
+        padding: 16px;
+        border-radius: 18px;
+        border: 1px solid rgba(34,197,94,0.35);
+        background: linear-gradient(160deg, rgba(6,78,59,0.18), rgba(2,6,23,0.5));
+      }
+      .bs-active-trip-header {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .bs-active-trip-title {
+        font-size: 15px;
+        font-weight: 800;
+        color: #f8fafc;
+      }
+      .bs-active-trip-meta,
+      .bs-active-trip-link {
+        font-size: 12px;
+        color: #94a3b8;
+        line-height: 1.45;
+        word-break: break-all;
+      }
+      .bs-active-trip-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .bs-my-trip {
+        display: grid;
+        gap: 10px;
+      }
+      .bs-my-trip-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 12px;
+      }
+      .bs-my-trip-heading {
+        margin: 8px 0 0;
+        font-size: 1.1rem;
+        font-weight: 800;
+        color: #f8fafc;
+        line-height: 1.25;
+      }
+      .bs-my-trip-sub {
+        margin: 4px 0 0;
+        font-size: 12px;
+        color: #94a3b8;
+        line-height: 1.45;
+      }
+      .bs-my-trip-end {
+        flex-shrink: 0;
+        padding: 8px 14px;
+        border-radius: 10px;
+        border: 1px solid rgba(239,68,68,0.45);
+        background: rgba(127,29,29,0.35);
+        color: #fecaca;
+        font-size: 13px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .bs-my-trip-end:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+      .bs-my-trip-map {
+        height: 220px !important;
+        min-height: 220px !important;
+        border-radius: 14px;
+        overflow: hidden;
+        border: 1px solid rgba(255,255,255,0.08);
+      }
+      .bs-my-trip-map--loading {
+        display: grid;
+        place-items: center;
+        font-size: 13px;
+        color: #94a3b8;
+        background: rgba(2,6,23,0.6);
+      }
+      .bs-my-trip-toolbar {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .bs-my-trip-action {
+        padding: 8px 12px;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.12);
+        background: rgba(15,23,42,0.55);
+        color: #cbd5e1;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .bs-my-trip-action--accent {
+        border-color: rgba(37,211,102,0.35);
+        color: #bbf7d0;
+        background: rgba(6,78,59,0.25);
+      }
+      .bs-my-trip-link {
+        font-size: 11px;
+        color: #64748b;
+        word-break: break-all;
+        line-height: 1.4;
+      }
+      .bs-my-trip-meta {
+        margin: 0;
+        font-size: 11px;
+        color: #64748b;
+      }
+      .bs-my-trip-new {
+        justify-self: start;
+        padding: 0;
+        border: none;
+        background: none;
+        color: #64748b;
+        font-size: 12px;
+        font-weight: 600;
+        text-decoration: underline;
+        cursor: pointer;
+      }
+      .bs-family-notify {
+        display: grid;
+        gap: 8px;
+        padding: 12px;
+        border-radius: 12px;
+        border: 1px solid rgba(56,189,248,0.2);
+        background: rgba(15,23,42,0.45);
+      }
+      .bs-family-notify p {
+        margin: 0;
+        font-size: 12px;
+        color: #94a3b8;
+        line-height: 1.45;
+      }
+      .bs-start-card-btn {
+        width: 100%;
+        max-width: 280px;
+        margin: 0 auto;
+      }
       button, .bs-tab, .bs-trip-row {
         -webkit-tap-highlight-color: transparent;
         touch-action: manipulation;
@@ -520,7 +963,7 @@ export function BuddySafetyStyles() {
           font-size: 16px;
           box-shadow: 0 16px 40px rgba(225,29,72,0.45);
         }
-        .bs-inline-cta { display: none; }
+        .bs-modal-steps { display: none; }
         .bs-alert-banner, .bs-success-banner {
           font-size: 14px;
           line-height: 1.45;

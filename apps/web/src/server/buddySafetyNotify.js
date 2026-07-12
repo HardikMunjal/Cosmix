@@ -6,6 +6,12 @@ import {
   normalizePhoneE164,
 } from '../lib/buddySafetyLinks';
 
+function chatServiceBase() {
+  const configured = String(process.env.CHAT_SERVICE_URL || '').trim();
+  if (configured) return configured.replace(/\/$/, '');
+  return 'http://127.0.0.1:3002';
+}
+
 function twilioConfigured() {
   return Boolean(
     process.env.TWILIO_ACCOUNT_SID
@@ -58,6 +64,39 @@ async function twilioSend({ to, body, channel = 'sms' }) {
   }
 }
 
+async function sendWebPushToWatcher(trip, event, appOrigin) {
+  const watcher = String(trip.watcherUsername || '').trim();
+  if (!watcher) return { ok: false, reason: 'no-watcher-username' };
+
+  const watchUrl = buildPublicWatchUrl(appOrigin, trip.shareToken);
+  const title = event.type === 'stall'
+    ? `⚠ Safety alert — ${trip.travellerName || 'Family'}`
+    : `${trip.travellerName || 'Family'} · Trip update`;
+
+  try {
+    const response = await fetch(`${chatServiceBase()}/chat/push/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        usernames: [watcher],
+        title,
+        body: event.message || formatAlertMessage(trip, event, watchUrl).split('\n').slice(1).join(' '),
+        url: watchUrl || '/buddy-safety',
+        tag: `buddy-safety-${trip.id}-${event.type}-${event.at || Date.now()}`,
+        type: 'buddy-safety',
+        senderUsername: trip.travellerUsername,
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok) {
+      return { ok: false, reason: 'push-send-failed' };
+    }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: error.message || 'push-error' };
+  }
+}
+
 export function buildNotifyLinks(trip, event, appOrigin) {
   const watchUrl = buildPublicWatchUrl(appOrigin, trip.shareToken);
   const message = formatAlertMessage(trip, event, watchUrl);
@@ -71,31 +110,33 @@ export function buildNotifyLinks(trip, event, appOrigin) {
 }
 
 /**
- * Send SMS / WhatsApp alerts to the watcher when trip events fire.
- * Falls back to returning deep links when Twilio is not configured.
+ * Notify family via Web Push (app closed OK), SMS, and WhatsApp.
  */
 export async function dispatchTripAlerts(trip, events = [], { appOrigin = '' } = {}) {
-  if (!events.length) return { sent: [], links: [] };
+  if (!events.length) return { sent: [], links: [], push: [] };
 
   const phone = normalizePhoneE164(trip.watcherPhone || '');
-  const channels = trip.alertChannels || { sms: true, whatsapp: true };
   const results = [];
   const links = [];
+  const pushResults = [];
 
   for (const event of events) {
     const linkBundle = buildNotifyLinks(trip, event, appOrigin);
     links.push({ eventId: event.id, ...linkBundle });
 
+    const pushResult = await sendWebPushToWatcher(trip, event, appOrigin);
+    pushResults.push({ eventId: event.id, ...pushResult });
+
     if (!phone) continue;
 
-    if (channels.whatsapp && trip.watcherNotifyWhatsApp !== false) {
+    if (trip.watcherNotifyWhatsApp !== false) {
       if (twilioConfigured() && process.env.TWILIO_WHATSAPP_FROM) {
         const r = await twilioSend({ to: phone, body: linkBundle.message, channel: 'whatsapp' });
         results.push({ channel: 'whatsapp', eventId: event.id, ...r });
       }
     }
 
-    if (channels.sms && trip.watcherNotifySms !== false) {
+    if (trip.watcherNotifySms !== false) {
       if (twilioConfigured() && process.env.TWILIO_SMS_FROM) {
         const r = await twilioSend({ to: phone, body: linkBundle.message, channel: 'sms' });
         results.push({ channel: 'sms', eventId: event.id, ...r });
@@ -103,7 +144,12 @@ export async function dispatchTripAlerts(trip, events = [], { appOrigin = '' } =
     }
   }
 
-  return { sent: results, links, twilioEnabled: twilioConfigured() };
+  return {
+    sent: results,
+    links,
+    push: pushResults,
+    twilioEnabled: twilioConfigured(),
+  };
 }
 
 export function resolveAppOrigin(req) {
@@ -113,4 +159,15 @@ export function resolveAppOrigin(req) {
   if (!host) return '';
   const proto = String(req?.headers?.['x-forwarded-proto'] || 'http').split(',')[0].trim();
   return `${proto}://${host}`;
+}
+
+export async function notifyTripStarted(trip, { appOrigin = '' } = {}) {
+  const destLabel = trip.destination?.shortLabel || trip.destination?.label?.split(',')[0] || 'destination';
+  const event = {
+    id: `start-${trip.id}`,
+    type: 'started',
+    message: `Started trip to ${destLabel}. Live location is now shared.`,
+    at: Date.now(),
+  };
+  return dispatchTripAlerts(trip, [event], { appOrigin });
 }

@@ -301,6 +301,96 @@ function MetricGrid({ items, theme }) {
   );
 }
 
+function getAvatarBackgroundUrl(user) {
+  const avatar = resolveAvatarPresentation(user?.avatar || '');
+  return avatar.displaySrc || avatar.src || '';
+}
+
+function PersonalCockpitPanel({
+  user,
+  theme,
+  stats = [],
+  trendPoints = [],
+  wellnessLoading = false,
+  wellnessReady = true,
+  onOpenWellness,
+}) {
+  const bgUrl = getAvatarBackgroundUrl(user);
+  const fallbackInitial = String(user?.username || user?.name || 'U').slice(0, 1).toUpperCase();
+  const midpoint = Math.ceil(stats.length / 2);
+  const leftStats = stats.slice(0, midpoint);
+  const rightStats = stats.slice(midpoint);
+  const showWellnessLoader = wellnessLoading && !wellnessReady;
+
+  const renderStatTile = (item) => (
+    <article
+      key={item.label}
+      className="dashboard-stat-tile"
+      title={[item.label, item.value, item.meta].filter(Boolean).join(' · ')}
+      style={{ '--stat-accent': item.accent || theme.textHeading }}
+    >
+      <div className="dashboard-stat-tile-label">{item.label}</div>
+      <div className="dashboard-stat-tile-value">{item.value}</div>
+      {item.meta ? <div className="dashboard-stat-tile-meta">{item.meta}</div> : null}
+    </article>
+  );
+
+  return (
+    <section className="dashboard-cockpit" aria-label="Profile overview">
+      <div className="dashboard-cockpit-bg" aria-hidden="true">
+        {bgUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={bgUrl} alt="" className="dashboard-cockpit-bg-img" />
+        ) : (
+          <div className="dashboard-cockpit-fallback" data-initial={fallbackInitial} />
+        )}
+        <div className="dashboard-cockpit-scrim" />
+        <div className="dashboard-cockpit-grid" />
+      </div>
+
+      <div className="dashboard-cockpit-content">
+        <div className="dashboard-cockpit-topline">
+          <p className="dashboard-cockpit-topline-text">
+            {user?.quote || 'Building better decisions, one signal at a time.'}
+          </p>
+        </div>
+
+        <div className="dashboard-cockpit-rails">
+          <div className="dashboard-cockpit-rail dashboard-cockpit-rail--left" aria-label="Left stats">
+            {leftStats.map(renderStatTile)}
+          </div>
+
+          <div className="dashboard-cockpit-center" aria-hidden="true" />
+
+          <div className="dashboard-cockpit-rail dashboard-cockpit-rail--right" aria-label="Right stats">
+            {rightStats.map(renderStatTile)}
+          </div>
+        </div>
+
+        <div className="dashboard-cockpit-chart-panel">
+          <div className="dashboard-cockpit-chart-head">
+            <div className="dashboard-cockpit-chart-title">Wellness trend</div>
+            {onOpenWellness ? (
+              <button type="button" className="dashboard-wellness-open" onClick={onOpenWellness}>Open →</button>
+            ) : null}
+          </div>
+          <SectionLoadingShell loading={showWellnessLoader} label="Loading wellness trend..." theme={theme} height={148}>
+            <ScrollableTrendChart
+              points={trendPoints}
+              theme={theme}
+              emptyLabel="Add wellness entries to see your trend"
+              color={theme.blue}
+              height={128}
+              gradientId="wellness-line-fill"
+              ariaLabel="Wellness score trend"
+            />
+          </SectionLoadingShell>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function ClubModuleLink({ module, variant, onNavigate }) {
   const [hovered, setHovered] = useState(false);
 
@@ -427,93 +517,18 @@ function BuddyCard({ buddy, theme, compact = false }) {
   );
 }
 
-function LineChart({ points, theme, height = 220, emptyLabel = 'No data yet', valueAccessor = (point) => Number(point.value || 0), labelAccessor = (point, index) => point.label || String(index + 1), color, gradientId, vivid = false, annotationFormatter = (value) => `${value >= 0 ? '+' : ''}${Math.round(value).toLocaleString('en-IN')}` }) {
-  if (!points.length) {
-    return <div style={{ minHeight: `${height}px`, display: 'grid', placeItems: 'center', color: theme.textSecondary, fontSize: '14px' }}>{emptyLabel}</div>;
-  }
-
-  const width = 520;
-  const pad = { left: 18, right: 12, top: 16, bottom: 26 };
-  const plotWidth = width - pad.left - pad.right;
-  const plotHeight = height - pad.top - pad.bottom;
-  const values = points.map((point) => valueAccessor(point));
-  const min = Math.min(...values, 0);
-  const max = Math.max(...values, 0);
-  const range = max - min || 1;
-  const xFor = (index) => pad.left + ((points.length === 1 ? 0 : index / (points.length - 1)) * plotWidth);
-  const yFor = (value) => pad.top + plotHeight - (((value - min) / range) * plotHeight);
-  const stroke = color || (values[values.length - 1] >= 0 ? theme.green : theme.red);
-  const polyline = points.map((point, index) => `${xFor(index)},${yFor(valueAccessor(point))}`).join(' ');
-  const zeroY = yFor(0);
-  const fillId = gradientId || 'dashboard-line-fill';
-  const lastIndex = points.length - 1;
-  const lastPoint = points[lastIndex];
-  const lastX = xFor(lastIndex);
-  const lastY = yFor(valueAccessor(lastPoint));
-
-  return (
-    <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" style={{ width: '100%', height: `${height}px`, display: 'block' }}>
-      <defs>
-        <linearGradient id={fillId} x1="0" x2="1" y1="0" y2="1">
-          {vivid ? (
-            <>
-              <stop offset="0%" stopColor="#22c55e" stopOpacity="0.28" />
-              <stop offset="45%" stopColor="#06b6d4" stopOpacity="0.18" />
-              <stop offset="100%" stopColor="#f59e0b" stopOpacity="0.08" />
-            </>
-          ) : (
-            <>
-              <stop offset="0%" stopColor={stroke} stopOpacity="0.24" />
-              <stop offset="100%" stopColor={stroke} stopOpacity="0.04" />
-            </>
-          )}
-        </linearGradient>
-        <filter id={`${fillId}-glow`} x="-20%" y="-20%" width="140%" height="140%">
-          <feGaussianBlur stdDeviation="5" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-      </defs>
-      <line x1={pad.left} y1={zeroY} x2={width - pad.right} y2={zeroY} stroke={theme.graphGridLine} strokeDasharray="5 4" />
-      {points.map((point, index) => (
-        <g key={`${labelAccessor(point, index)}-${index}`}>
-          <line x1={xFor(index)} y1={pad.top} x2={xFor(index)} y2={height - pad.bottom} stroke={theme.graphGridLine} strokeOpacity="0.25" />
-          <text x={xFor(index)} y={height - 6} textAnchor="middle" fill={theme.textMuted} fontSize="10">{labelAccessor(point, index)}</text>
-        </g>
-      ))}
-      <polygon fill={`url(#${fillId})`} points={`${pad.left},${zeroY} ${polyline} ${width - pad.right},${zeroY}`} />
-      <polyline fill="none" stroke={vivid ? 'url(#strategy-line-stroke)' : stroke} strokeWidth="3.5" points={polyline} filter={`url(#${fillId}-glow)`} />
-      {points.map((point, index) => (
-        <circle key={`dot-${labelAccessor(point, index)}-${index}`} cx={xFor(index)} cy={yFor(valueAccessor(point))} r={index === lastIndex ? '5.2' : '3.2'} fill={stroke} />
-      ))}
-      <g>
-        <circle cx={lastX} cy={lastY} r="9" fill={stroke} fillOpacity="0.14" />
-        <text x={Math.min(width - 10, lastX + 12)} y={Math.max(18, lastY - 12)} fill={theme.textHeading} fontSize="11" fontWeight="800">{annotationFormatter(valueAccessor(lastPoint), lastPoint)}</text>
-      </g>
-      {vivid ? (
-        <defs>
-          <linearGradient id="strategy-line-stroke" x1="0" x2="1" y1="0" y2="0">
-            <stop offset="0%" stopColor="#22c55e" />
-            <stop offset="50%" stopColor="#06b6d4" />
-            <stop offset="100%" stopColor="#f59e0b" />
-          </linearGradient>
-        </defs>
-      ) : null}
-    </svg>
-  );
-}
-
-function WellnessScrollableTrendChart({
+function ScrollableTrendChart({
   points,
   theme,
   height = 128,
-  emptyLabel = 'Add wellness entries to see your trend',
+  emptyLabel = 'Add entries to see your trend',
   color,
-  gradientId = 'wellness-line-fill',
+  gradientId = 'dashboard-trend-fill',
   pointSpacing = 12,
   annotationFormatter = (value) => `${value >= 0 ? '+' : ''}${Number(value || 0).toFixed(1)}`,
+  ariaLabel = 'Trend',
+  hintText = 'Swipe left for older days',
+  variant = 'wellness',
 }) {
   const scrollRef = useRef(null);
 
@@ -563,11 +578,12 @@ function WellnessScrollableTrendChart({
   const xFor = (index) => pad.left + (index * pointSpacing);
   const yFor = (value) => pad.top + plotHeight - (((value - min) / range) * plotHeight);
   const clampY = (value) => Math.min(pad.top + plotHeight, Math.max(pad.top, yFor(value)));
-  const stroke = color || theme.blue;
+  const lastIndex = points.length - 1;
+  const stroke = color || (variant === 'profit' && values[lastIndex] < 0 ? theme.red : theme.blue);
+  const isProfitLoss = variant === 'profit' && values[lastIndex] < 0;
   const polyline = points.map((_, index) => `${xFor(index)},${clampY(values[index])}`).join(' ');
   const trendLine = trendValues.map((value, index) => `${xFor(index)},${clampY(value)}`).join(' ');
   const zeroY = yFor(0);
-  const lastIndex = points.length - 1;
   const labelEvery = points.length > 28 ? Math.ceil(points.length / 8) : points.length > 14 ? 3 : points.length > 7 ? 2 : 1;
   const showDots = points.length <= 28;
   const clipId = `${gradientId}-plot-clip`;
@@ -598,24 +614,44 @@ function WellnessScrollableTrendChart({
             height={height}
             viewBox={`0 0 ${width} ${height}`}
             style={{ display: 'block' }}
-            aria-label="Wellness score trend"
+            aria-label={ariaLabel}
           >
             <defs>
               <linearGradient id={gradientId} x1="0" x2="1" y1="0" y2="1">
-                <stop offset="0%" stopColor="#22c55e" stopOpacity="0.22" />
-                <stop offset="45%" stopColor="#06b6d4" stopOpacity="0.12" />
-                <stop offset="100%" stopColor="#f59e0b" stopOpacity="0.04" />
+                {isProfitLoss ? (
+                  <>
+                    <stop offset="0%" stopColor="#ef4444" stopOpacity="0.22" />
+                    <stop offset="45%" stopColor="#f97316" stopOpacity="0.12" />
+                    <stop offset="100%" stopColor="#f59e0b" stopOpacity="0.04" />
+                  </>
+                ) : (
+                  <>
+                    <stop offset="0%" stopColor="#22c55e" stopOpacity="0.22" />
+                    <stop offset="45%" stopColor="#06b6d4" stopOpacity="0.12" />
+                    <stop offset="100%" stopColor="#f59e0b" stopOpacity="0.04" />
+                  </>
+                )}
               </linearGradient>
               <linearGradient id={`${gradientId}-stroke`} x1="0" x2="1" y1="0" y2="0">
-                <stop offset="0%" stopColor="#22c55e" />
-                <stop offset="50%" stopColor="#06b6d4" />
-                <stop offset="100%" stopColor="#38bdf8" />
+                {isProfitLoss ? (
+                  <>
+                    <stop offset="0%" stopColor="#ef4444" />
+                    <stop offset="50%" stopColor="#f97316" />
+                    <stop offset="100%" stopColor="#fb7185" />
+                  </>
+                ) : (
+                  <>
+                    <stop offset="0%" stopColor="#22c55e" />
+                    <stop offset="50%" stopColor="#06b6d4" />
+                    <stop offset="100%" stopColor="#38bdf8" />
+                  </>
+                )}
               </linearGradient>
               <clipPath id={clipId}>
                 <rect x={pad.left} y={pad.top} width={plotWidth} height={plotHeight} />
               </clipPath>
             </defs>
-            <rect x={pad.left} y={pad.top} width={plotWidth} height={plotHeight} rx="10" fill="rgba(15,23,42,0.35)" stroke="rgba(148,163,184,0.12)" />
+            <rect x={pad.left} y={pad.top} width={plotWidth} height={plotHeight} rx="10" fill="rgba(255,255,255,0.55)" stroke="rgba(148,163,184,0.22)" />
             <line x1={pad.left} y1={zeroY} x2={width - pad.right} y2={zeroY} stroke={theme.graphGridLine} strokeDasharray="4 4" />
             {points.map((point, index) => {
               if (index !== 0 && index !== lastIndex && index % labelEvery !== 0) return null;
@@ -664,7 +700,7 @@ function WellnessScrollableTrendChart({
           </svg>
         </div>
       </div>
-      <div className="dashboard-wellness-chart-hint">Swipe left for older days</div>
+      <div className="dashboard-wellness-chart-hint">{hintText}</div>
     </div>
   );
 }
@@ -1250,12 +1286,6 @@ export default function Dashboard() {
     completedGoals: wellnessSummary.completedGoals,
   }), [wellnessSummary]);
 
-  const wellnessCards = useMemo(() => ([
-    { label: 'Wellness score', value: displayStatNumber(profileInsights.currentWellnessScore, { hideZero: false }), accent: theme.blue },
-    { label: 'Max Wellness score', value: displayStatNumber(profileInsights.maxWellnessScore, { hideZero: false }), accent: theme.cyan },
-    { label: 'Fastest pace', value: displayPace(profileInsights.fastestRunPace), accent: theme.emerald },
-    { label: 'Longest running streak', value: `${displayStatNumber(profileInsights.longestRunningStreak)}${displayStatNumber(profileInsights.longestRunningStreak) === '--' ? '' : 'd'}`, accent: theme.orange },
-  ]), [profileInsights, theme]);
   const primaryStats = useMemo(() => ([
     { label: 'Wellness score', value: displayStatNumber(profileInsights.currentWellnessScore, { hideZero: false }), accent: theme.blue },
     { label: 'Max Wellness score', value: displayStatNumber(profileInsights.maxWellnessScore, { hideZero: false }), accent: theme.cyan },
@@ -1452,7 +1482,6 @@ export default function Dashboard() {
 
   const notificationCount = notifications.length;
 
-  const showWellnessSectionLoader = wellnessLoading && !wellnessReady;
   const showStrategiesSectionLoader = strategiesLoading && !strategiesReady;
   const showBuddiesSectionLoader = buddiesLoading && !buddiesReady;
 
@@ -1729,6 +1758,261 @@ export default function Dashboard() {
         }
         .dashboard-tab-icon { font-size: 18px; line-height: 1; }
         .dashboard-tab-label { letter-spacing: 0.04em; }
+        .dashboard-cockpit {
+          position: relative;
+          overflow: hidden;
+          border-radius: 24px;
+          min-height: 460px;
+          border: 1px solid rgba(148,163,184,0.16);
+          box-shadow: 0 24px 56px rgba(0,0,0,0.38);
+          transform-style: preserve-3d;
+        }
+        .dashboard-cockpit-bg {
+          position: absolute;
+          inset: 0;
+          pointer-events: none;
+        }
+        .dashboard-cockpit-bg-img {
+          position: absolute;
+          inset: 0;
+          width: 100%;
+          height: 100%;
+          object-fit: contain;
+          object-position: center center;
+          filter: saturate(1.12) contrast(1.02);
+        }
+        .dashboard-cockpit-fallback {
+          position: absolute;
+          inset: 0;
+          background:
+            radial-gradient(circle at 30% 20%, rgba(56,189,248,0.35), transparent 45%),
+            radial-gradient(circle at 80% 30%, rgba(249,115,22,0.28), transparent 42%),
+            linear-gradient(160deg, #0f172a 0%, #1e293b 55%, #0b1220 100%);
+        }
+        .dashboard-cockpit-fallback::after {
+          content: attr(data-initial);
+          position: absolute;
+          right: 8%;
+          top: 8%;
+          font-size: clamp(120px, 28vw, 220px);
+          font-weight: 900;
+          line-height: 1;
+          color: rgba(255,255,255,0.06);
+          pointer-events: none;
+        }
+        .dashboard-cockpit-scrim {
+          position: absolute;
+          inset: 0;
+          background:
+            linear-gradient(180deg, rgba(2,6,23,0.1) 0%, rgba(2,6,23,0.02) 48%, rgba(2,6,23,0.2) 100%),
+            linear-gradient(105deg, rgba(2,6,23,0.12) 0%, transparent 58%, rgba(2,6,23,0.08) 100%);
+        }
+        .dashboard-cockpit-grid {
+          position: absolute;
+          inset: 0;
+          opacity: 0.05;
+          background-image:
+            linear-gradient(rgba(148,163,184,0.08) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(148,163,184,0.08) 1px, transparent 1px);
+          background-size: 36px 36px;
+          mask-image: linear-gradient(180deg, black 10%, transparent 90%);
+        }
+        .dashboard-cockpit-content {
+          position: relative;
+          z-index: 1;
+          display: flex;
+          flex-direction: column;
+          min-height: 460px;
+          padding: 10px 8px 12px;
+        }
+        .dashboard-cockpit-chart-panel {
+          margin-top: 8px;
+          padding: 10px 12px 8px;
+          border-radius: 16px;
+          border: 1px solid rgba(255,255,255,0.42);
+          background: linear-gradient(180deg, rgba(255,255,255,0.34), rgba(255,255,255,0.18));
+          backdrop-filter: blur(6px);
+          -webkit-backdrop-filter: blur(6px);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.55);
+        }
+        .dashboard-cockpit-chart-panel .dashboard-wellness-chart-scroll {
+          border: 1px solid rgba(148,163,184,0.22);
+          background: rgba(255,255,255,0.38);
+        }
+        .dashboard-cockpit-chart-panel .dashboard-wellness-trend-key {
+          color: #64748b;
+        }
+        .dashboard-cockpit-chart-panel .dashboard-wellness-latest {
+          color: #0f172a;
+        }
+        .dashboard-cockpit-chart-panel .dashboard-wellness-chart-hint {
+          color: #64748b;
+        }
+        .dashboard-cockpit-chart-head {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 10px;
+          margin-bottom: 6px;
+        }
+        .dashboard-cockpit-chart-title {
+          font-size: 11px;
+          text-transform: uppercase;
+          letter-spacing: 0.12em;
+          color: #64748b;
+          font-weight: 800;
+        }
+        .dashboard-cockpit-topline {
+          position: relative;
+          z-index: 2;
+          flex-shrink: 0;
+          text-align: center;
+          padding: 4px 92px 8px;
+          pointer-events: none;
+        }
+        .dashboard-cockpit-topline-text {
+          display: inline-block;
+          margin: 0;
+          max-width: 100%;
+          padding: 7px 12px;
+          border-radius: 12px;
+          font-size: clamp(12px, 3.2vw, 16px);
+          font-weight: 800;
+          line-height: 1.35;
+          letter-spacing: 0.01em;
+          color: #fef3c7;
+          background: rgba(15,23,42,0.62);
+          border: 1px solid rgba(251,191,36,0.35);
+          backdrop-filter: blur(8px);
+          -webkit-backdrop-filter: blur(8px);
+          box-shadow: 0 4px 16px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.1);
+          text-shadow: 0 1px 2px rgba(0,0,0,0.85);
+        }
+        .dashboard-cockpit-rails {
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
+          align-items: stretch;
+          gap: 6px;
+          flex: 1;
+          min-height: 300px;
+        }
+        .dashboard-cockpit-rail {
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          gap: 5px;
+          width: 96px;
+          max-height: 300px;
+          overflow-y: auto;
+          overflow-x: hidden;
+          scrollbar-width: none;
+          -ms-overflow-style: none;
+        }
+        .dashboard-cockpit-rail::-webkit-scrollbar {
+          display: none;
+        }
+        .dashboard-cockpit-rail--left {
+          align-items: flex-start;
+        }
+        .dashboard-cockpit-rail--right {
+          align-items: flex-end;
+        }
+        .dashboard-cockpit-rail--right .dashboard-stat-tile {
+          border-left: 1px solid rgba(255,255,255,0.2);
+          border-right: 2px solid var(--stat-accent);
+        }
+        .dashboard-cockpit-center {
+          min-width: 0;
+        }
+        .dashboard-stat-tile {
+          --stat-accent: #38bdf8;
+          position: relative;
+          width: 96px;
+          max-width: 96px;
+          padding: 6px 8px 7px;
+          border-radius: 10px;
+          border: 1px solid rgba(255,255,255,0.24);
+          border-left: 2px solid var(--stat-accent);
+          background: linear-gradient(145deg, rgba(15,23,42,0.78), rgba(30,41,59,0.68));
+          backdrop-filter: blur(8px);
+          -webkit-backdrop-filter: blur(8px);
+          box-shadow: 0 4px 12px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.12);
+          flex-shrink: 0;
+          transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+        }
+        .dashboard-stat-tile-label {
+          font-size: 8px;
+          font-weight: 800;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
+          color: #e2e8f0;
+          text-shadow: none;
+          line-height: 1.25;
+          white-space: normal;
+          overflow: hidden;
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+        }
+        .dashboard-stat-tile-value {
+          margin-top: 3px;
+          font-size: 14px;
+          font-weight: 900;
+          line-height: 1.1;
+          color: var(--stat-accent);
+          text-shadow: none;
+          white-space: normal;
+          word-break: break-word;
+        }
+        .dashboard-stat-tile-meta {
+          margin-top: 2px;
+          font-size: 8px;
+          font-weight: 600;
+          color: #cbd5e1;
+          line-height: 1.25;
+          text-shadow: none;
+          white-space: normal;
+          overflow: hidden;
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+        }
+        @media (hover: hover) and (pointer: fine) {
+          .dashboard-stat-tile:hover {
+            transform: translateY(-1px);
+            border-color: rgba(255,255,255,0.28);
+            box-shadow: 0 6px 14px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.14);
+          }
+        }
+        @media (min-width: 900px) {
+          .dashboard-cockpit-rail,
+          .dashboard-stat-tile {
+            width: 104px;
+            max-width: 104px;
+          }
+          .dashboard-cockpit {
+            min-height: 500px;
+          }
+          .dashboard-cockpit-content {
+            min-height: 500px;
+          }
+          .dashboard-cockpit-rails {
+            min-height: 330px;
+          }
+          .dashboard-cockpit-rail {
+            max-height: 330px;
+          }
+          .dashboard-cockpit-topline {
+            padding-left: 112px;
+            padding-right: 112px;
+          }
+          .dashboard-stat-tile-label {
+            font-size: 8px;
+          }
+          .dashboard-stat-tile-value {
+            font-size: 15px;
+          }
+        }
         .dashboard-wellness-chart-shell {
           display: grid;
           gap: 6px;
@@ -1759,7 +2043,7 @@ export default function Dashboard() {
         .dashboard-wellness-latest {
           font-size: 12px;
           font-weight: 800;
-          color: #f8fafc;
+          color: #0f172a;
         }
         .dashboard-wellness-chart-scroll {
           overflow-x: auto;
@@ -1770,8 +2054,8 @@ export default function Dashboard() {
           scrollbar-width: none;
           -ms-overflow-style: none;
           border-radius: 14px;
-          border: 1px solid rgba(148,163,184,0.14);
-          background: rgba(2,6,23,0.35);
+          border: 1px solid rgba(148,163,184,0.22);
+          background: rgba(255,255,255,0.42);
           cursor: grab;
           max-width: 100%;
         }
@@ -1793,21 +2077,67 @@ export default function Dashboard() {
         }
         .dashboard-wellness-open {
           appearance: none;
-          border: 1px solid rgba(148,163,184,0.22);
-          background: rgba(15,23,42,0.55);
-          color: #e2e8f0;
+          border: 1px solid rgba(148,163,184,0.28);
+          background: rgba(255,255,255,0.72);
+          color: #334155;
           border-radius: 999px;
           padding: 7px 12px;
           font-size: 11px;
           font-weight: 800;
           cursor: pointer;
-          letter-spacing: 0.04em;
+        }
+        .dashboard-market-panel {
+          border-radius: 24px;
+          border: 1px solid rgba(148,163,184,0.22);
+          background: rgba(255,255,255,0.68);
+          padding: 14px;
+          box-shadow: 0 16px 40px rgba(15,23,42,0.08);
+          display: grid;
+          gap: 12px;
+          cursor: pointer;
+        }
+        .dashboard-market-chart-panel {
+          padding: 10px 12px 8px;
+          border-radius: 16px;
+          border: 1px solid rgba(148,163,184,0.2);
+          background: linear-gradient(180deg, rgba(255,255,255,0.72), rgba(255,255,255,0.48));
+          backdrop-filter: blur(6px);
+          -webkit-backdrop-filter: blur(6px);
+        }
+        .dashboard-market-chart-head {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
+          margin-bottom: 6px;
+        }
+        .dashboard-market-chart-title {
+          font-size: 11px;
+          text-transform: uppercase;
+          letter-spacing: 0.12em;
+          color: #64748b;
+          font-weight: 800;
+        }
+        .dashboard-market-net {
+          display: grid;
+          gap: 2px;
+          justify-items: end;
+          margin-left: auto;
+        }
+        .dashboard-market-net-label {
+          font-size: 9px;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+          color: #64748b;
+          font-weight: 700;
+        }
+        .dashboard-market-net strong {
+          font-size: 15px;
+          font-weight: 800;
         }
         @media (max-width: 1024px) {
           .dashboard-top-grid, .dashboard-market-grid, .dashboard-lower-grid { grid-template-columns: 1fr !important; }
-          .dashboard-profile-shell { grid-template-columns: 1fr !important; justify-items: center !important; }
-          .dashboard-profile-meta { align-content: start !important; width: 100% !important; }
-          .dashboard-avatar-wrap { min-height: 140px !important; width: 100% !important; max-width: 280px !important; }
         }
         @media (max-width: 720px) {
           .dashboard-page { padding: 12px 12px 88px !important; }
@@ -1869,23 +2199,14 @@ export default function Dashboard() {
           .dashboard-tab-icon { font-size: 16px !important; }
           .dashboard-module-grid, .dashboard-scorecard-grid, .dashboard-market-modules { grid-template-columns: 1fr !important; }
           .dashboard-club-grid { grid-template-columns: 1fr !important; }
-          .dashboard-profile-shell {
-            grid-template-columns: 1fr !important;
-            gap: 12px !important;
-            align-items: start !important;
-            justify-items: center !important;
-          }
-          .dashboard-avatar-wrap {
-            min-height: 112px !important;
-            max-width: 220px !important;
-            padding: 8px !important;
-            align-self: center !important;
-          }
-          .dashboard-avatar-glow { width: 88px !important; height: 88px !important; }
-          .dashboard-avatar-stage { display: none !important; }
-          .dashboard-profile-meta { text-align: center !important; }
-          .dashboard-profile-meta .dashboard-profile-name { font-size: 20px !important; }
-          .dashboard-profile-meta .dashboard-profile-quote { font-size: 12px !important; line-height: 1.45 !important; }
+          .dashboard-cockpit { min-height: 340px !important; border-radius: 20px !important; }
+          .dashboard-cockpit-content { min-height: 340px !important; padding: 8px 6px !important; }
+          .dashboard-cockpit-topline { padding: 2px 84px 6px !important; }
+          .dashboard-cockpit-topline-text { font-size: 12px !important; padding: 6px 10px !important; }
+          .dashboard-cockpit-rails { min-height: 280px !important; gap: 4px !important; }
+          .dashboard-cockpit-rail { width: 88px !important; max-height: 280px !important; gap: 4px !important; }
+          .dashboard-stat-tile { width: 88px !important; max-width: 88px !important; padding: 5px 7px 6px !important; }
+          .dashboard-stat-tile-value { font-size: 13px !important; }
           .dashboard-top-grid { gap: 12px !important; }
           .dashboard-wellness-chart-hint { text-align: center !important; }
         }
@@ -1894,8 +2215,7 @@ export default function Dashboard() {
           .dashboard-buddies-title { font-size: 18px !important; }
           .dashboard-title { font-size: 20px !important; }
           .dashboard-panel { border-radius: 18px !important; padding: 12px !important; gap: 10px !important; }
-          .dashboard-profile-shell { gap: 8px !important; }
-          .dashboard-avatar-wrap { padding: 2px !important; }
+          .dashboard-cockpit { border-radius: 18px !important; }
           .dashboard-module-grid button,
           .dashboard-market-modules button {
             padding: 8px 9px !important;
@@ -1959,48 +2279,16 @@ export default function Dashboard() {
           />
         ) : null}
 
-        <section style={{ display: activeTab === 'home' ? 'grid' : 'none', gridTemplateColumns: 'minmax(0, 1.12fr) minmax(280px, 0.88fr)', gap: '16px' }} className="dashboard-top-grid">
-          <div style={{ borderRadius: '30px', border: `1px solid ${theme.cardBorder}`, background: `radial-gradient(circle at top left, ${theme.orange}20, transparent 24%), radial-gradient(circle at 78% 16%, ${theme.cyan}16, transparent 22%), linear-gradient(135deg, ${theme.cardBg}, ${theme.cyan}08, ${theme.orange}08)`, padding: '18px', boxShadow: `0 24px 64px ${theme.shadow}`, display: 'grid', gap: '16px' }} className="dashboard-panel dashboard-glass">
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) minmax(0, 1fr)', gap: '14px', alignItems: 'stretch', position: 'relative', zIndex: 1 }} className="dashboard-profile-shell">
-              <div style={{ borderRadius: '24px', padding: '12px', background: 'transparent', border: 'none', display: 'grid', placeItems: 'center', position: 'relative', overflow: 'hidden', minHeight: '260px' }} className="dashboard-avatar-wrap">
-                <div style={{ position: 'absolute', inset: '26px 18px 0', borderRadius: '28px 28px 0 0', background: `linear-gradient(180deg, ${theme.panelBg}, transparent)`, border: `1px solid ${theme.cardBorder}`, borderBottom: 'none', opacity: 0.75 }} className="dashboard-avatar-stage" />
-                <div style={{ position: 'absolute', width: '220px', height: '220px', borderRadius: '50%', filter: 'blur(38px)', background: `${theme.blue}44` }} className="dashboard-avatar-glow" />
-                <div style={{ position: 'absolute', bottom: '18px', width: '68%', height: '26px', borderRadius: '999px', background: 'rgba(15,23,42,0.26)', filter: 'blur(12px)' }} />
-                <Avatar user={user} size={isNarrowScreen ? 88 : 236} theme={theme} />
-              </div>
-
-              <div style={{ display: 'grid', alignContent: 'stretch' }} className="dashboard-profile-meta">
-                <div style={{ display: 'grid', gap: '6px', marginBottom: '10px' }}>
-                  <div style={{ fontSize: '12px', fontWeight: 800, letterSpacing: '0.14em', textTransform: 'uppercase', color: theme.textMuted }}>Personal cockpit</div>
-                  <div style={{ fontSize: '28px', fontWeight: 900, color: theme.textHeading, lineHeight: 1.02 }} className="dashboard-profile-name">{user.name || user.username}</div>
-                  <div style={{ fontSize: '14px', lineHeight: 1.6, color: theme.textSecondary }} className="dashboard-profile-quote">{user.quote || 'Building better decisions, one signal at a time.'}</div>
-                </div>
-                <MetricList items={primaryStats} theme={theme} compact />
-              </div>
-            </div>
-          </div>
-
-          <div
-            style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '14px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '8px' }}
-            className="dashboard-panel dashboard-glass"
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', position: 'relative', zIndex: 1 }}>
-              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Wellness</div>
-              <button type="button" className="dashboard-wellness-open" onClick={() => router.push('/wellness')}>Open →</button>
-            </div>
-
-            <SectionLoadingShell loading={showWellnessSectionLoader} label="Loading wellness trend..." theme={theme} height={148}>
-              <WellnessScrollableTrendChart
-                points={wellnessSummary.trendPoints}
-                theme={theme}
-                emptyLabel="Add wellness entries to see your trend"
-                color={theme.blue}
-                height={128}
-              />
-            </SectionLoadingShell>
-
-            <MetricGrid items={wellnessCards} theme={theme} />
-          </div>
+        <section style={{ display: activeTab === 'home' ? 'grid' : 'none' }} className="dashboard-top-grid">
+          <PersonalCockpitPanel
+            user={user}
+            theme={theme}
+            stats={primaryStats}
+            trendPoints={wellnessSummary.trendPoints}
+            wellnessLoading={wellnessLoading}
+            wellnessReady={wellnessReady}
+            onOpenWellness={() => router.push('/wellness')}
+          />
         </section>
 
         <section style={{ display: activeTab === 'home' ? 'grid' : 'none', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '16px' }} className="dashboard-top-grid">
@@ -2187,10 +2475,9 @@ export default function Dashboard() {
           </button>
         </section>
 
-        <section style={{ display: activeTab === 'home' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '12px' }} className="dashboard-market-grid">
+        <section style={{ display: activeTab === 'home' ? 'grid' : 'none' }} className="dashboard-market-grid">
           <div
-            style={{ borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '16px', boxShadow: `0 20px 56px ${theme.shadow}`, display: 'grid', gap: '12px', cursor: 'pointer' }}
-            className="dashboard-panel"
+            className="dashboard-panel dashboard-glass dashboard-market-panel"
             role="button"
             tabIndex={0}
             onClick={() => router.push('/nifty-strategies')}
@@ -2198,17 +2485,44 @@ export default function Dashboard() {
               if (event.key === 'Enter' || event.key === ' ') router.push('/nifty-strategies');
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
-              <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Market overview</div>
-              <div style={{ display: 'grid', gap: '2px', justifyItems: 'end' }}>
-                <div style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '0.08em', color: theme.textMuted, fontWeight: 700 }}>Net P/L</div>
-                <div style={{ fontSize: '15px', fontWeight: 800, color: strategySummary.totalPnl >= 0 ? theme.green : theme.red }}>{formatCurrency(strategySummary.totalPnl)}</div>
+            <div
+              className="dashboard-market-chart-panel"
+              onClick={(event) => event.stopPropagation()}
+              onKeyDown={(event) => event.stopPropagation()}
+              role="presentation"
+            >
+              <div className="dashboard-market-chart-head">
+                <div className="dashboard-market-chart-title">Market overview</div>
+                <div className="dashboard-market-net">
+                  <span className="dashboard-market-net-label">Net P/L</span>
+                  <strong style={{ color: strategySummary.totalPnl >= 0 ? theme.green : theme.red }}>
+                    {formatCurrency(strategySummary.totalPnl)}
+                  </strong>
+                </div>
+                <button
+                  type="button"
+                  className="dashboard-wellness-open"
+                  onClick={() => router.push('/nifty-strategies')}
+                >
+                  Open →
+                </button>
               </div>
-            </div>
 
-            <SectionLoadingShell loading={showStrategiesSectionLoader} label="Loading market trend..." theme={theme} height={144}>
-              <LineChart points={strategySummary.profitTrend} theme={theme} emptyLabel="Close trades to surface your daily P/L trend" color={theme.emerald} valueAccessor={(point) => Number(point.value || 0)} labelAccessor={(point) => String(point.label || '')} gradientId="strategy-line-fill" vivid height={144} annotationFormatter={(value) => formatCurrency(value)} />
-            </SectionLoadingShell>
+              <SectionLoadingShell loading={showStrategiesSectionLoader} label="Loading market trend..." theme={theme} height={168}>
+                <ScrollableTrendChart
+                  points={strategySummary.profitTrend}
+                  theme={theme}
+                  variant="profit"
+                  emptyLabel="Close trades to surface your cumulative P/L trend"
+                  color={strategySummary.totalPnl >= 0 ? theme.emerald : theme.red}
+                  height={148}
+                  gradientId="market-line-fill"
+                  annotationFormatter={(value) => formatCurrency(value)}
+                  ariaLabel="Cumulative P/L trend"
+                  hintText="Swipe left for older trading days"
+                />
+              </SectionLoadingShell>
+            </div>
 
             <MetricGrid items={marketCards} theme={theme} />
           </div>

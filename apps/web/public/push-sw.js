@@ -30,7 +30,7 @@ self.addEventListener('notificationclick', (event) => {
   event.waitUntil((async () => {
     const allClients = await clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const client of allClients) {
-      if (client.url.includes(rawUrl) || client.url.includes('/chat')) {
+      if (client.url.includes(rawUrl) || client.url.includes('/buddy-safety') || client.url.includes('/chat')) {
         await client.focus();
         if ('navigate' in client) {
           try { await client.navigate(targetUrl); } catch (_) { /* ignore */ }

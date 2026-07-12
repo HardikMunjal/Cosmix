@@ -1356,6 +1356,20 @@ export class ChatService {
         return process.env.WEB_PUSH_VAPID_PUBLIC_KEY || '';
     }
 
+    async notifyPushUsers(
+        usernames: string[],
+        payload: { title?: string; body?: string; url?: string; tag?: string },
+        context?: { type?: 'friend' | 'dm' | 'group' | 'wellness' | 'buddy-safety'; senderUsername?: string; groupId?: string },
+    ) {
+        await this.sendPushToUsers(usernames, {
+            title: String(payload.title || 'Cosmix'),
+            body: String(payload.body || ''),
+            url: String(payload.url || '/buddy-safety'),
+            tag: String(payload.tag || 'cosmix-notification'),
+        }, context);
+        return { ok: true };
+    }
+
     async upsertPushSubscription(actorUsername: string, subscription: any) {
         const username = this.normalizeUsername(actorUsername);
         const endpoint = String(subscription?.endpoint || '').trim();
@@ -1453,7 +1467,7 @@ export class ChatService {
     private async sendPushToUsers(
         usernames: string[],
         payload: { title: string; body: string; url?: string; tag?: string },
-        context?: { type?: 'friend' | 'dm' | 'group' | 'wellness'; senderUsername?: string; groupId?: string },
+        context?: { type?: 'friend' | 'dm' | 'group' | 'wellness' | 'buddy-safety'; senderUsername?: string; groupId?: string },
     ) {
         if (!this.webPushEnabled()) return;
         this.configureWebPush();
@@ -1468,6 +1482,10 @@ export class ChatService {
                 if (preferences.mutedUsernames.includes(sender)) continue;
             }
             if (context?.type === 'wellness' && preferences.wellnessReminderEnabled === false) continue;
+            if (context?.type === 'buddy-safety' && context.senderUsername) {
+                const sender = this.normalizeUsername(context.senderUsername);
+                if (preferences.mutedUsernames.includes(sender)) continue;
+            }
             allowedRecipients.push(normalized);
         }
 
@@ -1625,6 +1643,7 @@ export class ChatService {
             description?: string;
             parentGroupId?: string | null;
             memberUsernames?: string[];
+            adminUsernames?: string[];
             viewerUsernames?: string[];
             coverImageUrl?: string | null;
             coverS3Key?: string | null;
@@ -1649,8 +1668,23 @@ export class ChatService {
             await this.assertGroupPermission(actor, parentGroupId, 'invite');
         }
 
-        const memberUsernames = Array.from(new Set((payload.memberUsernames || []).map((username) => this.normalizeUsername(username)).filter((username) => username !== actor)));
-        const viewerUsernames = Array.from(new Set((payload.viewerUsernames || []).map((username) => this.normalizeUsername(username)).filter((username) => username !== actor && !memberUsernames.includes(username))));
+        const adminUsernames = Array.from(new Set(
+            (payload.adminUsernames || [])
+                .map((username) => this.normalizeUsername(username))
+                .filter((username) => username !== actor),
+        ));
+        const memberUsernames = Array.from(new Set(
+            (payload.memberUsernames || [])
+                .map((username) => this.normalizeUsername(username))
+                .filter((username) => username !== actor && !adminUsernames.includes(username)),
+        ));
+        const viewerUsernames = Array.from(new Set(
+            (payload.viewerUsernames || [])
+                .map((username) => this.normalizeUsername(username))
+                .filter((username) => username !== actor
+                    && !adminUsernames.includes(username)
+                    && !memberUsernames.includes(username)),
+        ));
         const groupRecord: GroupRecord = {
             id: groupId,
             name,
@@ -1668,6 +1702,7 @@ export class ChatService {
 
         const membershipRecords = [
             this.buildMembershipRecord(groupId, actor, 'owner'),
+            ...adminUsernames.map((username) => this.buildMembershipRecord(groupId, username, 'admin')),
             ...memberUsernames.map((username) => this.buildMembershipRecord(groupId, username, 'member')),
             ...viewerUsernames.map((username) => this.buildMembershipRecord(groupId, username, 'viewer')),
         ];

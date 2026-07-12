@@ -34,10 +34,24 @@ export function buildSmsUrl(phone, message) {
 }
 
 export function formatAlertMessage(trip, event, watchUrl) {
-  const traveller = trip.travellerName || trip.travellerUsername || 'Your buddy';
+  const traveller = trip.travellerName || trip.travellerUsername || 'Your family member';
   const title = trip.title || 'Trip';
-  const lines = [`🛡 Cosmix Buddy Safety`, `${traveller} · ${title}`];
-  if (event?.message) lines.push(event.message);
+  const lines = [`Cosmix Family Safety`, `${traveller} · ${title}`];
+
+  if (event?.type === 'stall') {
+    lines.push(`EMERGENCY: ${event.message || 'Not moving toward destination.'}`);
+  } else if (event?.type === 'started') {
+    lines.push(event.message || 'Live trip sharing started.');
+  } else if (event?.type === 'update') {
+    lines.push(event.message || 'Location update.');
+  } else if (event?.type === 'milestone') {
+    lines.push(event.message || 'Progress update.');
+  } else if (event?.type === 'arrived') {
+    lines.push(event.message || 'Arrived near destination.');
+  } else if (event?.message) {
+    lines.push(event.message);
+  }
+
   if (watchUrl) lines.push(`Live map: ${watchUrl}`);
   return lines.join('\n');
 }

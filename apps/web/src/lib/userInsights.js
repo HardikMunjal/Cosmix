@@ -164,7 +164,14 @@ function computeLongestRun(entries = []) {
   };
 }
 
-function buildProfitTrend(strategies = []) {
+function formatLocalDay(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function buildProfitTrend(strategies = [], maxDays = 180) {
   const dailyTotals = new Map();
 
   strategies.forEach((strategy) => {
@@ -179,18 +186,29 @@ function buildProfitTrend(strategies = []) {
 
   if (!dailyTotals.size) return [];
 
+  const sortedDays = [...dailyTotals.keys()].sort();
+  const firstDay = sortedDays[0];
+  const lastDay = sortedDays[sortedDays.length - 1];
+
   let runningTotal = 0;
-  return [...dailyTotals.entries()]
-    .sort((left, right) => left[0].localeCompare(right[0]))
-    .slice(-10)
-    .map(([day, amount]) => {
-      runningTotal += Number(amount || 0);
-      return {
-        label: day.slice(5).replace('-', '/'),
-        value: Number(runningTotal.toFixed(2)),
-        dailyValue: Number(amount.toFixed(2)),
-      };
+  const allPoints = [];
+  const cursor = new Date(`${firstDay}T12:00:00`);
+  const endDate = new Date(`${lastDay}T12:00:00`);
+
+  while (cursor <= endDate) {
+    const day = formatLocalDay(cursor);
+    runningTotal += Number(dailyTotals.get(day) || 0);
+    allPoints.push({
+      label: day.slice(5),
+      value: Number(runningTotal.toFixed(2)),
+      dailyValue: Number((dailyTotals.get(day) || 0).toFixed(2)),
+      date: day,
     });
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  if (allPoints.length <= maxDays) return allPoints;
+  return allPoints.slice(-maxDays);
 }
 
 function buildProfitWindows(strategies = []) {

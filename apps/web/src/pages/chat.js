@@ -1003,7 +1003,12 @@ export default function ChatPage() {
   const [inviteToken, setInviteToken] = useState('');
   const [statusMessage, setStatusMessage] = useState('Loading chat workspace...');
   const [connectionState, setConnectionState] = useState('connecting');
-  const [groupForm, setGroupForm] = useState({ name: '', description: '', parentGroupId: '', members: '', viewers: '' });
+  const [groupForm, setGroupForm] = useState({
+    name: '',
+    description: '',
+    parentGroupId: '',
+    friendRoles: {},
+  });
   const [threadCoverFile, setThreadCoverFile] = useState(null);
   const [threadCoverPreview, setThreadCoverPreview] = useState('');
   const [creatingThread, setCreatingThread] = useState(false);
@@ -1885,7 +1890,12 @@ export default function ChatPage() {
   }
 
   function openCreateThreadModal(parentGroupId = '') {
-    setGroupForm({ name: '', description: '', parentGroupId: parentGroupId || '', members: '', viewers: '' });
+    setGroupForm({
+      name: '',
+      description: '',
+      parentGroupId: parentGroupId || '',
+      friendRoles: {},
+    });
     setThreadCoverFile(null);
     setThreadCoverPreview('');
     setShowCreateThreadModal(true);
@@ -1945,8 +1955,15 @@ export default function ChatPage() {
           name: groupForm.name.trim(),
           description: groupForm.description.trim(),
           parentGroupId: groupForm.parentGroupId || null,
-          memberUsernames: parseCommaList(groupForm.members),
-          viewerUsernames: parseCommaList(groupForm.viewers),
+          memberUsernames: Object.entries(groupForm.friendRoles || {})
+            .filter(([, role]) => role === 'member')
+            .map(([username]) => username),
+          adminUsernames: Object.entries(groupForm.friendRoles || {})
+            .filter(([, role]) => role === 'admin')
+            .map(([username]) => username),
+          viewerUsernames: Object.entries(groupForm.friendRoles || {})
+            .filter(([, role]) => role === 'viewer')
+            .map(([username]) => username),
         },
         (nextPayload) => {
           const createdGroupId = nextPayload.createdGroupId
@@ -1984,7 +2001,12 @@ export default function ChatPage() {
         });
       }
 
-      setGroupForm({ name: '', description: '', parentGroupId: '', members: '', viewers: '' });
+      setGroupForm({
+        name: '',
+        description: '',
+        parentGroupId: '',
+        friendRoles: {},
+      });
       setThreadCoverFile(null);
       setThreadCoverPreview('');
       setSidebarPanel('');
@@ -3315,8 +3337,94 @@ export default function ChatPage() {
                 <option key={group.id} value={group.id}>{`${'— '.repeat(depth)}${group.name}`}</option>
               ))}
             </select>
-            <input style={styles.input} value={groupForm.members} onChange={(e) => setGroupForm((p) => ({ ...p, members: e.target.value }))} placeholder="Members (comma separated)" />
-            <input style={styles.input} value={groupForm.viewers} onChange={(e) => setGroupForm((p) => ({ ...p, viewers: e.target.value }))} placeholder="Viewers (comma separated)" />
+            <details style={{
+              border: `1px solid ${theme.inputBorder}`,
+              borderRadius: '12px',
+              background: theme.inputBg,
+              overflow: 'hidden',
+            }}>
+              <summary style={{
+                padding: '10px 12px',
+                color: theme.textPrimary,
+                fontSize: '13px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                listStylePosition: 'inside',
+              }}>
+                Select friends ({Object.keys(groupForm.friendRoles || {}).length} selected)
+              </summary>
+              <div style={{
+                display: 'grid',
+                gap: '8px',
+                maxHeight: '240px',
+                overflowY: 'auto',
+                padding: '4px 10px 10px',
+              }}>
+                {bootstrap.friends.length ? bootstrap.friends.map((friend) => {
+                  const role = groupForm.friendRoles?.[friend] || '';
+                  const selected = Boolean(role);
+                  const setFriendRole = (nextRole) => {
+                    setGroupForm((previous) => {
+                      const friendRoles = { ...(previous.friendRoles || {}) };
+                      if (nextRole) friendRoles[friend] = nextRole;
+                      else delete friendRoles[friend];
+                      return { ...previous, friendRoles };
+                    });
+                  };
+                  return (
+                    <div
+                      key={friend}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'minmax(0, 1fr) auto',
+                        gap: '10px',
+                        alignItems: 'center',
+                        padding: '9px 10px',
+                        borderRadius: '10px',
+                        border: `1px solid ${selected ? theme.blue : theme.cardBorder}`,
+                        background: selected ? `${theme.blue}12` : theme.cardBg,
+                      }}
+                    >
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={(event) => setFriendRole(event.target.checked ? 'member' : '')}
+                        />
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', fontSize: '13px', fontWeight: 700, color: theme.textPrimary }}>
+                          @{friend}
+                        </span>
+                      </label>
+                      {selected ? (
+                        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                          <label style={{ display: 'flex', gap: '4px', alignItems: 'center', color: theme.textMuted, fontSize: '11px', cursor: 'pointer' }}>
+                            <input
+                              type="checkbox"
+                              checked={role === 'admin'}
+                              onChange={(event) => setFriendRole(event.target.checked ? 'admin' : 'member')}
+                            />
+                            Admin
+                          </label>
+                          <label style={{ display: 'flex', gap: '4px', alignItems: 'center', color: theme.textMuted, fontSize: '11px', cursor: 'pointer' }}>
+                            <input
+                              type="checkbox"
+                              checked={role === 'viewer'}
+                              onChange={(event) => setFriendRole(event.target.checked ? 'viewer' : 'member')}
+                            />
+                            Viewer only
+                          </label>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                }) : (
+                  <p style={styles.helperText}>Add friends first, then select them for this thread.</p>
+                )}
+              </div>
+            </details>
+            <p style={{ ...styles.helperText, margin: '2px 0 0' }}>
+              Selected friends are members by default. Admin can manage the thread; Viewer only cannot post.
+            </p>
             <button type="submit" style={{ ...styles.btn, marginTop: '4px' }} disabled={creatingThread}>{creatingThread ? 'Creating…' : 'Create Thread'}</button>
           </form>
         </div>

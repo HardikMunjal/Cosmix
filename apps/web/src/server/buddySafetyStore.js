@@ -7,7 +7,7 @@ import {
   haversineKm,
 } from '../lib/buddySafetyGeo';
 import { normalizePhoneE164 } from '../lib/buddySafetyLinks';
-import { dispatchTripAlerts } from './buddySafetyNotify';
+import { dispatchTripAlerts, notifyTripStarted, resolveAppOrigin } from './buddySafetyNotify';
 import { getSafetyProfile } from './buddySafetyProfileStore';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
@@ -96,6 +96,8 @@ function sanitizePublicTrip(trip) {
       severity: a.severity,
     })),
     notifyEveryKm: trip.notifyEveryKm,
+    shareDurationMinutes: trip.shareDurationMinutes,
+    shareEndsAt: trip.shareEndsAt,
     createdAt: trip.createdAt,
     updatedAt: trip.updatedAt,
   };
@@ -221,7 +223,14 @@ export async function createTrip(user, payload) {
     plannedDistanceKm: plannedDistanceKm || Number(payload.plannedDistanceKm) || 0,
     routePolyline,
     notifyEveryKm: Math.max(0.5, Number(payload.notifyEveryKm) || 2),
+    notifyIntervalMinutes: Math.max(5, Number(payload.notifyIntervalMinutes) || 15),
     stallMinutes: Math.max(3, Number(payload.stallMinutes) || 8),
+    shareDurationMinutes: Number(payload.shareDurationMinutes) > 0
+      ? Math.max(5, Number(payload.shareDurationMinutes))
+      : null,
+    shareEndsAt: Number(payload.shareDurationMinutes) > 0
+      ? now + Math.max(5, Number(payload.shareDurationMinutes)) * 60 * 1000
+      : null,
     watcherPhone,
     watcherNotifySms: payload.watcherNotifySms !== undefined
       ? Boolean(payload.watcherNotifySms)
@@ -238,12 +247,19 @@ export async function createTrip(user, payload) {
     lastMilestoneKm: 0,
     lastProgressAt: now,
     lastStallAlertAt: 0,
+    lastIntervalNotifyAt: 0,
     createdAt: now,
     updatedAt: now,
   };
 
   await db.insertAsync(trip);
-  return sanitizeTrip(trip);
+  const saved = sanitizeTrip(trip);
+  try {
+    await notifyTripStarted(saved, { appOrigin: String(payload.appOrigin || '').trim() });
+  } catch (error) {
+    console.warn('buddy-safety trip start notify failed:', error.message);
+  }
+  return saved;
 }
 
 export async function addTripPing(tripId, user, pingPayload, { appOrigin = '' } = {}) {
@@ -288,6 +304,7 @@ export async function addTripPing(tripId, user, pingPayload, { appOrigin = '' } 
   trip.lastMilestoneKm = evaluation.lastMilestoneKm;
   trip.lastProgressAt = evaluation.lastProgressAt;
   trip.lastStallAlertAt = evaluation.lastStallAlertAt;
+  trip.lastIntervalNotifyAt = evaluation.lastIntervalNotifyAt;
   trip.status = evaluation.status;
   trip.updatedAt = Date.now();
 

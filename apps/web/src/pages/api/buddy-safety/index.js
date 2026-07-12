@@ -4,6 +4,7 @@ import {
   linkWatcherToTrip,
   listTripsForUser,
 } from '../../../server/buddySafetyStore';
+import { resolveAppOrigin } from '../../../server/buddySafetyNotify';
 
 /** Trip list + create — `/api/buddy-safety` (catch-all does not match empty path). */
 export default async function handler(req, res) {
@@ -34,6 +35,7 @@ export default async function handler(req, res) {
         ...req.body,
         watcherId: watcher?.id || null,
         watcherName: watcher?.name || watcher?.username || watcherUsername,
+        appOrigin: resolveAppOrigin(req),
       });
       return res.status(201).json({ trip });
     }

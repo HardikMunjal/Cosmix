@@ -20,6 +20,30 @@ export class ChatController {
     return this.chatService.removePushSubscription(body.actorUsername, body.endpoint);
   }
 
+  @Post('push/send')
+  sendPush(
+    @Body()
+    body: {
+      usernames?: string[];
+      title?: string;
+      body?: string;
+      url?: string;
+      tag?: string;
+      type?: 'friend' | 'dm' | 'group' | 'wellness' | 'buddy-safety';
+      senderUsername?: string;
+    },
+  ) {
+    return this.chatService.notifyPushUsers(body.usernames || [], {
+      title: body.title,
+      body: body.body,
+      url: body.url,
+      tag: body.tag,
+    }, {
+      type: body.type || 'buddy-safety',
+      senderUsername: body.senderUsername,
+    });
+  }
+
   @Get('push/preferences')
   getPushPreferences(@Query('username') username: string) {
     return this.chatService.getPushPreferences(username);
@@ -63,6 +87,7 @@ export class ChatController {
       description?: string;
       parentGroupId?: string | null;
       memberUsernames?: string[];
+      adminUsernames?: string[];
       viewerUsernames?: string[];
       coverImageUrl?: string | null;
       coverS3Key?: string | null;
