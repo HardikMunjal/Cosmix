@@ -24,7 +24,7 @@
   },
   "devDependencies": {
     "@nestjs/testing": "^9.0.0",
-    "@types/node": "^20.17.30",
+    "@types/node": "20.17.30",
     "eslint": "^7.0.0",
     "eslint-config-prettier": "^8.0.0",
     "eslint-plugin-prettier": "^4.0.0",
