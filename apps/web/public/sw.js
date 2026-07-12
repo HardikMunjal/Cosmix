@@ -1,3 +1,38 @@
+const CACHE_VERSION = 'cosmix-pwa-v1';
+const OFFLINE_URL = '/offline.html';
+
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(CACHE_VERSION).then((cache) => cache.add(OFFLINE_URL)).then(() => self.skipWaiting()),
+  );
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_VERSION).map((key) => caches.delete(key))))
+      .then(() => self.clients.claim()),
+  );
+});
+
+self.addEventListener('fetch', (event) => {
+  if (event.request.method !== 'GET') return;
+
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request).catch(async () => {
+        const cache = await caches.open(CACHE_VERSION);
+        return cache.match(OFFLINE_URL);
+      }),
+    );
+    return;
+  }
+
+  event.respondWith(
+    fetch(event.request).catch(async () => caches.match(event.request)),
+  );
+});
+
 self.addEventListener('push', (event) => {
   let payload = {};
   try {

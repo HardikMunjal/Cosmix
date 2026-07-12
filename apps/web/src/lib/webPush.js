@@ -1,3 +1,5 @@
+import { getPwaServiceWorkerRegistration } from './pwa';
+
 function base64UrlToUint8Array(base64String) {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
   const base64 = `${base64String}${padding}`.replace(/-/g, '+').replace(/_/g, '/');
@@ -41,8 +43,10 @@ export async function subscribeToWebPush(username, { force = false } = {}) {
     }
 
     const apiBase = chatApiBase();
-    const registration = await navigator.serviceWorker.register('/push-sw.js');
-    await navigator.serviceWorker.ready;
+    const registration = await getPwaServiceWorkerRegistration();
+    if (!registration) {
+      return { ok: false, reason: 'no-service-worker' };
+    }
     const keyResponse = await fetch(`${apiBase}/push/public-key`);
     const keyPayload = await keyResponse.json().catch(() => ({}));
     const publicKey = String(keyPayload?.publicKey || '').trim();

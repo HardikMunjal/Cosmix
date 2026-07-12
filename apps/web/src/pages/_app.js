@@ -1,6 +1,8 @@
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { useEffect, useState } from 'react';
+import { InstallAppPrompt } from '../lib/InstallAppPrompt';
+import { registerPwaServiceWorker } from '../lib/pwa';
 
 function RouteLoader({ active }) {
   return (
@@ -56,7 +58,10 @@ export default function App({ Component, pageProps }) {
   const [routeLoading, setRouteLoading] = useState(false);
 
   useEffect(() => {
-    let loaderTimeout = null;
+    void registerPwaServiceWorker();
+  }, []);
+
+  useEffect(() => {
     let safetyTimeout = null;
 
     const handleStart = () => {
@@ -90,9 +95,13 @@ export default function App({ Component, pageProps }) {
       <Head>
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
         <link rel="manifest" href="/manifest.webmanifest" />
+        <link rel="apple-touch-icon" href="/icons/cosmix-icon.svg" />
         <meta name="theme-color" content="#0f172a" />
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        <meta name="apple-mobile-web-app-title" content="Cosmix" />
+        <meta name="application-name" content="Cosmix" />
       </Head>
       <style jsx global>{`
         *, *::before, *::after { box-sizing: border-box; }
@@ -201,6 +210,7 @@ export default function App({ Component, pageProps }) {
         }
       `}</style>
       <RouteLoader active={routeLoading} />
+      <InstallAppPrompt />
       <Component {...pageProps} />
     </>
   );

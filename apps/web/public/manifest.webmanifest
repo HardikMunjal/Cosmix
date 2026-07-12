@@ -1,17 +1,54 @@
 {
+  "id": "/",
   "name": "Cosmix",
   "short_name": "Cosmix",
-  "description": "Threads, chat, albums, and wellness",
-  "start_url": "/chat",
+  "description": "Your wellness, chat, running, and market cockpit — install and use like a native app.",
+  "start_url": "/dashboard",
+  "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "orientation": "portrait-primary",
   "background_color": "#0f172a",
   "theme_color": "#0f172a",
+  "categories": ["health", "fitness", "social", "finance"],
   "icons": [
     {
-      "src": "/cosmix-share-logo.png",
+      "src": "/icons/cosmix-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/cosmix-icon.svg",
       "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any maskable"
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Dashboard",
+      "short_name": "Home",
+      "url": "/dashboard",
+      "icons": [{ "src": "/icons/cosmix-icon.svg", "sizes": "512x512" }]
+    },
+    {
+      "name": "Wellness",
+      "short_name": "Henna",
+      "url": "/wellness",
+      "icons": [{ "src": "/icons/cosmix-icon.svg", "sizes": "512x512" }]
+    },
+    {
+      "name": "Running",
+      "short_name": "Running",
+      "url": "/running-analytics",
+      "icons": [{ "src": "/icons/cosmix-icon.svg", "sizes": "512x512" }]
+    },
+    {
+      "name": "Chat",
+      "short_name": "Chat",
+      "url": "/chat",
+      "icons": [{ "src": "/icons/cosmix-icon.svg", "sizes": "512x512" }]
     }
   ]
 }
