@@ -2120,7 +2120,7 @@ export class ChatService {
         } else {
             existing.allowJoinByLink = payload.allowJoinByLink ?? existing.allowJoinByLink;
             if (payload.joinPassword !== undefined) {
-                existing.joinPassword = joinPassword;
+                existing.joinPassword = joinPassword ?? null;
             }
             existing.clearMessagesAfterHours = clearMessagesAfterHours;
             existing.onlyAdminsCreateFolders = payload.onlyAdminsCreateFolders ?? existing.onlyAdminsCreateFolders;
