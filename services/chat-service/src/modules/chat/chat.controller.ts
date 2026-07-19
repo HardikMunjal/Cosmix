@@ -120,8 +120,8 @@ export class ChatController {
   }
 
   @Post('groups/join-link')
-  joinGroupByLink(@Body() body: { actorUsername: string; shareToken: string }) {
-    return this.chatService.joinGroupByShareToken(body.actorUsername, body.shareToken);
+  joinGroupByLink(@Body() body: { actorUsername: string; shareToken: string; joinPassword?: string }) {
+    return this.chatService.joinGroupByShareToken(body.actorUsername, body.shareToken, body.joinPassword);
   }
 
   @Get('groups/public/:shareToken')
@@ -136,6 +136,7 @@ export class ChatController {
     body: {
       actorUsername: string;
       allowJoinByLink?: boolean;
+      joinPassword?: string | null;
       clearMessagesAfterHours?: number | null;
       onlyAdminsCreateFolders?: boolean;
       onlyAdminsBookmarkMessages?: boolean;

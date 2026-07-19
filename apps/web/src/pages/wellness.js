@@ -570,22 +570,24 @@ export default function WellnessPage() {
         window.history.replaceState({}, '', window.location.pathname);
         if (stravaResult === 'ok') {
           setStravaConnected(true);
-          setStravaMsg('Strava connected! Syncing activities...');
-          fetch(`${API_BASE}/wellness/strava/activities/${encodeURIComponent(uid)}`)
+          setStravaMsg('Strava connected! Syncing last 90 days...');
+          fetch(`${API_BASE}/wellness/strava/activities/${encodeURIComponent(uid)}?days=90&import=1`)
             .then((r) => r.ok ? r.json() : null)
             .then((actData) => {
-              if (!actData?.fields || Object.keys(actData.fields).length === 0) {
-                setStravaMsg('Strava connected! No activities found today.');
+              if (!actData?.activities) {
+                setStravaMsg('Strava connected! No activities found in the last 90 days.');
                 return;
               }
-              setStravaMsg(`Strava connected! Synced ${actData.activities} activities`);
-              setForm((prev) => {
-                const updated = { ...prev };
-                for (const [key, val] of Object.entries(actData.fields)) {
-                  if (!updated[key] || updated[key] === 0) updated[key] = val;
-                }
-                return updated;
-              });
+              setStravaMsg(`Strava connected! Synced ${actData.activities} activities · imported ${actData.imported || 0} days`);
+              if (actData.fields) {
+                setForm((prev) => {
+                  const updated = { ...prev };
+                  for (const [key, val] of Object.entries(actData.fields)) {
+                    if (!updated[key] || updated[key] === 0) updated[key] = val;
+                  }
+                  return updated;
+                });
+              }
             })
             .catch(() => setStravaMsg('Strava connected but sync failed'));
         } else {
@@ -883,22 +885,38 @@ export default function WellnessPage() {
     if (!uid) return;
     setStravaLoading(true);
     setStravaMsg('');
-    fetch(`${API_BASE}/wellness/strava/activities/${encodeURIComponent(uid)}`)
+    fetch(`${API_BASE}/wellness/strava/activities/${encodeURIComponent(uid)}?days=90&import=1`)
       .then((r) => r.ok ? r.json() : null)
       .then((d) => {
         setStravaLoading(false);
-        if (!d || !d.fields || Object.keys(d.fields).length === 0) {
-          setStravaMsg('No Strava activities today');
+        if (!d || !d.activities) {
+          setStravaMsg('No Strava activities in the last 90 days');
           return;
         }
-        setStravaMsg(`Synced ${d.activities} activities from Strava`);
-        setForm((prev) => {
-          const updated = { ...prev };
-          for (const [key, val] of Object.entries(d.fields)) {
-            updated[key] = val; // overwrite with Strava data
-          }
-          return updated;
-        });
+        const maxSpeed = d.insights?.maxSpeedKmh ? ` · max ${d.insights.maxSpeedKmh} km/h` : '';
+        const bestPace = d.insights?.bestPaceMinPerKm ? ` · best pace ${d.insights.bestPaceMinPerKm} min/km` : '';
+        setStravaMsg(`Synced ${d.activities} activities · imported ${d.imported || 0} days${maxSpeed}${bestPace}`);
+        if (d.fields && Object.keys(d.fields).length) {
+          setForm((prev) => {
+            const updated = { ...prev };
+            for (const [key, val] of Object.entries(d.fields)) {
+              updated[key] = val;
+            }
+            return updated;
+          });
+        }
+        fetch(`${API_BASE}/wellness/data/${encodeURIComponent(uid)}`)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((payload) => {
+            if (!payload) return;
+            if (Array.isArray(payload.entries)) {
+              setEntries(payload.entries);
+              try {
+                localStorage.setItem(storageKey(uid, 'entries'), JSON.stringify(payload.entries));
+              } catch (_) { /* ignore */ }
+            }
+          })
+          .catch(() => {});
       })
       .catch(() => { setStravaLoading(false); setStravaMsg('Sync failed'); });
   }
@@ -1544,7 +1562,8 @@ export default function WellnessPage() {
                 )}
               </div>
               {stravaMsg && <div style={{ fontSize: 11, marginTop: 6, opacity: 0.85, color: '#fbbf24' }}>{stravaMsg}</div>}
-              {!stravaConnected && <div style={{ fontSize: 11, marginTop: 4, opacity: 0.6 }}>Auto-import running, walking & workouts from Strava</div>}
+              {!stravaConnected && <div style={{ fontSize: 11, marginTop: 4, opacity: 0.6 }}>Connect Strava to import runs, max speed, pace buckets, and elevation into Cosmix</div>}
+              {stravaConnected && <div style={{ fontSize: 11, marginTop: 4, opacity: 0.6 }}>Sync imports the last 90 days of Strava activities into Wellness + Running dashboards</div>}
             </div>
 
             {!planInfo && (

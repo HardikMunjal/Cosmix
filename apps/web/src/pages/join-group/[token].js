@@ -20,6 +20,7 @@ export default function JoinGroupPage({ siteOrigin, initialGroupInfo = null }) {
   const [username, setUsername] = useState('');
   const [usernameValidation, setUsernameValidation] = useState({ status: 'idle', message: '' });
   const [createdCredentials, setCreatedCredentials] = useState(null);
+  const [joinPassword, setJoinPassword] = useState('');
   const [status, setStatus] = useState(initialGroupInfo ? 'Invite ready.' : 'Loading invite...');
   const [submitting, setSubmitting] = useState(false);
 
@@ -33,6 +34,8 @@ export default function JoinGroupPage({ siteOrigin, initialGroupInfo = null }) {
         setGroupInfo(payload);
         if (payload.allowJoinByLink === false) {
           setStatus('Thread owner has disabled joining by link.');
+        } else if (payload.requiresPassword) {
+          setStatus('This thread is password protected. Enter the password shared with the invite.');
         } else {
           setStatus('Invite ready.');
         }
@@ -98,6 +101,10 @@ export default function JoinGroupPage({ siteOrigin, initialGroupInfo = null }) {
   async function handleQuickJoin(event) {
     event.preventDefault();
     if (!token || !username.trim() || submitting || !canJoin) return;
+    if (groupInfo?.requiresPassword && !joinPassword.trim()) {
+      setStatus('Enter the thread password shared with this invite.');
+      return;
+    }
     if (usernameValidation.status !== 'valid') {
       setStatus('Please choose a valid and available username first.');
       return;
@@ -114,9 +121,13 @@ export default function JoinGroupPage({ siteOrigin, initialGroupInfo = null }) {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || payload.message || 'Unable to create account.');
       setCreatedCredentials({ username: payload?.user?.username || username.trim(), password: payload?.temporaryPassword || '123' });
+      if (joinPassword.trim()) {
+        sessionStorage.setItem(`cosmix-join-pw-${token}`, joinPassword.trim());
+      }
       setStatus('Account created. Opening thread chat...');
+      const pwQuery = joinPassword.trim() ? `&joinPassword=${encodeURIComponent(joinPassword.trim())}` : '';
       window.setTimeout(() => {
-        router.replace(`/chat?groupInvite=${encodeURIComponent(token)}`);
+        router.replace(`/chat?groupInvite=${encodeURIComponent(token)}${pwQuery}`);
       }, 1200);
     } catch (error) {
       setStatus(error.message || 'Unable to create account.');
@@ -126,7 +137,15 @@ export default function JoinGroupPage({ siteOrigin, initialGroupInfo = null }) {
 
   function openChat() {
     if (!token || !canJoin) return;
-    router.replace(`/chat?groupInvite=${encodeURIComponent(token)}`);
+    if (groupInfo?.requiresPassword && !joinPassword.trim()) {
+      setStatus('Enter the thread password shared with this invite.');
+      return;
+    }
+    if (joinPassword.trim()) {
+      sessionStorage.setItem(`cosmix-join-pw-${token}`, joinPassword.trim());
+    }
+    const pwQuery = joinPassword.trim() ? `&joinPassword=${encodeURIComponent(joinPassword.trim())}` : '';
+    router.replace(`/chat?groupInvite=${encodeURIComponent(token)}${pwQuery}`);
   }
 
   const shareTitle = groupInfo?.name ? `Join ${groupInfo.name} on Cosmix` : 'Join Thread on Cosmix';
@@ -168,8 +187,18 @@ export default function JoinGroupPage({ siteOrigin, initialGroupInfo = null }) {
           <p style={{ margin: 0, color: '#bfdbfe' }}>{groupInfo?.description || 'Chat, browse albums, comment on photos, and download memories together.'}</p>
           <p style={{ margin: 0, color: '#cbd5e1' }}>{status}</p>
 
+          {(groupInfo?.requiresPassword || joinPassword) ? (
+            <input
+              type="password"
+              value={joinPassword}
+              onChange={(event) => setJoinPassword(event.target.value)}
+              placeholder="Thread password"
+              style={{ borderRadius: 12, border: '1px solid rgba(148,163,184,0.4)', background: '#020617', color: '#e2e8f0', padding: '12px 14px', fontSize: 15, outline: 'none' }}
+            />
+          ) : null}
+
           {sessionUser ? (
-            <button type="button" onClick={openChat} disabled={!canJoin} style={{ border: 'none', borderRadius: 14, padding: '12px 14px', fontWeight: 700, fontSize: 15, cursor: canJoin ? 'pointer' : 'not-allowed', background: canJoin ? 'linear-gradient(135deg,#22d3ee,#f97316)' : '#334155', color: '#0f172a' }}>
+            <button type="button" onClick={openChat} disabled={!canJoin || (groupInfo?.requiresPassword && !joinPassword.trim())} style={{ border: 'none', borderRadius: 14, padding: '12px 14px', fontWeight: 700, fontSize: 15, cursor: canJoin ? 'pointer' : 'not-allowed', background: canJoin ? 'linear-gradient(135deg,#22d3ee,#f97316)' : '#334155', color: '#0f172a' }}>
               Continue as {sessionUser.name || sessionUser.username}
             </button>
           ) : (
@@ -187,6 +216,15 @@ export default function JoinGroupPage({ siteOrigin, initialGroupInfo = null }) {
                     placeholder="Choose username"
                     style={{ borderRadius: 12, border: '1px solid rgba(148,163,184,0.4)', background: '#020617', color: '#e2e8f0', padding: '12px 14px', fontSize: 15, outline: 'none' }}
                   />
+                  {groupInfo?.requiresPassword ? (
+                    <input
+                      type="password"
+                      value={joinPassword}
+                      onChange={(event) => setJoinPassword(event.target.value)}
+                      placeholder="Thread password from invite"
+                      style={{ borderRadius: 12, border: '1px solid rgba(148,163,184,0.4)', background: '#020617', color: '#e2e8f0', padding: '12px 14px', fontSize: 15, outline: 'none' }}
+                    />
+                  ) : null}
                   {usernameValidation.message ? (
                     <p style={{ margin: 0, color: usernameValidation.status === 'valid' ? '#22c55e' : usernameValidation.status === 'checking' ? '#f59e0b' : '#f87171', fontSize: 12 }}>
                       {usernameValidation.message}

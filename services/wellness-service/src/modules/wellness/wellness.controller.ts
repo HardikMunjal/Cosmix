@@ -130,8 +130,20 @@ export class WellnessController {
 
   @Get('strava/auth-url')
   stravaAuthUrl(@Query('userId') userId: string, @Query('redirectUri') redirectUri: string) {
-    // Redirect URI should point to the SERVER callback, not the frontend
-    const serverCallback = redirectUri.replace(/:\d+\/.*$/, ':3004/wellness/strava/callback');
+    // Redirect URI must be the wellness-service callback registered in Strava
+    let serverCallback = String(process.env.STRAVA_REDIRECT_URI || '').trim();
+    if (!serverCallback && redirectUri) {
+      try {
+        const parsed = new URL(redirectUri);
+        parsed.port = String(process.env.WELLNESS_PORT || process.env.PORT || '3004');
+        parsed.pathname = '/wellness/strava/callback';
+        parsed.search = '';
+        parsed.hash = '';
+        serverCallback = parsed.toString();
+      } catch {
+        serverCallback = redirectUri.replace(/\/wellness.*$/i, '/wellness/strava/callback');
+      }
+    }
     const url = this.stravaService.getAuthUrl(userId, serverCallback);
     return { url, configured: !!url };
   }
@@ -147,8 +159,13 @@ export class WellnessController {
     console.log(`Strava callback: code=${code?.slice(0, 8)}..., userId=${userId}`);
     const ok = await this.stravaService.exchangeCode(code, userId);
     console.log(`Strava token exchange: ${ok ? 'SUCCESS' : 'FAILED'}`);
-    // Redirect back to frontend wellness page with result
-    const frontendUrl = `http://192.168.1.5:3005/wellness?strava=${ok ? 'ok' : 'fail'}`;
+    const frontendBase = String(
+      process.env.WEB_APP_URL
+      || process.env.NEXT_PUBLIC_APP_URL
+      || process.env.FRONTEND_URL
+      || 'http://localhost:3005',
+    ).replace(/\/$/, '');
+    const frontendUrl = `${frontendBase}/wellness?strava=${ok ? 'ok' : 'fail'}`;
     return res.redirect(frontendUrl);
   }
 
@@ -164,10 +181,48 @@ export class WellnessController {
   }
 
   @Get('strava/activities/:userId')
-  async stravaActivities(@Param('userId') userId: string) {
-    const activities = await this.stravaService.getTodayActivities(userId);
-    const fields = this.stravaService.mapToWellnessFields(activities);
-    return { activities: activities.length, fields };
+  async stravaActivities(
+    @Param('userId') userId: string,
+    @Query('days') days?: string,
+    @Query('import') shouldImport?: string,
+  ) {
+    const windowDays = Number(days) || 90;
+    const activities = await this.stravaService.getRecentActivities(userId, windowDays);
+    const fields = this.stravaService.mapToWellnessFields(
+      activities.filter((activity) => {
+        const date = String(activity.start_date_local || activity.start_date || '').slice(0, 10);
+        return date === new Date().toISOString().slice(0, 10);
+      }),
+    );
+    const entries = this.stravaService.buildWellnessEntriesFromActivities(activities);
+    const insights = this.stravaService.buildRunInsights(activities);
+
+    let imported = 0;
+    if (String(shouldImport || '1') !== '0' && entries.length) {
+      const state = await this.storageService.save(userId, { entries });
+      imported = Array.isArray(state?.entries) ? entries.length : 0;
+    }
+
+    return {
+      activities: activities.length,
+      imported,
+      fields,
+      entries,
+      insights,
+    };
+  }
+
+  @Get('strava/insights/:userId')
+  async stravaInsights(
+    @Param('userId') userId: string,
+    @Query('days') days?: string,
+  ) {
+    const connected = await this.stravaService.isConnected(userId);
+    if (!connected) {
+      return { connected: false, runCount: 0, recentRuns: [], paceByMinuteBuckets: [] };
+    }
+    const activities = await this.stravaService.getRecentActivities(userId, Number(days) || 90);
+    return this.stravaService.buildRunInsights(activities);
   }
 
   @Delete('strava/:userId')

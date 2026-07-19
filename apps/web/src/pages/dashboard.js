@@ -8,6 +8,7 @@ import { MobileBottomNav } from '../lib/MobileNav';
 import { buildStrategySummary, formatCurrency } from '../lib/userInsights';
 import NotificationModule from '../modules/dashboard/NotificationModule';
 import PostFeedModule from '../modules/dashboard/PostFeedModule';
+import ThreadsModule from '../modules/dashboard/ThreadsModule';
 import { ACTIVITY_METRIC_DEFS as activityMetricDefs, aggregateActivityTotals } from '../lib/activityMetrics';
 import { subscribeToWebPush } from '../lib/webPush';
 
@@ -24,7 +25,7 @@ const wellnessClubModules = [
   { title: 'Leaderboard', path: '/leaderboard', accent: '#f97316' },
   { title: 'Wellness Dashboard', path: '/wellness', accent: '#22c55e' },
   { title: 'Buddy Safety', path: '/buddy-safety', accent: '#f43f5e' },
-  { title: 'Threads', path: '/chat', accent: '#a78bfa' },
+  { title: 'Threads', path: '/dashboard?tab=threads', accent: '#22d3ee' },
   { title: 'Media', path: '/media', accent: '#ec4899' },
 ];
 
@@ -187,6 +188,7 @@ function getTimeGreeting() {
 
 const DASHBOARD_TABS = [
   { id: 'home', label: 'Home', icon: '🏠', accent: '#38bdf8', glow: 'rgba(56,189,248,0.24)' },
+  { id: 'threads', label: 'Threads', icon: '🧵', accent: '#22d3ee', glow: 'rgba(34,211,238,0.26)' },
   { id: 'posts', label: 'Fitstagram', icon: '📷', accent: '#f472b6', glow: 'rgba(244,114,182,0.26)' },
   { id: 'buddies', label: 'Buddies', icon: '👥', accent: '#a78bfa', glow: 'rgba(167,139,250,0.26)' },
 ];
@@ -1018,6 +1020,8 @@ export default function Dashboard() {
   const [serverNotifications, setServerNotifications] = useState([]);
   const [feedPosts, setFeedPosts] = useState([]);
   const [chatBootstrap, setChatBootstrap] = useState({ incomingRequests: [], groups: [] });
+  const [threadsLoading, setThreadsLoading] = useState(false);
+  const [threadsReady, setThreadsReady] = useState(false);
   const [activeTab, setActiveTab] = useState('home');
   const [wellnessLoading, setWellnessLoading] = useState(false);
   const [wellnessReady, setWellnessReady] = useState(false);
@@ -1068,7 +1072,7 @@ export default function Dashboard() {
   useEffect(() => {
     if (!router.isReady) return;
     const tabParam = String(router.query.tab || 'home').toLowerCase();
-    if (['home', 'posts', 'buddies'].includes(tabParam)) {
+    if (['home', 'threads', 'posts', 'buddies'].includes(tabParam)) {
       setActiveTab(tabParam);
       return;
     }
@@ -1118,6 +1122,31 @@ export default function Dashboard() {
       setWellnessReady(true);
     }
   }, [API_BASE, user]);
+
+  const loadThreadsBootstrap = useCallback(async () => {
+    const selfUsername = String(user?.username || '').trim();
+    if (!selfUsername) {
+      setChatBootstrap({ incomingRequests: [], groups: [] });
+      setThreadsLoading(false);
+      setThreadsReady(true);
+      return;
+    }
+
+    setThreadsLoading(true);
+    try {
+      const bootstrapResponse = await fetch(`/chat-api/chat/bootstrap?username=${encodeURIComponent(selfUsername)}`);
+      const bootstrapData = await bootstrapResponse.json().catch(() => ({}));
+      setChatBootstrap({
+        incomingRequests: Array.isArray(bootstrapData?.incomingRequests) ? bootstrapData.incomingRequests : [],
+        groups: Array.isArray(bootstrapData?.groups) ? bootstrapData.groups : [],
+      });
+    } catch (_) {
+      setChatBootstrap({ incomingRequests: [], groups: [] });
+    } finally {
+      setThreadsLoading(false);
+      setThreadsReady(true);
+    }
+  }, [user]);
 
   const loadBuddyTrendRows = useCallback(async () => {
     const selfUserId = resolveWellnessUserId(user);
@@ -1313,6 +1342,9 @@ export default function Dashboard() {
     if (activeTab === 'home') {
       loadWellnessData();
     }
+    if (activeTab === 'threads') {
+      loadThreadsBootstrap();
+    }
     if (activeTab === 'buddies') {
       loadBuddyTrendRows();
     }
@@ -1321,7 +1353,7 @@ export default function Dashboard() {
       loadServerNotifications();
     }
     return undefined;
-  }, [user, activeTab, loadWellnessData, loadBuddyTrendRows, loadFeedPosts, loadServerNotifications]);
+  }, [user, activeTab, loadWellnessData, loadThreadsBootstrap, loadBuddyTrendRows, loadFeedPosts, loadServerNotifications]);
 
   useEffect(() => {
     if (!user || activeTab !== 'posts') return undefined;
@@ -1854,7 +1886,7 @@ export default function Dashboard() {
         }
         .dashboard-tab-row {
           display: grid;
-          grid-template-columns: repeat(3, minmax(0, 1fr));
+          grid-template-columns: repeat(4, minmax(0, 1fr));
           gap: 8px;
           padding: 6px;
           border-radius: 18px;
@@ -1884,6 +1916,11 @@ export default function Dashboard() {
           border-color: rgba(56,189,248,0.28);
           background: rgba(56,189,248,0.08);
         }
+        .dashboard-tab-btn--threads:not(.is-active):hover {
+          color: #a5f3fc;
+          border-color: rgba(34,211,238,0.28);
+          background: rgba(34,211,238,0.08);
+        }
         .dashboard-tab-btn--posts:not(.is-active):hover {
           color: #fbcfe8;
           border-color: rgba(244,114,182,0.28);
@@ -1902,6 +1939,13 @@ export default function Dashboard() {
             radial-gradient(circle at top right, rgba(244,114,182,0.12), transparent 34%),
             linear-gradient(180deg, rgba(30,41,59,0.96), rgba(15,23,42,0.98)) !important;
           border-color: rgba(244,114,182,0.28) !important;
+        }
+        .dashboard-tab-surface--threads {
+          background:
+            radial-gradient(circle at top left, rgba(34,211,238,0.14), transparent 36%),
+            radial-gradient(circle at 90% 10%, rgba(129,140,248,0.12), transparent 40%),
+            linear-gradient(180deg, rgba(30,41,59,0.96), rgba(15,23,42,0.98)) !important;
+          border-color: rgba(34,211,238,0.3) !important;
         }
         .dashboard-tab-surface--buddies {
           background:
@@ -1923,6 +1967,7 @@ export default function Dashboard() {
           font-weight: 800;
         }
         .dashboard-tab-surface-eyebrow--posts { color: #f9a8d4; }
+        .dashboard-tab-surface-eyebrow--threads { color: #67e8f9; }
         .dashboard-tab-surface-eyebrow--buddies { color: #c4b5fd; }
         .dashboard-tab-surface-title {
           font-size: 24px;
@@ -1932,6 +1977,12 @@ export default function Dashboard() {
         }
         .dashboard-tab-surface-title--posts {
           background: linear-gradient(135deg, #fff 0%, #fbcfe8 55%, #f472b6 100%);
+          -webkit-background-clip: text;
+          background-clip: text;
+          color: transparent;
+        }
+        .dashboard-tab-surface-title--threads {
+          background: linear-gradient(135deg, #fff 0%, #a5f3fc 50%, #22d3ee 100%);
           -webkit-background-clip: text;
           background-clip: text;
           color: transparent;
@@ -2425,8 +2476,8 @@ export default function Dashboard() {
           .dashboard-tab-btn {
             min-width: 0 !important;
             width: 100% !important;
-            padding: 10px 6px !important;
-            font-size: 11px !important;
+            padding: 9px 4px !important;
+            font-size: 10px !important;
           }
           .dashboard-tab-icon { font-size: 16px !important; }
           .dashboard-module-grid, .dashboard-scorecard-grid, .dashboard-market-modules { grid-template-columns: 1fr !important; }
@@ -2636,6 +2687,32 @@ export default function Dashboard() {
           </div>
         </section>
 
+        <section style={{ display: activeTab === 'threads' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '18px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '14px' }} className="dashboard-panel dashboard-tab-surface dashboard-tab-surface--threads">
+          <div className="dashboard-tab-surface-head">
+            <div>
+              <div className="dashboard-tab-surface-eyebrow dashboard-tab-surface-eyebrow--threads">Your spaces</div>
+              <div className="dashboard-tab-surface-title dashboard-tab-surface-title--threads">Threads</div>
+            </div>
+            <div style={{ fontSize: '11px', color: theme.textMuted, fontWeight: 700, padding: '8px 12px', borderRadius: '999px', border: '1px solid rgba(34,211,238,0.28)', background: 'rgba(34,211,238,0.08)' }}>
+              {`${(chatBootstrap.groups || []).filter((group) => !group?.parentGroupId).length} active`}
+            </div>
+          </div>
+
+          <ThreadsModule
+            groups={chatBootstrap.groups || []}
+            theme={theme}
+            username={user?.username || ''}
+            loading={threadsLoading && !threadsReady}
+            onOpenThread={(group) => {
+              if (!group?.id) return;
+              router.push({ pathname: '/chat', query: { thread: group.id } });
+            }}
+            onCreateThread={() => router.push({ pathname: '/chat', query: { view: 'create' } })}
+            onJoinThread={() => router.push({ pathname: '/chat', query: { view: 'join' } })}
+            onOpenFullChat={() => router.push('/chat')}
+          />
+        </section>
+
         <section style={{ display: activeTab === 'posts' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '18px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '14px' }} className="dashboard-panel dashboard-tab-surface dashboard-tab-surface--posts">
           <div className="dashboard-tab-surface-head">
             <div>
@@ -2767,7 +2844,7 @@ export default function Dashboard() {
         activeId={activeTab}
         items={[
           { id: 'home', label: 'Home', icon: '🏠', onClick: () => { setActiveTab('home'); if (router.isReady) router.push({ pathname: '/dashboard', query: { tab: 'home' } }, undefined, { shallow: true }); } },
-          { id: 'chat', label: 'Threads', icon: '🧵', href: '/chat' },
+          { id: 'threads', label: 'Threads', icon: '🧵', onClick: () => { setActiveTab('threads'); if (router.isReady) router.push({ pathname: '/dashboard', query: { tab: 'threads' } }, undefined, { shallow: true }); } },
           { id: 'posts', label: 'Posts', icon: '📷', onClick: () => { setActiveTab('posts'); if (router.isReady) router.push({ pathname: '/dashboard', query: { tab: 'posts' } }, undefined, { shallow: true }); } },
           { id: 'buddies', label: 'Buddies', icon: '👥', onClick: () => { setActiveTab('buddies'); if (router.isReady) router.push({ pathname: '/dashboard', query: { tab: 'buddies' } }, undefined, { shallow: true }); } },
           { id: 'nifty', label: 'Nifty', icon: '📊', href: '/nifty-strategies' },

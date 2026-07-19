@@ -17,6 +17,7 @@ type GroupSettingsRecord = {
     id: string;
     groupId: string;
     allowJoinByLink: boolean;
+    joinPassword: string | null;
     clearMessagesAfterHours: number | null;
     onlyAdminsCreateFolders: boolean;
     onlyAdminsBookmarkMessages: boolean;
@@ -186,6 +187,8 @@ type GroupView = {
     images: GroupImageView[];
     settings: {
         allowJoinByLink: boolean;
+        joinPassword: string | null;
+        requiresPassword: boolean;
         clearMessagesAfterHours: number | null;
         onlyAdminsCreateFolders: boolean;
         onlyAdminsBookmarkMessages: boolean;
@@ -289,6 +292,7 @@ type GroupSettingsRow = {
     id: string;
     group_id: string;
     allow_join_by_link: boolean;
+    join_password: string | null;
     clear_messages_after_hours: number | null;
     only_admins_create_folders: boolean;
     only_admins_bookmark_messages: boolean;
@@ -643,12 +647,22 @@ export class ChatService {
         }
     }
 
-    private defaultGroupSettings(groupId: string, actorUsername: string): GroupSettingsRecord {
+    private buildJoinPassword() {
+        return crypto.randomBytes(3).toString('hex');
+    }
+
+    private normalizeJoinPassword(value: unknown) {
+        const password = String(value || '').trim();
+        return password || null;
+    }
+
+    private defaultGroupSettings(groupId: string, actorUsername: string, joinPassword?: string | null): GroupSettingsRecord {
         const now = this.nowIso();
         return {
             id: this.buildId('group-settings'),
             groupId,
             allowJoinByLink: true,
+            joinPassword: this.normalizeJoinPassword(joinPassword) || this.buildJoinPassword(),
             clearMessagesAfterHours: null,
             onlyAdminsCreateFolders: false,
             onlyAdminsBookmarkMessages: false,
@@ -672,6 +686,7 @@ export class ChatService {
                 id: row.id,
                 groupId: row.group_id,
                 allowJoinByLink: row.allow_join_by_link,
+                joinPassword: row.join_password || null,
                 clearMessagesAfterHours: row.clear_messages_after_hours,
                 onlyAdminsCreateFolders: row.only_admins_create_folders,
                 onlyAdminsBookmarkMessages: row.only_admins_bookmark_messages,
@@ -855,6 +870,8 @@ export class ChatService {
                 })),
             settings: {
                 allowJoinByLink: settings?.allowJoinByLink ?? true,
+                joinPassword: settings?.joinPassword || null,
+                requiresPassword: Boolean(settings?.joinPassword),
                 clearMessagesAfterHours: settings?.clearMessagesAfterHours ?? null,
                 onlyAdminsCreateFolders: settings?.onlyAdminsCreateFolders ?? false,
                 onlyAdminsBookmarkMessages: settings?.onlyAdminsBookmarkMessages ?? false,
@@ -1007,6 +1024,7 @@ export class ChatService {
                     id TEXT PRIMARY KEY,
                     group_id TEXT NOT NULL UNIQUE,
                     allow_join_by_link BOOLEAN NOT NULL DEFAULT TRUE,
+                    join_password TEXT,
                     clear_messages_after_hours INTEGER,
                     only_admins_create_folders BOOLEAN NOT NULL DEFAULT FALSE,
                     only_admins_bookmark_messages BOOLEAN NOT NULL DEFAULT FALSE,
@@ -1014,6 +1032,8 @@ export class ChatService {
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
+
+                ALTER TABLE chat_group_settings ADD COLUMN IF NOT EXISTS join_password TEXT;
 
                 CREATE INDEX IF NOT EXISTS idx_chat_group_settings_group ON chat_group_settings(group_id);
 
@@ -1260,6 +1280,7 @@ export class ChatService {
                             id: settingsRow.id,
                             groupId: settingsRow.group_id,
                             allowJoinByLink: settingsRow.allow_join_by_link,
+                            joinPassword: settingsRow.join_password || null,
                             clearMessagesAfterHours: settingsRow.clear_messages_after_hours,
                             onlyAdminsCreateFolders: settingsRow.only_admins_create_folders,
                             onlyAdminsBookmarkMessages: settingsRow.only_admins_bookmark_messages,
@@ -1701,6 +1722,7 @@ export class ChatService {
             coverImageUrl?: string | null;
             coverS3Key?: string | null;
             coverMediaType?: 'image' | 'video' | null;
+            joinPassword?: string | null;
         },
     ) {
         const actor = this.normalizeUsername(actorUsername);
@@ -1759,7 +1781,7 @@ export class ChatService {
             ...memberUsernames.map((username) => this.buildMembershipRecord(groupId, username, 'member')),
             ...viewerUsernames.map((username) => this.buildMembershipRecord(groupId, username, 'viewer')),
         ];
-        const defaultSettings = this.defaultGroupSettings(groupId, actor);
+        const defaultSettings = this.defaultGroupSettings(groupId, actor, payload.joinPassword);
 
         if (this.hasDatabase()) {
             const pool = await this.ensureSchema();
@@ -1798,15 +1820,16 @@ export class ChatService {
             }
             await pool?.query(
                 `INSERT INTO chat_group_settings (
-                    id, group_id, allow_join_by_link, clear_messages_after_hours,
+                    id, group_id, allow_join_by_link, join_password, clear_messages_after_hours,
                     only_admins_create_folders, only_admins_bookmark_messages,
                     updated_by, created_at, updated_at
-                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
                  ON CONFLICT (group_id) DO NOTHING`,
                 [
                     defaultSettings.id,
                     defaultSettings.groupId,
                     defaultSettings.allowJoinByLink,
+                    defaultSettings.joinPassword,
                     defaultSettings.clearMessagesAfterHours,
                     defaultSettings.onlyAdminsCreateFolders,
                     defaultSettings.onlyAdminsBookmarkMessages,
@@ -1901,12 +1924,13 @@ export class ChatService {
         return this.getBootstrap(actor);
     }
 
-    async joinGroupByShareToken(actorUsername: string, shareToken: string) {
+    async joinGroupByShareToken(actorUsername: string, shareToken: string, joinPassword?: string) {
         const actor = this.normalizeUsername(actorUsername);
         const token = String(shareToken || '').trim();
         if (!token) {
             throw new BadRequestException('Group token is required.');
         }
+        const providedPassword = String(joinPassword || '').trim();
 
         if (this.hasDatabase()) {
             const pool = await this.ensureSchema();
@@ -1915,10 +1939,22 @@ export class ChatService {
             if (!group) {
                 throw new NotFoundException('Group link is not valid.');
             }
-            const settingsResult = await pool?.query('SELECT allow_join_by_link FROM chat_group_settings WHERE group_id = $1 LIMIT 1', [group.id]);
-            const allowJoinByLink = settingsResult?.rows?.[0]?.allow_join_by_link;
-            if (allowJoinByLink === false) {
+            const settingsResult = await pool?.query(
+                'SELECT allow_join_by_link, join_password FROM chat_group_settings WHERE group_id = $1 LIMIT 1',
+                [group.id],
+            );
+            const settingsRow = settingsResult?.rows?.[0];
+            if (settingsRow?.allow_join_by_link === false) {
                 throw new ForbiddenException('Joining by link is disabled by group owner.');
+            }
+            const requiredPassword = String(settingsRow?.join_password || '').trim();
+            if (requiredPassword) {
+                if (!providedPassword) {
+                    throw new ForbiddenException('Thread password is required to join.');
+                }
+                if (providedPassword !== requiredPassword) {
+                    throw new ForbiddenException('Incorrect thread password.');
+                }
             }
             const membership = this.buildMembershipRecord(group.id, actor, 'viewer');
             await pool?.query(
@@ -1938,6 +1974,15 @@ export class ChatService {
         if (settings && settings.allowJoinByLink === false) {
             throw new ForbiddenException('Joining by link is disabled by group owner.');
         }
+        const requiredPassword = String(settings?.joinPassword || '').trim();
+        if (requiredPassword) {
+            if (!providedPassword) {
+                throw new ForbiddenException('Thread password is required to join.');
+            }
+            if (providedPassword !== requiredPassword) {
+                throw new ForbiddenException('Incorrect thread password.');
+            }
+        }
         if (!this.memoryMembership(group.id, actor)) {
             this.memberships.push(this.buildMembershipRecord(group.id, actor, 'viewer'));
         }
@@ -1955,7 +2000,8 @@ export class ChatService {
             const result = await pool?.query(
                 `SELECT g.id, g.name, g.description, g.share_token,
                         g.cover_image_url, g.cover_s3_key, g.cover_media_type,
-                        COALESCE(s.allow_join_by_link, TRUE) AS allow_join_by_link
+                        COALESCE(s.allow_join_by_link, TRUE) AS allow_join_by_link,
+                        s.join_password
                  FROM chat_groups g
                  LEFT JOIN chat_group_settings s ON s.group_id = g.id
                  WHERE g.share_token = $1
@@ -1975,6 +2021,7 @@ export class ChatService {
                 coverS3Key: row.cover_s3_key || null,
                 coverMediaType: row.cover_media_type === 'video' ? 'video' : row.cover_media_type === 'image' ? 'image' : null,
                 allowJoinByLink: row.allow_join_by_link !== false,
+                requiresPassword: Boolean(String(row.join_password || '').trim()),
             };
         }
 
@@ -1992,6 +2039,7 @@ export class ChatService {
             coverS3Key: group.coverS3Key ?? null,
             coverMediaType: group.coverMediaType ?? null,
             allowJoinByLink: settings?.allowJoinByLink !== false,
+            requiresPassword: Boolean(String(settings?.joinPassword || '').trim()),
         };
     }
 
@@ -2000,6 +2048,7 @@ export class ChatService {
         groupId: string,
         payload: {
             allowJoinByLink?: boolean;
+            joinPassword?: string | null;
             clearMessagesAfterHours?: number | null;
             onlyAdminsCreateFolders?: boolean;
             onlyAdminsBookmarkMessages?: boolean;
@@ -2014,34 +2063,47 @@ export class ChatService {
         if (clearMessagesAfterHours != null && (!Number.isFinite(clearMessagesAfterHours) || clearMessagesAfterHours < 1)) {
             throw new BadRequestException('Message retention hours must be at least 1, or empty to keep forever.');
         }
+        const joinPassword = payload.joinPassword === undefined
+            ? undefined
+            : this.normalizeJoinPassword(payload.joinPassword);
 
         if (this.hasDatabase()) {
             const pool = await this.ensureSchema();
             const now = this.nowIso();
             await pool?.query(
                 `INSERT INTO chat_group_settings (
-                    id, group_id, allow_join_by_link, clear_messages_after_hours,
+                    id, group_id, allow_join_by_link, join_password, clear_messages_after_hours,
                     only_admins_create_folders, only_admins_bookmark_messages,
                     updated_by, created_at, updated_at
-                 ) VALUES ($1, $2, COALESCE($3, TRUE), $4, COALESCE($5, FALSE), COALESCE($6, FALSE), $7, $8, $8)
+                 ) VALUES ($1, $2, COALESCE($3, TRUE), COALESCE($4, $9), $5, COALESCE($6, FALSE), COALESCE($7, FALSE), $8, $10, $10)
                  ON CONFLICT (group_id) DO UPDATE
                  SET allow_join_by_link = COALESCE($3, chat_group_settings.allow_join_by_link),
-                     clear_messages_after_hours = $4,
-                     only_admins_create_folders = COALESCE($5, chat_group_settings.only_admins_create_folders),
-                     only_admins_bookmark_messages = COALESCE($6, chat_group_settings.only_admins_bookmark_messages),
-                     updated_by = $7,
-                     updated_at = $8`,
+                     join_password = COALESCE($4, chat_group_settings.join_password),
+                     clear_messages_after_hours = $5,
+                     only_admins_create_folders = COALESCE($6, chat_group_settings.only_admins_create_folders),
+                     only_admins_bookmark_messages = COALESCE($7, chat_group_settings.only_admins_bookmark_messages),
+                     updated_by = $8,
+                     updated_at = $10`,
                 [
                     this.buildId('group-settings'),
                     groupId,
                     payload.allowJoinByLink,
+                    joinPassword,
                     clearMessagesAfterHours,
                     payload.onlyAdminsCreateFolders,
                     payload.onlyAdminsBookmarkMessages,
                     actor,
+                    this.buildJoinPassword(),
                     now,
                 ],
             );
+            // Allow explicitly clearing password with empty string via joinPassword: ''
+            if (payload.joinPassword !== undefined && joinPassword === null) {
+                await pool?.query(
+                    `UPDATE chat_group_settings SET join_password = NULL, updated_by = $2, updated_at = $3 WHERE group_id = $1`,
+                    [groupId, actor, now],
+                );
+            }
             await this.applyRetentionPolicy(groupId);
             return this.getBootstrap(actor);
         }
@@ -2049,7 +2111,7 @@ export class ChatService {
         const existing = this.memoryGroupSettings(groupId);
         if (!existing) {
             this.groupSettings.push({
-                ...this.defaultGroupSettings(groupId, actor),
+                ...this.defaultGroupSettings(groupId, actor, joinPassword),
                 allowJoinByLink: payload.allowJoinByLink ?? true,
                 clearMessagesAfterHours,
                 onlyAdminsCreateFolders: payload.onlyAdminsCreateFolders ?? false,
@@ -2057,6 +2119,9 @@ export class ChatService {
             });
         } else {
             existing.allowJoinByLink = payload.allowJoinByLink ?? existing.allowJoinByLink;
+            if (payload.joinPassword !== undefined) {
+                existing.joinPassword = joinPassword;
+            }
             existing.clearMessagesAfterHours = clearMessagesAfterHours;
             existing.onlyAdminsCreateFolders = payload.onlyAdminsCreateFolders ?? existing.onlyAdminsCreateFolders;
             existing.onlyAdminsBookmarkMessages = payload.onlyAdminsBookmarkMessages ?? existing.onlyAdminsBookmarkMessages;

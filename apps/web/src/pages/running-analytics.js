@@ -588,7 +588,7 @@ function CollapsibleBlock({ title, children, theme, defaultOpen = false }) {
   );
 }
 
-function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, userId, onOpenMarathonPlan, goalRefreshKey, entries, runningShoes, onRunningShoesChange }) {
+function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, userId, onOpenMarathonPlan, goalRefreshKey, entries, runningShoes, onRunningShoesChange, stravaInsights }) {
   const noData = !runStats || runStats.totalRuns === 0;
   const insights = useMemo(() => buildRunningInsights(runRows), [runRows]);
   const paceDelta = insights.avgPace7 && insights.avgPace30
@@ -602,6 +602,70 @@ function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, us
       <CollapsibleBlock title="My running shoes" theme={theme} defaultOpen>
         <RunningShoesPanel userId={userId} shoes={runningShoes} onChange={onRunningShoesChange} theme={theme} />
       </CollapsibleBlock>
+
+      {stravaInsights?.connected ? (
+        <CollapsibleBlock title="Strava insights" theme={theme} defaultOpen>
+          <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
+            <div className="run-dash-mini-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 8 }}>
+              <MiniStat label="Strava runs" value={`${stravaInsights.runCount || 0}`} sub={`${stravaInsights.totalDistanceKm || 0} km total`} accent="#fc5200" theme={theme} />
+              <MiniStat label="Max speed" value={stravaInsights.maxSpeedKmh ? `${stravaInsights.maxSpeedKmh} km/h` : '--'} sub="from GPS" accent={theme.green} theme={theme} />
+              <MiniStat label="Best pace" value={stravaInsights.bestPaceMinPerKm ? fmtPace(stravaInsights.bestPaceMinPerKm) : '--'} sub={stravaInsights.bestPaceRun ? fmtDate(stravaInsights.bestPaceRun.date) : 'min/km'} accent={theme.cyan} theme={theme} />
+              <MiniStat label="Elevation" value={`${stravaInsights.elevationGainM || 0} m`} sub="total climb" accent={theme.purple} theme={theme} />
+              <MiniStat label="Avg speed" value={stravaInsights.avgSpeedKmh ? `${stravaInsights.avgSpeedKmh} km/h` : '--'} sub="moving average" accent={theme.orange} theme={theme} />
+              <MiniStat label="Longest run" value={stravaInsights.longestRunKm ? `${stravaInsights.longestRunKm} km` : '--'} sub={stravaInsights.longestRun ? fmtDate(stravaInsights.longestRun.date) : 'distance'} accent={theme.blue} theme={theme} />
+            </div>
+            {(stravaInsights.paceByMinuteBuckets || []).some((b) => b.count > 0) ? (
+              <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 18, padding: 14, display: 'grid', gap: 8 }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>Pace by minutes (Strava)</div>
+                {(stravaInsights.paceByMinuteBuckets || []).map((bucket) => (
+                  <div key={bucket.label} style={{ display: 'grid', gridTemplateColumns: '110px 1fr 40px', gap: 8, alignItems: 'center' }}>
+                    <span style={{ fontSize: 11, color: theme.textMuted, fontWeight: 700 }}>{bucket.label}</span>
+                    <div style={{ height: 8, borderRadius: 999, background: `${theme.cardBorder}`, overflow: 'hidden' }}>
+                      <div style={{ width: `${Math.min(100, (bucket.count / Math.max(1, stravaInsights.runCount)) * 100)}%`, height: '100%', background: 'linear-gradient(90deg,#fc5200,#f97316)' }} />
+                    </div>
+                    <span style={{ fontSize: 12, fontWeight: 800, color: theme.textHeading, textAlign: 'right' }}>{bucket.count}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {(stravaInsights.fastestRuns || []).length ? (
+              <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 18, overflow: 'hidden' }}>
+                <div style={{ padding: '14px 18px', fontWeight: 800, fontSize: 14, color: theme.textHeading, borderBottom: `1px solid ${theme.cardBorder}` }}>Highest max speeds (Strava)</div>
+                {stravaInsights.fastestRuns.slice(0, 6).map((run, index) => (
+                  <div key={`${run.id || run.date}-${index}`} style={{ display: 'grid', gridTemplateColumns: '28px 1fr auto auto', gap: 10, padding: '11px 18px', borderTop: index > 0 ? `1px solid ${theme.cardBorder}` : 'none', alignItems: 'center' }}>
+                    <span style={{ fontSize: 12, fontWeight: 800, color: index === 0 ? '#fc5200' : theme.textMuted }}>#{index + 1}</span>
+                    <span style={{ fontSize: 12, color: theme.textSecondary }}>{fmtDate(run.date)} · {run.name}</span>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: theme.green }}>{run.maxSpeedKmh} km/h</span>
+                    <span style={{ fontSize: 11, color: theme.textMuted }}>{run.distanceKm} km · {fmtPace(run.paceMinPerKm)}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {(stravaInsights.recentRuns || []).length ? (
+              <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 18, overflow: 'hidden' }}>
+                <div style={{ padding: '14px 18px', fontWeight: 800, fontSize: 14, color: theme.textHeading, borderBottom: `1px solid ${theme.cardBorder}` }}>Recent Strava runs</div>
+                {stravaInsights.recentRuns.slice(0, 8).map((run, index) => (
+                  <div key={`recent-${run.id || run.date}-${index}`} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 10, padding: '11px 18px', borderTop: index > 0 ? `1px solid ${theme.cardBorder}` : 'none', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: theme.textHeading }}>{run.name || 'Run'}</div>
+                      <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 2 }}>
+                        {fmtDate(run.date)} · {run.distanceKm} km · {fmtPace(run.paceMinPerKm)}
+                        {run.elevationGainM ? ` · ↑${run.elevationGainM}m` : ''}
+                        {run.maxSpeedKmh ? ` · max ${run.maxSpeedKmh} km/h` : ''}
+                      </div>
+                    </div>
+                    <span style={{ fontSize: 12, fontWeight: 800, color: '#fc5200' }}>{run.minutes} min</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </CollapsibleBlock>
+      ) : (
+        <div style={{ borderRadius: 18, border: `1px dashed ${theme.cardBorder}`, padding: 16, color: theme.textMuted, fontSize: 13 }}>
+          Connect Strava on the Wellness page to import GPS max speed, pace buckets, and elevation here.
+        </div>
+      )}
 
       {noData ? <EmptyState sport="Running" theme={theme} /> : (
       <>
@@ -838,6 +902,7 @@ export default function RunningAnalytics() {
   const [goalRefreshKey, setGoalRefreshKey] = useState(0);
   const [showOtherSports, setShowOtherSports] = useState(false);
   const [runningShoes, setRunningShoes] = useState([]);
+  const [stravaInsights, setStravaInsights] = useState(null);
 
   useEffect(() => {
     restoreUserSession(router, setUser);
@@ -854,6 +919,21 @@ export default function RunningAnalytics() {
     void loadRunningShoesFromServer(user.id).then((shoes) => {
       if (shoes?.length) setRunningShoes(shoes);
     });
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return undefined;
+    const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:3000';
+    let cancelled = false;
+    fetch(`${API_BASE}/wellness/strava/insights/${encodeURIComponent(user.id)}?days=90`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload) => {
+        if (!cancelled) setStravaInsights(payload);
+      })
+      .catch(() => {
+        if (!cancelled) setStravaInsights(null);
+      });
+    return () => { cancelled = true; };
   }, [user?.id]);
 
   const runStats = useMemo(() => (user?.id ? computeRunningStats(user.id) : null), [user?.id]);
@@ -1023,6 +1103,7 @@ export default function RunningAnalytics() {
             userId={user?.id}
             onOpenMarathonPlan={() => setShowMarathonModal(true)}
             goalRefreshKey={goalRefreshKey}
+            stravaInsights={stravaInsights}
           />
         )}
         {activeTab === 'badminton' && (

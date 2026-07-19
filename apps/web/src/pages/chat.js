@@ -1001,6 +1001,7 @@ export default function ChatPage() {
   const [buddySearchState, setBuddySearchState] = useState('idle');
   const [buddySearchError, setBuddySearchError] = useState('');
   const [inviteToken, setInviteToken] = useState('');
+  const [joinPasswordInput, setJoinPasswordInput] = useState('');
   const [statusMessage, setStatusMessage] = useState('Loading chat workspace...');
   const [connectionState, setConnectionState] = useState('connecting');
   const [groupForm, setGroupForm] = useState({
@@ -1019,6 +1020,7 @@ export default function ChatPage() {
   const [toasts, setToasts] = useState([]);
   const [groupSettingsForm, setGroupSettingsForm] = useState({
     allowJoinByLink: true,
+    joinPassword: '',
     clearMessagesAfterHours: '',
     onlyAdminsCreateFolders: false,
     onlyAdminsBookmarkMessages: false,
@@ -1551,6 +1553,10 @@ export default function ChatPage() {
         activeChatRef.current = nextChat;
         setActiveChat(nextChat);
       }
+    } else if (view === 'create') {
+      setShowCreateThreadModal(true);
+    } else if (view === 'join') {
+      setShowJoinThreadModal(true);
     }
 
     urlHydratedRef.current = true;
@@ -1768,6 +1774,7 @@ export default function ChatPage() {
     setVisibilityForm({ members, viewers });
     setGroupSettingsForm({
       allowJoinByLink: selectedGroup.settings?.allowJoinByLink !== false,
+      joinPassword: selectedGroup.settings?.joinPassword || '',
       clearMessagesAfterHours: selectedGroup.settings?.clearMessagesAfterHours == null ? '' : String(selectedGroup.settings.clearMessagesAfterHours),
       onlyAdminsCreateFolders: selectedGroup.settings?.onlyAdminsCreateFolders === true,
       onlyAdminsBookmarkMessages: selectedGroup.settings?.onlyAdminsBookmarkMessages === true,
@@ -1780,11 +1787,15 @@ export default function ChatPage() {
     const token = typeof router.query.groupInvite === 'string' ? router.query.groupInvite : '';
     if (!token) return;
 
+    const password = typeof router.query.joinPassword === 'string'
+      ? router.query.joinPassword
+      : (typeof window !== 'undefined' ? (sessionStorage.getItem(`cosmix-join-pw-${token}`) || '') : '');
+
     inviteHandledRef.current = true;
     fetch(`${chatApiBase}/groups/join-link`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ actorUsername: user.username, shareToken: token }),
+      body: JSON.stringify({ actorUsername: user.username, shareToken: token, joinPassword: password }),
     })
       .then(readJsonResponse)
       .then((payload) => {
@@ -2019,7 +2030,7 @@ export default function ChatPage() {
         setShowSidebar(false);
         setActivePanelTab('');
       }
-      reportStatus('Thread created. Copy or share the invite link!');
+      reportStatus('Thread created. Share the invite link and password from Invite.');
     } catch (error) {
       reportError(error.message || 'Unable to create thread.');
     } finally {
@@ -2063,12 +2074,14 @@ export default function ChatPage() {
       const payload = await submitJson('/groups/join-link', 'POST', {
         actorUsername: user.username,
         shareToken: inviteToken.trim(),
+        joinPassword: joinPasswordInput.trim(),
       });
       const joinedGroup = payload.groups.find((group) => group.shareToken === inviteToken.trim());
       if (joinedGroup) {
         selectChat({ type: 'group', id: joinedGroup.id, name: joinedGroup.name, label: joinedGroup.name });
       }
       setInviteToken('');
+      setJoinPasswordInput('');
       setShowJoinThreadModal(false);
       reportStatus('Invite link accepted.');
     } catch (error) {
@@ -2181,6 +2194,7 @@ export default function ChatPage() {
       await submitJson(`/groups/${selectedGroup.id}/settings`, 'PUT', {
         actorUsername: user.username,
         allowJoinByLink: groupSettingsForm.allowJoinByLink,
+        joinPassword: groupSettingsForm.joinPassword,
         clearMessagesAfterHours: groupSettingsForm.clearMessagesAfterHours === '' ? null : Number(groupSettingsForm.clearMessagesAfterHours),
         onlyAdminsCreateFolders: groupSettingsForm.onlyAdminsCreateFolders,
         onlyAdminsBookmarkMessages: groupSettingsForm.onlyAdminsBookmarkMessages,
@@ -2445,7 +2459,9 @@ export default function ChatPage() {
   function openWhatsAppShare() {
     if (!selectedGroup || typeof window === 'undefined') return;
     const inviteUrl = new URL(`/j/${encodeURIComponent(String(selectedGroup.shareToken || '').trim())}`, window.location.origin).toString();
-    const message = `${selectedGroup.name}${selectedGroup.description ? ` — ${selectedGroup.description}` : ''}\nJoin our thread on Cosmix:\n${inviteUrl}`;
+    const password = String(selectedGroup.settings?.joinPassword || '').trim();
+    const passwordLine = password ? `\nThread password: ${password}` : '';
+    const message = `${selectedGroup.name}${selectedGroup.description ? ` — ${selectedGroup.description}` : ''}\nJoin our thread on Cosmix:\n${inviteUrl}${passwordLine}`;
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer');
   }
 
@@ -2675,22 +2691,37 @@ export default function ChatPage() {
               readOnly
               onFocus={(event) => event.target.select()}
             />
+            {selectedGroup.settings?.joinPassword ? (
+              <div style={{ display: 'grid', gap: 6 }}>
+                <p style={styles.label}>Thread password (share with invite)</p>
+                <input
+                  style={{ ...styles.input, fontFamily: 'ui-monospace, monospace', letterSpacing: '0.08em' }}
+                  value={selectedGroup.settings.joinPassword}
+                  readOnly
+                  onFocus={(event) => event.target.select()}
+                />
+              </div>
+            ) : (
+              <p style={styles.helperText}>Set a join password in Security so only invited people can enter.</p>
+            )}
             <button
               type="button"
               style={styles.btn}
               onClick={async () => {
                 try {
-                  await copyText(inviteUrl);
-                  reportStatus('Invite URL copied.');
+                  const password = String(selectedGroup.settings?.joinPassword || '').trim();
+                  const text = password ? `${inviteUrl}\nPassword: ${password}` : inviteUrl;
+                  await copyText(text);
+                  reportStatus(password ? 'Invite URL + password copied.' : 'Invite URL copied.');
                 } catch (error) {
                   reportError(error.message || 'Copy failed.');
                 }
               }}
             >
-              📋 Copy URL Only
+              📋 Copy invite{selectedGroup.settings?.joinPassword ? ' + password' : ''}
             </button>
             <button type="button" style={{ ...styles.btn, background: '#25D366', border: 'none', color: '#fff' }} onClick={openWhatsAppShare}>
-              💬 Share URL on WhatsApp
+              💬 Share on WhatsApp
             </button>
             {callUrl ? (
               <>
@@ -2784,6 +2815,15 @@ export default function ChatPage() {
             <input type="checkbox" checked={groupSettingsForm.allowJoinByLink} onChange={(e) => setGroupSettingsForm((p) => ({ ...p, allowJoinByLink: e.target.checked }))} />
             {' '}Allow join by link
           </label>
+          <p style={styles.label}>Join password</p>
+          <input
+            style={styles.input}
+            type="text"
+            value={groupSettingsForm.joinPassword}
+            onChange={(e) => setGroupSettingsForm((p) => ({ ...p, joinPassword: e.target.value }))}
+            placeholder="Required password for invite link"
+          />
+          <p style={styles.helperText}>Share this password with the invite link. Clear the field and save to remove password protection.</p>
           <input style={styles.input} type="number" value={groupSettingsForm.clearMessagesAfterHours} onChange={(e) => setGroupSettingsForm((p) => ({ ...p, clearMessagesAfterHours: e.target.value }))} placeholder="Auto-clear after N hours (empty = never)" />
           <label style={styles.helperText}>
             <input type="checkbox" checked={groupSettingsForm.onlyAdminsCreateFolders} onChange={(e) => setGroupSettingsForm((p) => ({ ...p, onlyAdminsCreateFolders: e.target.checked }))} />
@@ -3046,14 +3086,15 @@ export default function ChatPage() {
               onClick={async () => {
                 try {
                   const inviteUrl = new URL(`/j/${encodeURIComponent(String(selectedGroup.shareToken || '').trim())}`, window.location.origin).toString();
-                  await copyText(inviteUrl);
-                  reportStatus('Thread invite link copied.');
+                  const password = String(selectedGroup.settings?.joinPassword || '').trim();
+                  await copyText(password ? `${inviteUrl}\nPassword: ${password}` : inviteUrl);
+                  reportStatus(password ? 'Invite link + password copied.' : 'Thread invite link copied.');
                 } catch (error) {
                   reportError(error.message || 'Copy failed.');
                 }
               }}
             >
-              Copy join link
+              Copy join link{selectedGroup.settings?.joinPassword ? ' + password' : ''}
             </button>
           </div>
         ) : null}
@@ -3501,6 +3542,13 @@ export default function ChatPage() {
               <button type="button" style={styles.modalCloseBtn} aria-label="Close" onClick={() => setShowJoinThreadModal(false)}>✕</button>
             </div>
             <input style={styles.input} value={inviteToken} onChange={(e) => setInviteToken(e.target.value)} placeholder="Paste thread invite token" autoFocus />
+            <input
+              style={styles.input}
+              type="password"
+              value={joinPasswordInput}
+              onChange={(e) => setJoinPasswordInput(e.target.value)}
+              placeholder="Thread password (if required)"
+            />
             <button type="submit" style={styles.btn}>Join Thread</button>
           </form>
         </div>
