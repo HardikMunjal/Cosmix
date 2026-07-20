@@ -1033,6 +1033,111 @@ export class WellnessStorageService {
     return this.sortEntries([...preserved, ...mergedIncoming, ...Array.from(incomingByDate.values()).filter(() => false)]);
   }
 
+  private static readonly STRAVA_ACTIVITY_FIELDS = [
+    'runningDistanceKm',
+    'runningMinutes',
+    'walkingDistanceKm',
+    'walkingMinutes',
+    'swimmingMinutes',
+    'cyclingDistanceKm',
+    'cyclingMinutes',
+    'exerciseMinutes',
+    'yogaMinutes',
+    'footballMinutes',
+    'badmintonMinutes',
+    'estimatedSteps',
+  ] as const;
+
+  private mergeStravaDeltaIntoEntry(
+    existing: WellnessEntry,
+    delta: WellnessEntry,
+    activePlanId?: string | null,
+  ): WellnessEntry {
+    const merged: WellnessEntry = { ...existing };
+    for (const field of WellnessStorageService.STRAVA_ACTIVITY_FIELDS) {
+      const existingValue = Number(existing[field] || 0);
+      const deltaValue = Number(delta[field] || 0);
+      if (field.includes('Km')) {
+        merged[field] = Number((existingValue + deltaValue).toFixed(2));
+      } else {
+        merged[field] = existingValue + deltaValue;
+      }
+    }
+
+    const existingIds = Array.isArray(existing.stravaActivityIds) ? existing.stravaActivityIds : [];
+    const deltaIds = Array.isArray(delta.stravaActivityIds) ? delta.stravaActivityIds : [];
+    merged.stravaActivityIds = [...new Set([...existingIds, ...deltaIds].map((id) => Number(id)).filter((id) => id > 0))];
+    merged.stravaRuns = [...(Array.isArray(existing.stravaRuns) ? existing.stravaRuns : []), ...(Array.isArray(delta.stravaRuns) ? delta.stravaRuns : [])];
+
+    const existingHrWeight = Number(existing.runningMinutes || 0) + Number(existing.walkingMinutes || 0);
+    const deltaHrWeight = Number(delta.runningMinutes || 0) + Number(delta.walkingMinutes || 0);
+    const existingAvgHr = Number(existing.stravaAvgHeartRate || 0);
+    const deltaAvgHr = Number(delta.stravaAvgHeartRate || 0);
+    const totalHrWeight = existingHrWeight + deltaHrWeight;
+    if (totalHrWeight > 0 && (existingAvgHr || deltaAvgHr)) {
+      merged.stravaAvgHeartRate = Math.round(
+        ((existingAvgHr * existingHrWeight) + (deltaAvgHr * deltaHrWeight)) / totalHrWeight,
+      );
+    } else {
+      merged.stravaAvgHeartRate = delta.stravaAvgHeartRate || existing.stravaAvgHeartRate || null;
+    }
+    merged.stravaMaxHeartRate = Math.max(
+      Number(existing.stravaMaxHeartRate || 0),
+      Number(delta.stravaMaxHeartRate || 0),
+    ) || null;
+
+    merged.source = existing.source && existing.source !== 'strava' ? 'mixed' : 'strava';
+    merged.updatedAt = this.nowIso();
+    return this.normalizeEntryRecord(merged, activePlanId ?? existing.planId ?? null);
+  }
+
+  async importStravaEntries(userId: string, deltaEntries: WellnessEntry[]): Promise<{ state: WellnessState; newDays: number }> {
+    if (!deltaEntries.length) {
+      const state = await this.load(userId);
+      return { state, newDays: 0 };
+    }
+
+    const [store, scoringRules] = await Promise.all([this.loadStore(userId), this.loadScoringRules()]);
+    const normalizedStore = this.normalizeStore(store);
+    const activePlan = this.activePlanForStore(normalizedStore);
+    const activePlanId = activePlan?.id || null;
+    const entries = [...normalizedStore.entries];
+    let newDays = 0;
+
+    for (const delta of deltaEntries) {
+      const date = this.normalizeDate(delta.date);
+      const existingIndex = entries.findIndex((entry) => (
+        entry.date === date
+        && entry.status !== 'inactive'
+        && (activePlanId ? entry.planId === activePlanId : !entry.planId)
+      ));
+
+      if (existingIndex >= 0) {
+        entries[existingIndex] = this.mergeStravaDeltaIntoEntry(entries[existingIndex], delta, activePlanId);
+      } else {
+        entries.push(this.normalizeEntryRecord({
+          ...delta,
+          date,
+          planId: activePlanId,
+          status: 'active',
+        }, activePlanId));
+      }
+      newDays += 1;
+    }
+
+    const nextStore = this.normalizeStore({
+      ...normalizedStore,
+      entries: this.sortEntries(entries),
+      updatedAt: this.nowIso(),
+    });
+    const derived = this.deriveScoresWithCache(nextStore, scoringRules);
+    await this.persistStore(userId, derived.store);
+    return {
+      state: this.buildPublicState(derived.store, scoringRules),
+      newDays,
+    };
+  }
+
   async load(userId: string): Promise<WellnessState> {
     const [store, scoringRules] = await Promise.all([this.loadStore(userId), this.loadScoringRules()]);
     const normalizedStore = this.normalizeStore(store);

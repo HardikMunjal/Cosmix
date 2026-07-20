@@ -223,6 +223,32 @@ export class StravaService {
     return new Date().toISOString().slice(0, 10);
   }
 
+  private normalizeActivityType(type: string): string {
+    const normalized = String(type || '').toLowerCase();
+    if (normalized === 'trailrun' || normalized === 'virtualrun') return 'run';
+    if (normalized === 'hike') return 'walk';
+    return normalized;
+  }
+
+  collectKnownActivityIds(entries: any[] = []): Set<number> {
+    const ids = new Set<number>();
+    for (const entry of entries) {
+      for (const id of entry?.stravaActivityIds || []) {
+        const numeric = Number(id);
+        if (Number.isFinite(numeric) && numeric > 0) ids.add(numeric);
+      }
+    }
+    return ids;
+  }
+
+  filterNewActivities(activities: any[] = [], knownIds: Set<number>) {
+    const newActivities = activities.filter((activity) => !knownIds.has(Number(activity?.id)));
+    return {
+      newActivities,
+      skipped: Math.max(0, activities.length - newActivities.length),
+    };
+  }
+
   private summarizeRun(activity: any) {
     const distanceM = Number(activity.distance || 0);
     const movingSec = Number(activity.moving_time || 0);
@@ -261,7 +287,7 @@ export class StravaService {
     const fields: Record<string, number> = {};
 
     for (const a of activities) {
-      const type = (a.type || '').toLowerCase();
+      const type = this.normalizeActivityType(a.type);
       const distKm = round((a.distance || 0) / 1000, 2);
       const mins = Math.round((a.moving_time || 0) / 60);
 
@@ -287,7 +313,7 @@ export class StravaService {
     const byDate = new Map<string, any>();
 
     for (const activity of activities) {
-      const type = String(activity.type || '').toLowerCase();
+      const type = this.normalizeActivityType(activity.type);
       const date = this.activityLocalDate(activity);
       const current = byDate.get(date) || {
         date,
@@ -302,14 +328,34 @@ export class StravaService {
         yogaMinutes: 0,
         footballMinutes: 0,
         badmintonMinutes: 0,
+        stravaAvgHeartRate: null as number | null,
+        stravaMaxHeartRate: null as number | null,
+        estimatedSteps: 0,
+        _hrWeightMins: 0,
         source: 'strava',
-        stravaActivityIds: [],
-        stravaRuns: [],
+        stravaActivityIds: [] as number[],
+        stravaRuns: [] as any[],
       };
 
       const distKm = round((activity.distance || 0) / 1000, 2);
       const mins = Math.round((activity.moving_time || 0) / 60);
-      current.stravaActivityIds.push(activity.id);
+      const activityId = Number(activity.id);
+      if (Number.isFinite(activityId) && activityId > 0) current.stravaActivityIds.push(activityId);
+
+      const avgHr = activity.average_heartrate ? round(Number(activity.average_heartrate), 0) : null;
+      const maxHr = activity.max_heartrate ? round(Number(activity.max_heartrate), 0) : null;
+      if (avgHr && mins > 0) {
+        const prevWeight = Number(current._hrWeightMins || 0);
+        const prevAvg = Number(current.stravaAvgHeartRate || 0);
+        const nextWeight = prevWeight + mins;
+        current.stravaAvgHeartRate = nextWeight > 0
+          ? Math.round(((prevAvg * prevWeight) + (avgHr * mins)) / nextWeight)
+          : avgHr;
+        current._hrWeightMins = nextWeight;
+      }
+      if (maxHr) {
+        current.stravaMaxHeartRate = Math.max(Number(current.stravaMaxHeartRate || 0), maxHr) || maxHr;
+      }
 
       if (type === 'run') {
         current.runningDistanceKm = round(current.runningDistanceKm + distKm, 2);
@@ -332,7 +378,20 @@ export class StravaService {
       byDate.set(date, current);
     }
 
-    return [...byDate.values()].sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    return [...byDate.values()]
+      .map((entry) => {
+        const estimatedSteps = Math.round(
+          (Number(entry.walkingDistanceKm || 0) + Number(entry.runningDistanceKm || 0)) * 1312,
+        );
+        const { _hrWeightMins, ...rest } = entry;
+        return {
+          ...rest,
+          estimatedSteps,
+          stravaAvgHeartRate: rest.stravaAvgHeartRate || null,
+          stravaMaxHeartRate: rest.stravaMaxHeartRate || null,
+        };
+      })
+      .sort((a, b) => String(b.date).localeCompare(String(a.date)));
   }
 
   buildRunInsights(activities: any[] = []) {
@@ -354,6 +413,8 @@ export class StravaService {
         bestPaceMinPerKm: null,
         longestRunKm: null,
         elevationGainM: 0,
+        avgHeartRate: null,
+        maxHeartRate: null,
         recentRuns: [],
         fastestRuns: [],
         paceByMinuteBuckets: [],
@@ -368,6 +429,13 @@ export class StravaService {
     const bestPaceRun = [...runs].sort((a, b) => (a.paceMinPerKm || 999) - (b.paceMinPerKm || 999))[0];
     const longestRun = [...runs].sort((a, b) => b.distanceKm - a.distanceKm)[0];
     const elevationGainM = round(runs.reduce((sum, run) => sum + (run.elevationGainM || 0), 0), 1);
+    const hrRuns = runs.filter((run) => run.avgHeartrate || run.maxHeartrate);
+    const avgHeartRate = hrRuns.length
+      ? Math.round(hrRuns.reduce((sum, run) => sum + Number(run.avgHeartrate || 0), 0) / hrRuns.length)
+      : null;
+    const maxHeartRate = hrRuns.length
+      ? Math.max(...hrRuns.map((run) => Number(run.maxHeartrate || 0)))
+      : null;
 
     const paceByMinuteBuckets = [
       { label: 'Under 5:00', max: 5, count: 0 },
@@ -396,6 +464,8 @@ export class StravaService {
       longestRunKm: longestRun?.distanceKm || null,
       longestRun,
       elevationGainM,
+      avgHeartRate,
+      maxHeartRate,
       recentRuns: runs.slice(0, 12),
       fastestRuns: [...runs].sort((a, b) => (b.maxSpeedKmh || 0) - (a.maxSpeedKmh || 0)).slice(0, 8),
       paceByMinuteBuckets,

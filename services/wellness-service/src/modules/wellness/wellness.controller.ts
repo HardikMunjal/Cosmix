@@ -188,23 +188,35 @@ export class WellnessController {
   ) {
     const windowDays = Number(days) || 90;
     const activities = await this.stravaService.getRecentActivities(userId, windowDays);
+    const existingState = await this.storageService.load(userId);
+    const knownIds = this.stravaService.collectKnownActivityIds(existingState.entries || []);
+    const { newActivities, skipped } = this.stravaService.filterNewActivities(activities, knownIds);
     const fields = this.stravaService.mapToWellnessFields(
       activities.filter((activity) => {
         const date = String(activity.start_date_local || activity.start_date || '').slice(0, 10);
         return date === new Date().toISOString().slice(0, 10);
       }),
     );
-    const entries = this.stravaService.buildWellnessEntriesFromActivities(activities);
+    const entries = this.stravaService.buildWellnessEntriesFromActivities(newActivities);
     const insights = this.stravaService.buildRunInsights(activities);
 
     let imported = 0;
-    if (String(shouldImport || '1') !== '0' && entries.length) {
-      const state = await this.storageService.save(userId, { entries });
-      imported = Array.isArray(state?.entries) ? entries.length : 0;
+    let newActivitiesCount = newActivities.length;
+    let newDays = 0;
+    const alreadyUpToDate = newActivities.length === 0;
+
+    if (String(shouldImport || '1') !== '0' && newActivities.length) {
+      const result = await this.storageService.importStravaEntries(userId, entries);
+      imported = result.newDays;
+      newDays = result.newDays;
     }
 
     return {
       activities: activities.length,
+      newActivities: newActivitiesCount,
+      skippedActivities: skipped,
+      newDays,
+      alreadyUpToDate,
       imported,
       fields,
       entries,

@@ -9,6 +9,9 @@ import { buildStrategySummary, formatCurrency } from '../lib/userInsights';
 import NotificationModule from '../modules/dashboard/NotificationModule';
 import PostFeedModule from '../modules/dashboard/PostFeedModule';
 import ThreadsModule from '../modules/dashboard/ThreadsModule';
+import ThreadWorkspaceModule from '../modules/dashboard/ThreadWorkspaceModule';
+import { runStravaAutoSync } from '../lib/stravaAutoSync';
+import { xhrUploadFormData } from '../lib/ThreadUploadProgress';
 import { ACTIVITY_METRIC_DEFS as activityMetricDefs, aggregateActivityTotals } from '../lib/activityMetrics';
 import { subscribeToWebPush } from '../lib/webPush';
 
@@ -1022,6 +1025,8 @@ export default function Dashboard() {
   const [chatBootstrap, setChatBootstrap] = useState({ incomingRequests: [], groups: [] });
   const [threadsLoading, setThreadsLoading] = useState(false);
   const [threadsReady, setThreadsReady] = useState(false);
+  const [selectedThreadId, setSelectedThreadId] = useState('');
+  const [stravaSyncMsg, setStravaSyncMsg] = useState('');
   const [activeTab, setActiveTab] = useState('home');
   const [wellnessLoading, setWellnessLoading] = useState(false);
   const [wellnessReady, setWellnessReady] = useState(false);
@@ -1074,10 +1079,28 @@ export default function Dashboard() {
     const tabParam = String(router.query.tab || 'home').toLowerCase();
     if (['home', 'threads', 'posts', 'buddies'].includes(tabParam)) {
       setActiveTab(tabParam);
-      return;
+    } else {
+      setActiveTab('home');
     }
-    setActiveTab('home');
-  }, [router.isReady, router.query.tab]);
+    const threadParam = String(router.query.thread || '').trim();
+    setSelectedThreadId(threadParam);
+  }, [router.isReady, router.query.tab, router.query.thread]);
+
+  const selectedThread = useMemo(
+    () => (chatBootstrap.groups || []).find((group) => group.id === selectedThreadId) || null,
+    [chatBootstrap.groups, selectedThreadId],
+  );
+
+  const openDashboardThread = useCallback((group) => {
+    if (!group?.id) return;
+    setSelectedThreadId(group.id);
+    router.push({ pathname: '/dashboard', query: { tab: 'threads', thread: group.id } }, undefined, { shallow: true });
+  }, [router]);
+
+  const closeDashboardThread = useCallback(() => {
+    setSelectedThreadId('');
+    router.push({ pathname: '/dashboard', query: { tab: 'threads' } }, undefined, { shallow: true });
+  }, [router]);
 
   const loadStrategies = useCallback(async () => {
     setStrategiesLoading(true);
@@ -1147,6 +1170,155 @@ export default function Dashboard() {
       setThreadsReady(true);
     }
   }, [user]);
+
+  const handleCreateThreadFolder = useCallback(async (name, parentFolderId = null) => {
+    const thread = (chatBootstrap.groups || []).find((group) => group.id === selectedThreadId);
+    const actorUsername = String(user?.username || '').trim();
+    if (!thread?.id || !actorUsername || !name?.trim()) return;
+    await fetch(`/chat-api/chat/groups/${encodeURIComponent(thread.id)}/folders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        actorUsername,
+        name: name.trim(),
+        parentFolderId: parentFolderId || null,
+      }),
+    });
+    await loadThreadsBootstrap();
+  }, [chatBootstrap.groups, loadThreadsBootstrap, selectedThreadId, user?.username]);
+
+  const handleUploadToFolder = useCallback(async (files, folderId, reportProgress) => {
+    const thread = (chatBootstrap.groups || []).find((group) => group.id === selectedThreadId);
+    const actorUsername = String(user?.username || '').trim();
+    const list = Array.from(files || []);
+    if (!thread?.id || !actorUsername || !folderId || !list.length) return;
+
+    const folderName = (thread.folders || []).find((entry) => entry.id === folderId)?.name || '';
+
+    for (let index = 0; index < list.length; index += 1) {
+      const file = list[index];
+      reportProgress?.({
+        index,
+        percent: 2,
+        status: 'active',
+        phase: 'uploading',
+        message: `Uploading ${file.name}…`,
+      });
+
+      const formData = new FormData();
+      formData.append('files', file);
+      formData.append('username', actorUsername);
+      formData.append('groupId', thread.id);
+      if (folderName) formData.append('folderName', folderName);
+
+      let uploadPayload;
+      try {
+        uploadPayload = await xhrUploadFormData('/api/chat/group-image-upload', formData, (ratio) => {
+          reportProgress?.({
+            index,
+            percent: Math.round(8 + ratio * 62),
+            status: 'active',
+            phase: 'uploading',
+            message: `Sending ${file.name}… ${Math.round(ratio * 100)}%`,
+          });
+        });
+      } catch (error) {
+        reportProgress?.({
+          index,
+          percent: 100,
+          status: 'error',
+          phase: 'error',
+          message: error?.message || `Failed on ${file.name}`,
+        });
+        continue;
+      }
+
+      const uploads = Array.isArray(uploadPayload?.uploads) ? uploadPayload.uploads : [];
+      if (!uploads.length) {
+        reportProgress?.({
+          index,
+          percent: 100,
+          status: 'error',
+          phase: 'error',
+          message: `No upload returned for ${file.name}`,
+        });
+        continue;
+      }
+
+      for (const uploaded of uploads) {
+        reportProgress?.({
+          index,
+          percent: 78,
+          status: 'active',
+          phase: 'registering',
+          message: `Saving ${file.name} to album…`,
+        });
+
+        const imageResponse = await fetch(`/chat-api/chat/groups/${encodeURIComponent(thread.id)}/images`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            actorUsername,
+            imageUrl: uploaded.url,
+            s3Key: uploaded.key,
+            caption: '',
+            mediaType: uploaded.mediaType || 'image',
+          }),
+        });
+        const imagePayload = await imageResponse.json().catch(() => ({}));
+        if (!imageResponse.ok) {
+          reportProgress?.({
+            index,
+            percent: 100,
+            status: 'error',
+            phase: 'error',
+            message: imagePayload?.message || `Could not save ${file.name}`,
+          });
+          continue;
+        }
+
+        reportProgress?.({
+          index,
+          percent: 92,
+          status: 'active',
+          phase: 'linking',
+          message: `Linking ${file.name} to folder…`,
+        });
+
+        const refreshedGroup = (imagePayload.groups || []).find((group) => group.id === thread.id);
+        const image = (refreshedGroup?.images || []).find((entry) => entry.s3Key === uploaded.key);
+        if (!image?.id) {
+          reportProgress?.({
+            index,
+            percent: 100,
+            status: 'error',
+            phase: 'error',
+            message: `Saved ${file.name} but folder link failed`,
+          });
+          continue;
+        }
+
+        await fetch(`/chat-api/chat/groups/${encodeURIComponent(thread.id)}/folders/${encodeURIComponent(folderId)}/items`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            actorUsername,
+            imageId: image.id,
+          }),
+        });
+
+        reportProgress?.({
+          index,
+          percent: 100,
+          status: 'done',
+          phase: 'done',
+          message: `${file.name} uploaded`,
+        });
+      }
+    }
+
+    await loadThreadsBootstrap();
+  }, [chatBootstrap.groups, loadThreadsBootstrap, selectedThreadId, user?.username]);
 
   const loadBuddyTrendRows = useCallback(async () => {
     const selfUserId = resolveWellnessUserId(user);
@@ -1334,8 +1506,19 @@ export default function Dashboard() {
     if (!user) return undefined;
     loadStrategies();
     loadServerNotifications();
+    const uid = resolveWellnessUserId(user);
+    if (uid) {
+      void runStravaAutoSync({
+        userId: uid,
+        apiBase: API_BASE,
+        onMessage: setStravaSyncMsg,
+        onEntries: (_entries, payload) => {
+          if (payload) setWellnessData(payload);
+        },
+      });
+    }
     return undefined;
-  }, [user, loadStrategies, loadServerNotifications]);
+  }, [user, loadStrategies, loadServerNotifications, API_BASE]);
 
   useEffect(() => {
     if (!user) return undefined;
@@ -2698,19 +2881,31 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <ThreadsModule
-            groups={chatBootstrap.groups || []}
-            theme={theme}
-            username={user?.username || ''}
-            loading={threadsLoading && !threadsReady}
-            onOpenThread={(group) => {
-              if (!group?.id) return;
-              router.push({ pathname: '/chat', query: { thread: group.id } });
-            }}
-            onCreateThread={() => router.push({ pathname: '/chat', query: { view: 'create' } })}
-            onJoinThread={() => router.push({ pathname: '/chat', query: { view: 'join' } })}
-            onOpenFullChat={() => router.push('/chat')}
-          />
+          {stravaSyncMsg ? (
+            <div style={{ fontSize: 12, color: theme.textMuted, padding: '0 2px' }}>{stravaSyncMsg}</div>
+          ) : null}
+
+          {selectedThread ? (
+            <ThreadWorkspaceModule
+              thread={selectedThread}
+              theme={theme}
+              username={user?.username || ''}
+              onBack={closeDashboardThread}
+              onCreateFolder={handleCreateThreadFolder}
+              onUploadToFolder={handleUploadToFolder}
+              onRefresh={loadThreadsBootstrap}
+            />
+          ) : (
+            <ThreadsModule
+              groups={chatBootstrap.groups || []}
+              theme={theme}
+              username={user?.username || ''}
+              loading={threadsLoading && !threadsReady}
+              onOpenThread={openDashboardThread}
+              onCreateThread={() => router.push({ pathname: '/chat', query: { view: 'create' } })}
+              onJoinThread={() => router.push({ pathname: '/chat', query: { view: 'join' } })}
+            />
+          )}
         </section>
 
         <section style={{ display: activeTab === 'posts' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '18px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '14px' }} className="dashboard-panel dashboard-tab-surface dashboard-tab-surface--posts">

@@ -59,7 +59,6 @@ export default function ThreadsModule({
   onOpenThread,
   onCreateThread,
   onJoinThread,
-  onOpenFullChat,
 }) {
   const [query, setQuery] = useState('');
 
@@ -298,9 +297,6 @@ export default function ThreadsModule({
           </button>
           <button type="button" className="dashboard-threads-btn dashboard-threads-btn--ghost" onClick={onJoinThread}>
             Join
-          </button>
-          <button type="button" className="dashboard-threads-btn dashboard-threads-btn--ghost" onClick={onOpenFullChat}>
-            Open chat →
           </button>
         </div>
       </div>

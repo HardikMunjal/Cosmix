@@ -611,6 +611,7 @@ function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, us
               <MiniStat label="Max speed" value={stravaInsights.maxSpeedKmh ? `${stravaInsights.maxSpeedKmh} km/h` : '--'} sub="from GPS" accent={theme.green} theme={theme} />
               <MiniStat label="Best pace" value={stravaInsights.bestPaceMinPerKm ? fmtPace(stravaInsights.bestPaceMinPerKm) : '--'} sub={stravaInsights.bestPaceRun ? fmtDate(stravaInsights.bestPaceRun.date) : 'min/km'} accent={theme.cyan} theme={theme} />
               <MiniStat label="Elevation" value={`${stravaInsights.elevationGainM || 0} m`} sub="total climb" accent={theme.purple} theme={theme} />
+              <MiniStat label="Avg heart rate" value={stravaInsights.avgHeartRate ? `${stravaInsights.avgHeartRate} bpm` : '--'} sub={stravaInsights.maxHeartRate ? `max ${stravaInsights.maxHeartRate} bpm` : 'from Strava'} accent="#f43f5e" theme={theme} />
               <MiniStat label="Avg speed" value={stravaInsights.avgSpeedKmh ? `${stravaInsights.avgSpeedKmh} km/h` : '--'} sub="moving average" accent={theme.orange} theme={theme} />
               <MiniStat label="Longest run" value={stravaInsights.longestRunKm ? `${stravaInsights.longestRunKm} km` : '--'} sub={stravaInsights.longestRun ? fmtDate(stravaInsights.longestRun.date) : 'distance'} accent={theme.blue} theme={theme} />
             </div>

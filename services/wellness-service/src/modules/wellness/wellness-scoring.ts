@@ -31,6 +31,7 @@ export type WellnessScoringRules = {
 export const DEFAULT_SCORING_RULES: WellnessScoringRules = {
   activities: [
     { key: 'runningDistanceKm', label: 'Running', icon: '🏃', unit: 'km', physicalMultiplier: 0.9, physicalDivisor: 1, mentalMultiplier: 0.4, mentalDivisor: 1 },
+    { key: 'runningMinutes', label: 'Running time', icon: '🏃', unit: 'mins', physicalMultiplier: 0.5, physicalDivisor: 30, mentalMultiplier: 0.2, mentalDivisor: 30 },
     { key: 'cyclingDistanceKm', label: 'Cycling', icon: '🚴', unit: 'km', physicalMultiplier: 0.8, physicalDivisor: 1, mentalMultiplier: 0.3, mentalDivisor: 1 },
     { key: 'walkingDistanceKm', label: 'Walking distance', icon: '🚶', unit: 'km', physicalMultiplier: 0.3, physicalDivisor: 1, mentalMultiplier: 0, mentalDivisor: 1 },
     { key: 'walkingMinutes', label: 'Walking time', icon: '🚶', unit: 'mins', physicalMultiplier: 0, physicalDivisor: 1, mentalMultiplier: 0.25, mentalDivisor: 30 },

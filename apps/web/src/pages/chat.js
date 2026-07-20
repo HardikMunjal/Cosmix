@@ -1,7 +1,7 @@
 import { useRouter } from 'next/router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getCachedClientUser, logoutClientSession, persistClientUser } from '../lib/auth-client';
-import { ChatAlbumGallery } from '../lib/ChatAlbumGallery';
+import { ChatAlbumGallery, buildFolderTree } from '../lib/ChatAlbumGallery';
 import { ChatHomeHub } from '../lib/ChatHomeHub';
 import { MobileBottomNav } from '../lib/MobileNav';
 import { subscribeToWebPush } from '../lib/webPush';
@@ -1041,8 +1041,6 @@ export default function ChatPage() {
   const [showCreateThreadModal, setShowCreateThreadModal] = useState(false);
   const [showJoinThreadModal, setShowJoinThreadModal] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
-  const [showThreadModeModal, setShowThreadModeModal] = useState(false);
-  const [threadModePickerGroup, setThreadModePickerGroup] = useState(null);
   const [bootstrapReady, setBootstrapReady] = useState(false);
   const [callParticipants, setCallParticipants] = useState([]);
   const [joinedCallRoom, setJoinedCallRoom] = useState('');
@@ -2390,21 +2388,65 @@ export default function ChatPage() {
     setShowSidebar(false);
   }
 
-  function promptThreadDestination(group) {
-    setThreadModePickerGroup(group);
-    setShowThreadModeModal(true);
+  function openThread(group, mode = null) {
+    enterThread(group, mode === 'albums' ? 'albums' : 'chat');
   }
 
-  function openThread(group, mode = null) {
-    if (mode === null) {
-      if (isNarrowScreen) {
-        promptThreadDestination(group);
-        return;
-      }
-      enterThread(group, 'chat');
-      return;
-    }
-    enterThread(group, mode);
+  function renderThreadBrowseStrip() {
+    if (!selectedGroup || activeChat?.type !== 'group' || showChatHub) return null;
+    const rootFolders = buildFolderTree(selectedGroup.folders || []).get(null) || [];
+    if (!childGroups.length && !rootFolders.length) return null;
+
+    return (
+      <div className="chat-thread-browse" style={{ padding: '12px 14px', borderBottom: `1px solid ${theme.cardBorder}`, background: theme.panelBg, display: 'grid', gap: '12px' }}>
+        {childGroups.length ? (
+          <div style={styles.threadFolderScroll}>
+            <div style={styles.threadFolderHeader}>
+              <div style={styles.threadFolderTitle}>Sub-threads</div>
+              <div style={styles.threadFolderSubtitle}>Open a nested thread without leaving this space</div>
+            </div>
+            <div style={styles.threadFolderGrid}>
+              {childGroups.map((group) => (
+                <button key={group.id} type="button" style={styles.threadFolderCard} onClick={() => selectGroup(group)}>
+                  <div style={styles.threadFolderCover}>🧵</div>
+                  <div style={styles.threadFolderBody}>
+                    <div style={styles.threadFolderName}>{group.name}</div>
+                    <div style={styles.threadFolderMeta}>{(group.memberships || []).length} members</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {rootFolders.length ? (
+          <div style={styles.threadFolderScroll}>
+            <div style={styles.threadFolderHeader}>
+              <div style={styles.threadFolderTitle}>Album folders</div>
+              <div style={styles.threadFolderSubtitle}>Browse photos and create nested folders from Albums</div>
+            </div>
+            <div style={styles.threadFolderGrid}>
+              {rootFolders.map((folder) => (
+                <button
+                  key={folder.id}
+                  type="button"
+                  style={styles.threadFolderCard}
+                  onClick={() => {
+                    setActivePanelTab('albums');
+                    setSelectedUploadFolderId(folder.id);
+                  }}
+                >
+                  <div style={styles.threadFolderCover}>📁</div>
+                  <div style={styles.threadFolderBody}>
+                    <div style={styles.threadFolderName}>{folder.name}</div>
+                    <div style={styles.threadFolderMeta}>{(folder.items || []).length} items</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
   }
 
   function selectGroup(group) {
@@ -3185,6 +3227,8 @@ export default function ChatPage() {
           ) : null}
 
           {!showVideoCall && !showChatHub && !mobilePanelOpen && (!isAlbumsPanelOpen || !isNarrowScreen) ? (
+          <>
+          {renderThreadBrowseStrip()}
           <div ref={messagesContainerRef} className={`chat-messages${activeChat ? ' chat-messages--thread' : ''}`} style={styles.messages}>
             {visibleMessages.length ? visibleMessages.map((message) => {
               const isOwn = message.user === user?.username;
@@ -3265,6 +3309,7 @@ export default function ChatPage() {
             )}
             <div ref={messagesEndRef} />
           </div>
+          </>
           ) : null}
 
           {activePanelTab && selectedGroup && activePanelTab !== 'invite' ? (
@@ -3468,38 +3513,6 @@ export default function ChatPage() {
             </p>
             <button type="submit" style={{ ...styles.btn, marginTop: '4px' }} disabled={creatingThread}>{creatingThread ? 'Creating…' : 'Create Thread'}</button>
           </form>
-        </div>
-      ) : null}
-
-      {showThreadModeModal && threadModePickerGroup && isNarrowScreen ? (
-        <div style={styles.modalBackdrop} onClick={() => { setShowThreadModeModal(false); setThreadModePickerGroup(null); }} role="presentation">
-          <div
-            style={styles.modalPanel}
-            onClick={(event) => event.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="thread-mode-title"
-          >
-            <div style={styles.modalHead}>
-              <div>
-                <h2 id="thread-mode-title" style={styles.modalTitle}>{threadModePickerGroup.name}</h2>
-                <p style={{ ...styles.helperText, margin: '6px 0 0' }}>Open messages or photo albums for this thread.</p>
-              </div>
-              <button type="button" style={styles.modalCloseBtn} aria-label="Close" onClick={() => { setShowThreadModeModal(false); setThreadModePickerGroup(null); }}>✕</button>
-            </div>
-            <div className="chat-thread-mode-picker">
-              <button type="button" className="chat-thread-mode-picker-btn" onClick={() => enterThread(threadModePickerGroup, 'chat')}>
-                <span className="chat-thread-mode-picker-icon">💬</span>
-                <span className="chat-thread-mode-picker-label">Chat</span>
-                <span className="chat-thread-mode-picker-hint">Group messages</span>
-              </button>
-              <button type="button" className="chat-thread-mode-picker-btn" onClick={() => enterThread(threadModePickerGroup, 'albums')}>
-                <span className="chat-thread-mode-picker-icon">📸</span>
-                <span className="chat-thread-mode-picker-label">Albums</span>
-                <span className="chat-thread-mode-picker-hint">Photos & folders</span>
-              </button>
-            </div>
-          </div>
         </div>
       ) : null}
 
