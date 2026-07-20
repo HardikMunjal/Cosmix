@@ -19,13 +19,8 @@ if (-not (Test-Path -LiteralPath $KeyPath)) {
     throw "SSH key not found: $KeyPath"
 }
 
-$serviceList = ($Services -join ' ')
-$noCacheVal = if ($NoCache) { '1' } else { '' }
-$remote = @"
-export COSMIX_DEPLOY_SERVICES="$serviceList";
-export COSMIX_NO_CACHE="$noCacheVal";
-cd /opt/cosmix && git pull origin main && bash scripts/ec2-deploy-remote.sh $Step
-"@ -replace "`r`n", "`n"
+$noCacheVal = if ($NoCache) { '1' } else { '0' }
+$remote = "cd /opt/cosmix && git pull origin main && COSMIX_NO_CACHE=$noCacheVal bash scripts/ec2-deploy-remote.sh $Step"
 
 & $ssh -i $KeyPath -o ServerAliveInterval=30 $target "bash -lc '$remote'"
 if ($LASTEXITCODE -ne 0) {
