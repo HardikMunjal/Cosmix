@@ -264,6 +264,52 @@ function hasScorableData(entry) {
   return SCORE_FIELDS.some((field) => Number(entry[field] || 0) > 0);
 }
 
+function mergeEntryForScoring(formEntry, storedEntry) {
+  if (!storedEntry && !formEntry) return null;
+  if (!storedEntry) return formEntry;
+  if (!formEntry) return storedEntry;
+  const merged = { ...storedEntry, ...formEntry };
+  SCORE_FIELDS.forEach((field) => {
+    const formValue = Number(formEntry[field] || 0);
+    const storedValue = Number(storedEntry[field] || 0);
+    merged[field] = Math.max(formValue, storedValue);
+  });
+  if (!merged.runningShoeId && storedEntry.runningShoeId) merged.runningShoeId = storedEntry.runningShoeId;
+  if (!merged.stravaAvgHeartRate && storedEntry.stravaAvgHeartRate) merged.stravaAvgHeartRate = storedEntry.stravaAvgHeartRate;
+  if (!merged.heartRateAvg && (storedEntry.heartRateAvg || storedEntry.stravaAvgHeartRate)) {
+    merged.heartRateAvg = storedEntry.heartRateAvg || storedEntry.stravaAvgHeartRate;
+  }
+  if (!merged.stravaRuns?.length && storedEntry.stravaRuns?.length) merged.stravaRuns = storedEntry.stravaRuns;
+  return merged;
+}
+
+function applyStravaFieldsToForm(prevForm, payloadEntries = [], fields = {}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const todayEntry = (payloadEntries || []).find((entry) => entry?.date === today) || null;
+  const updated = { ...prevForm };
+  Object.entries(fields || {}).forEach(([key, val]) => {
+    if (!updated[key] || updated[key] === 0) updated[key] = val;
+  });
+  if (todayEntry) {
+    SCORE_FIELDS.forEach((field) => {
+      const incoming = Number(todayEntry[field] || 0);
+      if (incoming > Number(updated[field] || 0)) updated[field] = incoming;
+    });
+    if (todayEntry.stravaAvgHeartRate || todayEntry.heartRateAvg) {
+      updated.stravaAvgHeartRate = todayEntry.stravaAvgHeartRate || todayEntry.heartRateAvg;
+      updated.heartRateAvg = todayEntry.heartRateAvg || todayEntry.stravaAvgHeartRate;
+    }
+    if (todayEntry.stravaMaxHeartRate || todayEntry.heartRateMax) {
+      updated.stravaMaxHeartRate = todayEntry.stravaMaxHeartRate || todayEntry.heartRateMax;
+      updated.heartRateMax = todayEntry.heartRateMax || todayEntry.stravaMaxHeartRate;
+    }
+    if (Array.isArray(todayEntry.stravaRuns) && todayEntry.stravaRuns.length) {
+      updated.stravaRuns = todayEntry.stravaRuns;
+    }
+  }
+  return updated;
+}
+
 function clearActivityFields(entry, activityConfig) {
   if (!entry || !activityConfig) return entry;
   const next = { ...entry };
@@ -571,14 +617,18 @@ export default function WellnessPage() {
         window.history.replaceState({}, '', window.location.pathname);
         if (stravaResult === 'ok') {
           setStravaConnected(true);
-          setStravaMsg('Strava connected! Syncing last 90 days...');
+          setStravaMsg('Strava connected! Importing full history + heart rate…');
           void runStravaAutoSync({
             userId: uid,
             apiBase: API_BASE,
             force: true,
+            full: true,
             onMessage: setStravaMsg,
             onEntries: (nextEntries) => {
-              if (Array.isArray(nextEntries)) setEntries(nextEntries);
+              if (Array.isArray(nextEntries)) {
+                setEntries(nextEntries);
+                setForm((prev) => applyStravaFieldsToForm(prev, nextEntries, {}));
+              }
             },
           });
         } else {
@@ -866,43 +916,54 @@ export default function WellnessPage() {
       .then(() => { setStravaConnected(false); setStravaMsg('Strava disconnected'); })
       .catch(() => {});
   }
-  function handleStravaSync() {
+  function handleStravaSync(options = {}) {
     const uid = userIdRef.current;
     if (!uid) return;
     setStravaLoading(true);
-    setStravaMsg('');
-    fetch(`${API_BASE}/wellness/strava/activities/${encodeURIComponent(uid)}?days=90&import=1`)
-      .then((r) => r.ok ? r.json() : null)
-      .then((d) => {
-        setStravaLoading(false);
-        if (!d) {
-          setStravaMsg('Sync failed');
-          return;
+    setStravaMsg(options.full ? 'Importing full Strava history…' : '');
+    const full = Boolean(options.full);
+    void runStravaAutoSync({
+      userId: uid,
+      apiBase: API_BASE,
+      force: true,
+      full,
+      onMessage: setStravaMsg,
+      onEntries: (nextEntries, data) => {
+        if (Array.isArray(nextEntries)) {
+          setEntries(nextEntries);
+          try {
+            localStorage.setItem(storageKey(uid, 'entries'), JSON.stringify(nextEntries));
+          } catch (_) { /* ignore */ }
         }
-        setStravaMsg(formatStravaSyncMessage(d));
-        if (d.fields && Object.keys(d.fields).length) {
-          setForm((prev) => {
-            const updated = { ...prev };
-            for (const [key, val] of Object.entries(d.fields)) {
-              if (!updated[key] || updated[key] === 0) updated[key] = val;
-            }
-            return updated;
-          });
+        setForm((prev) => applyStravaFieldsToForm(prev, nextEntries, data?.form ? {} : {}));
+      },
+    })
+      .then((payload) => {
+        setStravaLoading(false);
+        if (!payload || payload.skippedDueToInterval) return;
+        if (payload.fields && Object.keys(payload.fields).length) {
+          setForm((prev) => applyStravaFieldsToForm(prev, payload.entries || [], payload.fields));
+        } else if (Array.isArray(payload.entries) && payload.entries.length) {
+          setForm((prev) => applyStravaFieldsToForm(prev, payload.entries, {}));
         }
         fetch(`${API_BASE}/wellness/data/${encodeURIComponent(uid)}`)
           .then((r) => (r.ok ? r.json() : null))
-          .then((payload) => {
-            if (!payload) return;
-            if (Array.isArray(payload.entries)) {
-              setEntries(payload.entries);
+          .then((serverData) => {
+            if (!serverData) return;
+            if (Array.isArray(serverData.entries)) {
+              setEntries(serverData.entries);
               try {
-                localStorage.setItem(storageKey(uid, 'entries'), JSON.stringify(payload.entries));
+                localStorage.setItem(storageKey(uid, 'entries'), JSON.stringify(serverData.entries));
               } catch (_) { /* ignore */ }
             }
+            setForm((prev) => applyStravaFieldsToForm(prev, serverData.entries || [], {}));
           })
           .catch(() => {});
       })
-      .catch(() => { setStravaLoading(false); setStravaMsg('Sync failed'); });
+      .catch(() => {
+        setStravaLoading(false);
+        setStravaMsg('Sync failed');
+      });
   }
 
   /* ---- persist (only after init, per-user keys) ---- */
@@ -1258,15 +1319,32 @@ export default function WellnessPage() {
       const d = new Date(today);
       d.setDate(d.getDate() - i);
       const dateStr = d.toISOString().slice(0, 10);
-      const entry = (dateStr === form.date) ? form : entries.find((e) => e.date === dateStr);
+      const stored = entries.find((e) => e.date === dateStr);
+      const entry = dateStr === form.date
+        ? mergeEntryForScoring(form, stored)
+        : stored;
       const scores = entry && hasScorableData(entry) ? computeEntryScores(entry, scoringRules) : ZERO_SCORES;
-      days.push({ date: dateStr, dayLabel: d.toLocaleDateString('en', { weekday: 'short' }), ...scores });
+      days.push({
+        date: dateStr,
+        dayLabel: d.toLocaleDateString('en', { weekday: 'short' }),
+        heartRateAvg: Number(entry?.stravaAvgHeartRate || entry?.heartRateAvg || 0) || null,
+        ...scores,
+      });
     }
     return days;
   }, [entries, form, scoringRules]);
 
   const activityBreakdown = useMemo(() => {
-    const week = [form, ...entries.filter((e) => e.date !== form.date)].slice(0, 7);
+    const weekDates = [];
+    for (let i = 0; i < 7; i += 1) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      weekDates.push(d.toISOString().slice(0, 10));
+    }
+    const week = weekDates.map((dateStr) => {
+      const stored = entries.find((e) => e.date === dateStr);
+      return dateStr === form.date ? mergeEntryForScoring(form, stored) : stored;
+    }).filter(Boolean);
     const totals = [
       { label: 'Running', icon: '🏃', mins: week.reduce((s, e) => s + Number(e.runningMinutes || 0), 0), color: '#fb7185' },
       { label: 'Cycling', icon: '🚴', mins: week.reduce((s, e) => s + Number(e.cyclingMinutes || 0), 0), color: '#38bdf8' },
@@ -1280,7 +1358,11 @@ export default function WellnessPage() {
       { label: 'Meditation', icon: '🧘', mins: week.reduce((s, e) => s + Number(e.meditationMinutes || 0), 0), color: '#38bdf8' },
     ].filter((a) => Number(a.mins) > 0);
     const totalMins = totals.reduce((s, a) => s + a.mins, 0);
-    return { activities: totals, totalMins };
+    const hrValues = week.map((e) => Number(e.stravaAvgHeartRate || e.heartRateAvg || 0)).filter((v) => v > 0);
+    const avgHeartRate = hrValues.length
+      ? Math.round(hrValues.reduce((sum, value) => sum + value, 0) / hrValues.length)
+      : null;
+    return { activities: totals, totalMins, avgHeartRate };
   }, [entries, form]);
 
   const todayActivities = useMemo(() => {
@@ -1291,6 +1373,8 @@ export default function WellnessPage() {
       const shoeLabel = getRunningShoeLabel(shoe);
       const detailParts = [`${formatMetric(entry.runningDistanceKm)} km`, `${formatMetric(entry.runningMinutes)} mins`];
       if (shoeLabel) detailParts.push(shoeLabel);
+      const hr = Number(entry.stravaAvgHeartRate || entry.heartRateAvg || 0);
+      if (hr > 0) detailParts.push(`HR ${hr} bpm`);
       list.push({ id: 'running', icon: '🏃', label: 'Running', detail: detailParts.join(' · ') });
     }
     if (Number(entry.cyclingMinutes || 0) > 0) list.push({ id: 'cycling', icon: '🚴', label: 'Cycling', detail: `${formatMetric(entry.cyclingMinutes)} mins` });
@@ -1532,8 +1616,11 @@ export default function WellnessPage() {
                 {stravaConnected ? (
                   <>
                     <span style={{ fontSize: 12, color: '#4ade80', fontWeight: 600 }}>● Connected</span>
-                    <button onClick={handleStravaSync} disabled={stravaLoading} style={{ ...s.chipBtn, fontSize: 11, padding: '4px 10px', background: 'rgba(252,82,0,0.2)', color: '#fc5200', border: '1px solid rgba(252,82,0,0.3)' }}>
+                    <button onClick={() => handleStravaSync()} disabled={stravaLoading} style={{ ...s.chipBtn, fontSize: 11, padding: '4px 10px', background: 'rgba(252,82,0,0.2)', color: '#fc5200', border: '1px solid rgba(252,82,0,0.3)' }}>
                       {stravaLoading ? '...' : '🔄 Sync now'}
+                    </button>
+                    <button onClick={() => handleStravaSync({ full: true })} disabled={stravaLoading} style={{ ...s.chipBtn, fontSize: 11, padding: '4px 10px', background: 'rgba(252,82,0,0.12)', color: '#fb923c', border: '1px solid rgba(252,82,0,0.25)' }}>
+                      Full history
                     </button>
                     <button onClick={handleStravaDisconnect} style={{ ...s.chipBtn, fontSize: 11, padding: '4px 10px', background: 'rgba(239,68,68,0.15)', color: '#f87171', border: '1px solid rgba(239,68,68,0.3)' }}>
                       Disconnect
@@ -1546,9 +1633,13 @@ export default function WellnessPage() {
                 )}
               </div>
               {stravaMsg && <div style={{ fontSize: 11, marginTop: 6, opacity: 0.85, color: '#fbbf24' }}>{stravaMsg}</div>}
-              {!stravaConnected && <div style={{ fontSize: 11, marginTop: 4, opacity: 0.6 }}>Connect Strava to auto-import runs, walks, rides, heart rate, and elevation. Only new activities are imported on each sync.</div>}
-              {stravaConnected && <div style={{ fontSize: 11, marginTop: 4, opacity: 0.6 }}>Auto-sync runs on app open. Walking/hiking, cycling, swimming, and workouts count toward your wellness score. Steps are estimated from distance (Strava does not expose step counts).</div>}
-            </div>
+              {!stravaConnected && <div style={{ fontSize: 11, marginTop: 4, opacity: 0.6 }}>Connect Strava to auto-import runs, walks, rides, heart rate, and elevation. First sync pulls full history into wellness scores.</div>}
+              {stravaConnected && <div style={{ fontSize: 11, marginTop: 4, opacity: 0.6 }}>Auto-sync on app open. Imported runs/walks/rides count toward wellness score. Use Full history once to backfill older heart-rate days. Steps are estimated from distance.</div>}
+              {stravaConnected && activityBreakdown.avgHeartRate ? (
+                <div style={{ fontSize: 11, marginTop: 6, color: '#fda4af' }}>
+                  Avg heart rate (7d from Strava): <strong>{activityBreakdown.avgHeartRate} bpm</strong>
+                </div>
+              ) : null}            </div>
 
             {!planInfo && (
               <div style={{ ...s.noPlanMsg, marginTop: 10 }}>Start a plan above to unlock plan scores and buddy charts.</div>

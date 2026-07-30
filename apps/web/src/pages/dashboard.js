@@ -587,9 +587,10 @@ function ScrollableTrendChart({
   const chartWidth = useMemo(() => {
     if (!points.length) return 280;
     const pad = { left: 12, right: 18 };
-    const plotWidth = Math.max(180, (points.length - 1) * pointSpacing);
+    const spacing = variant === 'profit' ? Math.max(pointSpacing, 18) : pointSpacing;
+    const plotWidth = Math.max(180, (points.length - 1) * spacing);
     return pad.left + plotWidth + pad.right;
-  }, [points.length, pointSpacing]);
+  }, [points.length, pointSpacing, variant]);
 
   useLayoutEffect(() => {
     const node = scrollRef.current;
@@ -695,10 +696,11 @@ function ScrollableTrendChart({
   const min = rawMin - yPad;
   const max = rawMax + yPad;
   const range = max - min || 1;
-  const plotWidth = Math.max(180, (points.length - 1) * pointSpacing);
+  const spacing = variant === 'profit' ? Math.max(pointSpacing, 18) : pointSpacing;
+  const plotWidth = Math.max(180, (points.length - 1) * spacing);
   const width = pad.left + plotWidth + pad.right;
   const plotHeight = height - pad.top - pad.bottom;
-  const xFor = (index) => pad.left + (index * pointSpacing);
+  const xFor = (index) => pad.left + (index * spacing);
   const yFor = (value) => pad.top + plotHeight - (((value - min) / range) * plotHeight);
   const clampY = (value) => Math.min(pad.top + plotHeight, Math.max(pad.top, yFor(value)));
   const lastIndex = points.length - 1;
@@ -710,6 +712,7 @@ function ScrollableTrendChart({
   const labelEvery = points.length > 28 ? Math.ceil(points.length / 8) : points.length > 14 ? 3 : points.length > 7 ? 2 : 1;
   const showDots = points.length <= 28;
   const clipId = `${gradientId}-plot-clip`;
+  const showTrendLine = variant !== 'profit' || points.length >= 3;
 
   return (
     <div
@@ -721,9 +724,15 @@ function ScrollableTrendChart({
     >
       <div className="dashboard-wellness-chart-meta">
         <span className="dashboard-wellness-trend-key">
-          <span className="dashboard-wellness-trend-swatch" />
-          Trend
+          <span className="dashboard-wellness-trend-swatch" style={variant === 'profit' ? { background: stroke } : undefined} />
+          {variant === 'profit' ? 'P/L' : 'Trend'}
         </span>
+        {showTrendLine && variant === 'profit' ? (
+          <span className="dashboard-wellness-trend-key" style={{ opacity: 0.85 }}>
+            <span className="dashboard-wellness-trend-swatch" style={{ background: theme.orange || '#f59e0b', opacity: 0.9 }} />
+            Linear
+          </span>
+        ) : null}
         <span className="dashboard-wellness-latest">
           {annotationFormatter(values[lastIndex], points[lastIndex])}
         </span>
@@ -788,25 +797,27 @@ function ScrollableTrendChart({
               );
             })}
             <g clipPath={`url(#${clipId})`}>
-              <polygon fill={`url(#${gradientId})`} points={`${pad.left},${zeroY} ${polyline} ${width - pad.right},${zeroY}`} />
+              <polygon fill={`url(#${gradientId})`} points={`${xFor(0)},${zeroY} ${polyline} ${xFor(lastIndex)},${zeroY}`} />
               <polyline
                 fill="none"
                 stroke={`url(#${gradientId}-stroke)`}
-                strokeWidth="2.2"
+                strokeWidth={variant === 'profit' ? '2.8' : '2.2'}
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 points={polyline}
               />
-              <polyline
-                fill="none"
-                stroke={theme.orange || '#f59e0b'}
-                strokeWidth="1.4"
-                strokeDasharray="5 4"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                points={trendLine}
-                opacity="0.95"
-              />
+              {showTrendLine ? (
+                <polyline
+                  fill="none"
+                  stroke={theme.orange || '#f59e0b'}
+                  strokeWidth="1.4"
+                  strokeDasharray="5 4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  points={trendLine}
+                  opacity="0.95"
+                />
+              ) : null}
               {showDots ? points.map((point, index) => (
                 <circle
                   key={`dot-${point.label}-${index}`}

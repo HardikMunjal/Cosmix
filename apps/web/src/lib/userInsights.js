@@ -171,44 +171,127 @@ function formatLocalDay(date) {
   return `${year}-${month}-${day}`;
 }
 
-function buildProfitTrend(strategies = [], maxDays = 180) {
-  const dailyTotals = new Map();
+function shiftLocalDay(day, deltaDays) {
+  const cursor = new Date(`${day}T12:00:00`);
+  cursor.setDate(cursor.getDate() + deltaDays);
+  return formatLocalDay(cursor);
+}
+
+function formatLocalTimeLabel(date) {
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${hours}:${minutes}`;
+}
+
+function collectChronologicalPnlEvents(strategies = []) {
+  const events = [];
 
   strategies.forEach((strategy) => {
-    (strategy?.transactions || []).forEach((transaction) => {
-      const amount = Number(transaction?.amount || 0);
+    const transactions = strategy?.transactions || [];
+    let bookedClosePnl = 0;
+
+    transactions.forEach((transaction, index) => {
       const timestamp = String(transaction?.timestamp || '');
-      if (!timestamp || !Number.isFinite(amount) || amount === 0) return;
-      const day = timestamp.slice(0, 10);
-      dailyTotals.set(day, Number((dailyTotals.get(day) || 0) + amount));
+      const at = timestamp ? new Date(timestamp) : null;
+      if (!at || Number.isNaN(at.getTime())) return;
+
+      const amount = Number(transaction?.amount || 0);
+      const hasCloseAmount = Number.isFinite(amount) && amount !== 0;
+      events.push({
+        at,
+        day: formatLocalDay(at),
+        // Brokerage on every recorded order/event (matches Net P/L).
+        delta: -TRANSACTION_COST_PER_ORDER + (hasCloseAmount ? amount : 0),
+        plot: hasCloseAmount,
+        kind: hasCloseAmount ? 'close' : 'cost',
+        key: `${strategy?.id || strategy?.name || 'strategy'}-${index}-${timestamp}`,
+      });
+      if (hasCloseAmount) bookedClosePnl += amount;
     });
+
+    // Fallback when closed-leg PnL exists but no CLOSE amounts were recorded.
+    if (Math.abs(bookedClosePnl) < 0.0001) {
+      (strategy?.closedLegs || []).forEach((leg, index) => {
+        const pnl = Number(leg?.pnl || 0);
+        if (!Number.isFinite(pnl) || pnl === 0) return;
+        const timestamp = leg?.closedAt || leg?.timestamp || strategy?.updatedAt || strategy?.createdAt;
+        const at = timestamp ? new Date(timestamp) : null;
+        if (!at || Number.isNaN(at.getTime())) return;
+        events.push({
+          at,
+          day: formatLocalDay(at),
+          delta: pnl,
+          plot: true,
+          kind: 'close',
+          key: `${strategy?.id || strategy?.name || 'strategy'}-leg-${index}-${timestamp}`,
+        });
+      });
+    }
   });
 
-  if (!dailyTotals.size) return [];
+  const openMtm = strategies.reduce((sum, strategy) => (
+    strategy?.status === 'closed' ? sum : sum + computeStrategyLiveMtm(strategy)
+  ), 0);
 
-  const sortedDays = [...dailyTotals.keys()].sort();
-  const firstDay = sortedDays[0];
-  const lastDay = sortedDays[sortedDays.length - 1];
-
-  let runningTotal = 0;
-  const allPoints = [];
-  const cursor = new Date(`${firstDay}T12:00:00`);
-  const endDate = new Date(`${lastDay}T12:00:00`);
-
-  while (cursor <= endDate) {
-    const day = formatLocalDay(cursor);
-    runningTotal += Number(dailyTotals.get(day) || 0);
-    allPoints.push({
-      label: day.slice(5),
-      value: Number(runningTotal.toFixed(2)),
-      dailyValue: Number((dailyTotals.get(day) || 0).toFixed(2)),
-      date: day,
+  if (Math.abs(openMtm) > 0.0001) {
+    const at = new Date();
+    events.push({
+      at,
+      day: formatLocalDay(at),
+      delta: openMtm,
+      plot: true,
+      kind: 'mtm',
+      key: `open-mtm-${at.toISOString()}`,
     });
-    cursor.setDate(cursor.getDate() + 1);
   }
 
-  if (allPoints.length <= maxDays) return allPoints;
-  return allPoints.slice(-maxDays);
+  return events.sort((left, right) => left.at.getTime() - right.at.getTime());
+}
+
+function buildProfitTrend(strategies = [], maxPoints = 180) {
+  const events = collectChronologicalPnlEvents(strategies);
+  if (!events.length) return [];
+
+  const firstDay = events[0].day;
+  const baselineDay = shiftLocalDay(firstDay, -1);
+  let runningTotal = 0;
+  const allPoints = [{
+    label: baselineDay.slice(5),
+    value: 0,
+    dailyValue: 0,
+    date: baselineDay,
+  }];
+
+  let lastPlottedDay = baselineDay;
+  events.forEach((event) => {
+    runningTotal += Number(event.delta || 0);
+    if (!event.plot) return;
+
+    const sameDayAsPrevious = event.day === lastPlottedDay;
+    allPoints.push({
+      label: sameDayAsPrevious ? formatLocalTimeLabel(event.at) : event.day.slice(5),
+      value: Number(runningTotal.toFixed(2)),
+      dailyValue: Number(Number(event.delta || 0).toFixed(2)),
+      date: event.day,
+      kind: event.kind,
+    });
+    lastPlottedDay = event.day;
+  });
+
+  // If only brokerage events existed, still show the ending Net P/L mark.
+  if (allPoints.length === 1) {
+    allPoints.push({
+      label: formatLocalDay(new Date()).slice(5),
+      value: Number(runningTotal.toFixed(2)),
+      dailyValue: Number(runningTotal.toFixed(2)),
+      date: formatLocalDay(new Date()),
+      kind: 'net',
+    });
+  }
+
+  if (allPoints.length <= maxPoints) return allPoints;
+  // Keep baseline + newest points so the latest loss/gain remains visible.
+  return [allPoints[0], ...allPoints.slice(-(maxPoints - 1))];
 }
 
 function buildProfitWindows(strategies = []) {
@@ -216,15 +299,24 @@ function buildProfitWindows(strategies = []) {
 
   strategies.forEach((strategy) => {
     (strategy?.transactions || []).forEach((transaction) => {
-      const amount = Number(transaction?.amount || 0);
       const timestamp = String(transaction?.timestamp || '');
-      if (!timestamp || !Number.isFinite(amount) || amount === 0) return;
+      if (!timestamp) return;
+      const amount = Number(transaction?.amount || 0);
+      const net = (Number.isFinite(amount) ? amount : 0) - TRANSACTION_COST_PER_ORDER;
+      if (!Number.isFinite(net) || net === 0) return;
       entries.push({
-        amount,
+        amount: net,
         date: new Date(timestamp),
       });
     });
   });
+
+  const openMtm = strategies.reduce((sum, strategy) => (
+    strategy?.status === 'closed' ? sum : sum + computeStrategyLiveMtm(strategy)
+  ), 0);
+  if (Math.abs(openMtm) > 0.0001) {
+    entries.push({ amount: openMtm, date: new Date() });
+  }
 
   if (!entries.length) {
     return [
@@ -296,7 +388,10 @@ export function buildStrategySummary(strategies = []) {
   const active = strategies.filter((strategy) => strategy.status !== 'closed');
   const closed = strategies.filter((strategy) => strategy.status === 'closed');
   const openMtm = active.reduce((sum, strategy) => sum + computeStrategyLiveMtm(strategy), 0);
-  const realized = closed.reduce((sum, strategy) => sum + (computeStrategyRealized(strategy) - calculateTransactionCost(strategy.transactions || [])), 0);
+  const realizedGross = strategies.reduce((sum, strategy) => sum + computeStrategyRealized(strategy), 0);
+  const totalCosts = strategies.reduce((sum, strategy) => sum + calculateTransactionCost(strategy.transactions || []), 0);
+  const realized = realizedGross - totalCosts;
+  const totalPnl = openMtm + realized;
   const topPnl = strategies
     .map((strategy) => ({
       label: String(strategy.name || 'Unnamed').slice(0, 16),
@@ -319,7 +414,7 @@ export function buildStrategySummary(strategies = []) {
     totalStrategies: strategies.length,
     openMtm: Number(openMtm.toFixed(2)),
     realized: Number(realized.toFixed(2)),
-    totalPnl: Number((openMtm + realized).toFixed(2)),
+    totalPnl: Number(totalPnl.toFixed(2)),
     trackerSource,
     trackerPoints,
     profitTrend,

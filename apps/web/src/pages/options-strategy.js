@@ -53,8 +53,8 @@ const PRICING_SOURCE_OPTIONS = [
   { value: 'live', label: 'Live / option chain' },
 ];
 const SAVE_TARGET_OPTIONS = [
-  { value: 'watching', label: 'Wishlist' },
-  { value: 'active', label: 'Bought' },
+  { value: 'watching', label: 'Watchlist' },
+  { value: 'active', label: 'Active' },
 ];
 
 async function parseApiJsonResponse(response, fallbackErrorMessage) {
@@ -1132,7 +1132,7 @@ export function OptionsStrategyPage({ embedded = false, hideBackButton = false, 
       const savedId = data.strategy?.id || payload.id;
       setEditingStrategyId(savedId);
       setSavedStrategies(data.strategies || []);
-      setSaveMessage(`${existingStrategy ? 'Updated' : 'Saved'} "${cleanName}" as ${saveTarget === 'active' ? 'Bought' : 'Wishlist'} with fixed entry prices and ${getPricingSourceLabel(pricingSource)} pricing.`);
+      setSaveMessage(`${existingStrategy ? 'Updated' : 'Saved'} "${cleanName}" to ${saveTarget === 'active' ? 'Active' : 'Watchlist'} with fixed entry prices and ${getPricingSourceLabel(pricingSource)} pricing.`);
       if (typeof onStrategySaved === 'function') {
         onStrategySaved({ id: savedId, status: saveTarget, name: cleanName });
       }
@@ -1402,9 +1402,9 @@ export function OptionsStrategyPage({ embedded = false, hideBackButton = false, 
       >
         <div style={styles.header} className="strategy-header">
           <div>
-            <h1 style={styles.title}>{embedded ? 'Create Strategy, Charts, and Optimizer' : 'Nifty Options Strategy'}</h1>
+            <h1 style={styles.title}>{embedded ? 'Advanced Strategy Builder' : 'Nifty Options Strategy'}</h1>
             <div style={styles.subTitle}>
-              {embedded ? 'Single-page builder with live spot, mixed-expiry pricing, payoff graphs, and optimizers.' : `Live Nifty spot from ${liveSource}`}
+              {embedded ? 'Full pricing controls, payoff charts, and optimizer tools.' : `Live Nifty spot from ${liveSource}`}
             </div>
           </div>
           {!hideBackButton ? (
@@ -1622,10 +1622,10 @@ export function OptionsStrategyPage({ embedded = false, hideBackButton = false, 
         </div>}
 
         <div style={styles.card}>
-          <h2 style={styles.sectionTitle}>{editingStrategyId ? 'Update Saved Strategy' : 'Save Locked Strategy'}</h2>
+          <h2 style={styles.sectionTitle}>{editingStrategyId ? 'Update Strategy' : 'Save Strategy'}</h2>
           {editingStrategyId ? (
             <div style={styles.editingBanner}>
-              Editing saved strategy <strong>{strategyName}</strong>. Save again to update the same dashboard box.
+              Editing <strong>{strategyName}</strong>. Save to update this portfolio entry.
             </div>
           ) : null}
           <div style={styles.saveRow} className="strategy-save-row">
@@ -1643,7 +1643,9 @@ export function OptionsStrategyPage({ embedded = false, hideBackButton = false, 
               title="Save destination"
             >
               {SAVE_TARGET_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{`Save as ${option.label}`}</option>
+                <option key={option.value} value={option.value}>
+                  {option.value === 'watching' ? 'Save to Watchlist' : 'Save to Active'}
+                </option>
               ))}
             </select>
             <input

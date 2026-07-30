@@ -13,6 +13,8 @@ import {
 } from 'recharts';
 import { restoreUserSession } from '../lib/auth-client';
 import { CosmixLoader } from '../lib/CosmixLoader';
+import { CreateStrategyWizard } from '../lib/CreateStrategyWizard';
+import { FloatingCreateFab } from '../lib/FloatingCreateFab';
 import { LearningsTicker } from '../lib/LearningsTicker';
 import { MobileBottomNav } from '../lib/MobileNav';
 import { useTheme } from '../lib/ThemePicker';
@@ -1569,6 +1571,8 @@ export default function NiftyStrategiesPage() {
   const [learningModal, setLearningModal] = useState(null);
   const [learningText, setLearningText] = useState('');
   const [builderModalOpen, setBuilderModalOpen] = useState(false);
+  const [builderMode, setBuilderMode] = useState('wizard'); // wizard | advanced
+  const [portfolioTab, setPortfolioTab] = useState('all'); // all | active | watching | closed
   const [embeddedBuilderLoaded, setEmbeddedBuilderLoaded] = useState(false);
   const [embeddedBuilderStrategyId, setEmbeddedBuilderStrategyId] = useState(null);
   const [embeddedBuilderVersion, setEmbeddedBuilderVersion] = useState(0);
@@ -1939,6 +1943,16 @@ export default function NiftyStrategiesPage() {
     setLearningModal(null);
   };
 
+  const openCreateWizard = useCallback(() => {
+    try {
+      sessionStorage.removeItem('nifty-strategy-legs');
+      sessionStorage.removeItem('nifty-strategy-meta');
+    } catch (_) {}
+    setEmbeddedBuilderStrategyId(null);
+    setBuilderMode('wizard');
+    setBuilderModalOpen(true);
+  }, []);
+
   const openEmbeddedBuilder = useCallback((strategyId = null) => {
     if (strategyId == null) {
       try {
@@ -1949,11 +1963,13 @@ export default function NiftyStrategiesPage() {
     setEmbeddedBuilderLoaded(true);
     setEmbeddedBuilderStrategyId(strategyId);
     setEmbeddedBuilderVersion((current) => current + 1);
+    setBuilderMode('advanced');
     setBuilderModalOpen(true);
   }, []);
 
   const closeBuilderModal = useCallback(() => {
     setBuilderModalOpen(false);
+    setBuilderMode('wizard');
   }, []);
 
   const updateStrategyStatus = async (strategyId, newStatus, actionTimestamp = null, learning = null) => {
@@ -2451,23 +2467,29 @@ export default function NiftyStrategiesPage() {
           inset: 0;
           z-index: 1100;
           display: flex;
-          align-items: stretch;
+          align-items: center;
           justify-content: center;
-          background: rgba(2,6,23,0.88);
-          backdrop-filter: blur(10px);
-          padding: 0;
+          background: rgba(15, 23, 42, 0.45);
+          backdrop-filter: blur(8px);
+          padding: 12px;
         }
         .nifty-builder-modal-sheet {
-          width: 100%;
-          max-width: 1180px;
+          width: min(980px, 100%);
           margin: 0 auto;
           display: flex;
           flex-direction: column;
-          background: ${theme.pageBgSolid || '#020617'};
+          background: ${theme.pageBgSolid || '#f8fafc'};
           border: 1px solid ${theme.cardBorder};
-          box-shadow: 0 24px 80px rgba(0,0,0,0.55);
-          max-height: 100vh;
-          max-height: 100dvh;
+          box-shadow: 0 24px 80px rgba(15,23,42,0.22);
+          max-height: min(92vh, 860px);
+          max-height: min(92dvh, 860px);
+          min-height: 0;
+          overflow: hidden;
+        }
+        .nifty-builder-modal-sheet.is-advanced {
+          max-width: 1180px;
+          width: min(1180px, 100%);
+          background: ${theme.pageBgSolid || '#020617'};
         }
         .nifty-builder-modal-header {
           display: flex;
@@ -2481,9 +2503,184 @@ export default function NiftyStrategiesPage() {
         }
         .nifty-builder-modal-body {
           flex: 1;
+          min-height: 0;
+          overflow: hidden;
+          display: flex;
+          flex-direction: column;
+          padding: 12px;
+        }
+        .nifty-builder-modal-body > * {
+          min-height: 0;
+        }
+        .nifty-create-fab {
+          position: fixed;
+          z-index: 1050;
+          width: 58px;
+          height: 58px;
+          border: none;
+          border-radius: 50%;
+          display: grid;
+          place-items: center;
+          cursor: grab;
+          touch-action: none;
+          color: #fff;
+        }
+        .nifty-create-fab:active {
+          cursor: grabbing;
+          transform: scale(0.98);
+        }
+        .create-strategy-wizard {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+          min-height: 0;
+          height: 100%;
+          max-height: 100%;
+        }
+        .create-strategy-wizard-progress {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 8px;
+          flex-shrink: 0;
+        }
+        .create-strategy-wizard-step {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          border: 1px solid;
+          border-radius: 12px;
+          padding: 10px 12px;
+          font-size: 12px;
+          font-weight: 800;
+        }
+        .create-strategy-wizard-body {
+          border-radius: 16px;
+          padding: 2px 2px 8px;
+          flex: 1;
+          min-height: 0;
           overflow: auto;
           -webkit-overflow-scrolling: touch;
+        }
+        .create-strategy-wizard-footer {
+          display: flex;
+          justify-content: space-between;
+          gap: 12px;
+          flex-wrap: wrap;
+          align-items: center;
+          padding-top: 10px;
+          border-top: 1px solid ${theme.cardBorder};
+          flex-shrink: 0;
+          background: ${theme.pageBgSolid || '#f8fafc'};
+        }
+        .nifty-portfolio-tabs {
+          display: flex;
+          gap: 8px;
+          flex-wrap: wrap;
+          margin: 14px 0 10px;
+        }
+        .nifty-portfolio-tab {
+          appearance: none;
+          border: 1px solid;
+          border-radius: 999px;
+          padding: 8px 14px;
+          font-size: 12px;
+          font-weight: 800;
+          cursor: pointer;
+        }
+        .nifty-empty-state {
+          border: 1px solid;
+          border-radius: 18px;
+          padding: 28px 20px;
+          text-align: center;
+          display: grid;
+          justify-items: center;
+          margin-top: 8px;
+        }
+        .create-strategy-wizard-grid {
+          display: grid;
+          grid-template-columns: minmax(0, 1.4fr) minmax(220px, 0.8fr);
+          gap: 16px;
+        }
+        .create-strategy-side-card {
+          border: 1px solid;
+          border-radius: 16px;
+          padding: 16px;
+          height: fit-content;
+        }
+        .create-strategy-choice-row,
+        .create-strategy-template-grid {
+          display: grid;
+          gap: 10px;
+        }
+        .create-strategy-choice-row {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .create-strategy-template-grid {
+          grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        }
+        .create-strategy-choice,
+        .create-strategy-template {
+          appearance: none;
+          border: 1px solid;
+          border-radius: 14px;
+          padding: 14px;
+          text-align: left;
+          display: grid;
+          gap: 4px;
+          cursor: pointer;
+        }
+        .create-strategy-legs {
+          display: grid;
+          gap: 12px;
+        }
+        .create-strategy-leg-card {
+          border: 1px solid;
+          border-radius: 14px;
           padding: 12px;
+        }
+        .create-strategy-leg-title {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          font-size: 13px;
+          font-weight: 800;
+          margin-bottom: 10px;
+        }
+        .create-strategy-leg-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+          gap: 10px;
+        }
+        .create-strategy-review {
+          border: 1px solid;
+          border-radius: 14px;
+          padding: 14px;
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+          gap: 12px;
+        }
+        .create-strategy-primary-btn,
+        .create-strategy-secondary-btn {
+          appearance: none;
+          border-radius: 999px;
+          padding: 11px 16px;
+          font-size: 13px;
+          font-weight: 800;
+          cursor: pointer;
+        }
+        .create-strategy-primary-btn {
+          border: none;
+          min-width: 160px;
+        }
+        .create-strategy-secondary-btn {
+          border: 1px solid;
+        }
+        @media (max-width: 820px) {
+          .create-strategy-wizard-grid,
+          .create-strategy-choice-row,
+          .create-strategy-wizard-progress {
+            grid-template-columns: 1fr;
+          }
         }
         @media (min-width: 721px) {
           .nifty-builder-modal-overlay {
@@ -2564,14 +2761,13 @@ export default function NiftyStrategiesPage() {
         <div style={styles.header} className="nifty-header">
           <div>
             <div style={{ fontSize: '11px', fontWeight: 800, letterSpacing: '0.14em', textTransform: 'uppercase', color: theme.textMuted, marginBottom: '6px' }}>
-              Nifty Club
+              Options Portfolio
             </div>
-            <h1 style={{ ...styles.title, color: theme.textHeading }} className="nifty-page-title">Strategy Tracker</h1>
-            <p style={{ ...styles.subtitle, color: theme.textSecondary }}>Live P/L, payoff analysis, and trade journal in one workspace.</p>
+            <h1 style={{ ...styles.title, color: theme.textHeading }} className="nifty-page-title">Nifty Strategies</h1>
+            <p style={{ ...styles.subtitle, color: theme.textSecondary }}>Monitor positions, track P/L, and book new multi-leg strategies.</p>
           </div>
           <div style={styles.headerActions} className="nifty-header-actions">
             <button type="button" onClick={() => loadSavedStrategies({ showSpinner: false, includeWhatIf: true, refreshIndices: true })} style={styles.secondaryButton}>{refreshing ? 'Refreshing...' : 'Refresh'}</button>
-            <button type="button" onClick={() => openEmbeddedBuilder(null)} style={styles.primaryButton}>+ Create Strategy</button>
             <button type="button" className="header-ghost-btn" onClick={() => router.push('/strategy-history')} style={styles.ghostButton}>History</button>
             <button type="button" className="header-ghost-btn header-home-btn" onClick={() => router.push('/dashboard')} style={styles.ghostButton}>Home</button>
           </div>
@@ -2806,14 +3002,53 @@ export default function NiftyStrategiesPage() {
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
           <div>
-            <div style={{ ...styles.builderSectionTitle, color: theme.textHeading, fontSize: '15px' }}>Strategy Builder</div>
+            <div style={{ ...styles.builderSectionTitle, color: theme.textHeading, fontSize: '15px' }}>Create a strategy</div>
             <div style={{ ...styles.builderSectionHint, color: theme.textSecondary, marginTop: '4px' }}>
-              Build multi-leg structures in a focused full-screen workspace.
+              Use the guided wizard for a quick book, or open the advanced builder for full pricing controls.
             </div>
           </div>
-          <button type="button" onClick={() => openEmbeddedBuilder(null)} style={styles.primaryButton}>Open Builder</button>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button type="button" onClick={() => openEmbeddedBuilder(null)} style={styles.secondaryButton}>Advanced builder</button>
+          </div>
         </div>
       </section>
+
+      <div className="nifty-portfolio-tabs" role="tablist" aria-label="Portfolio filter">
+        {[
+          { id: 'all', label: 'All', count: savedStrategies.length },
+          { id: 'active', label: 'Active', count: totals.activeCount },
+          { id: 'watching', label: 'Watchlist', count: totals.watchingCount },
+          { id: 'closed', label: 'Closed', count: totals.closedCount },
+        ].map((tab) => {
+          const selected = portfolioTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              onClick={() => setPortfolioTab(tab.id)}
+              className="nifty-portfolio-tab"
+              style={{
+                borderColor: selected ? theme.blue : theme.cardBorder,
+                background: selected ? `${theme.blue}14` : theme.cardBg,
+                color: selected ? theme.textHeading : theme.textSecondary,
+              }}
+            >
+              {tab.label}
+              <span style={{
+                marginLeft: 8,
+                fontSize: 11,
+                fontWeight: 800,
+                color: selected ? theme.blue : theme.textMuted,
+              }}
+              >
+                {tab.count}
+              </span>
+            </button>
+          );
+        })}
+      </div>
 
       {loading && initialLoadReady ? (
         <div className="nifty-loading-overlay" aria-live="polite">
@@ -2822,13 +3057,28 @@ export default function NiftyStrategiesPage() {
       ) : null}
       {!loading && error ? <div style={styles.errorText}>{error}</div> : null}
       {!loading && !error && savedStrategies.length === 0 ? (
-        <div style={styles.emptyState}>No Nifty options strategy has been saved yet. Open Nifty Options, add legs, and click save.</div>
+        <div className="nifty-empty-state" style={{ borderColor: theme.cardBorder, background: theme.panelBg }}>
+          <div style={{ fontSize: 18, fontWeight: 800, color: theme.textHeading }}>No strategies in your book yet</div>
+          <div style={{ fontSize: 13, color: theme.textSecondary, marginTop: 6, maxWidth: 420 }}>
+            Create a Watchlist idea or Active position in a few steps. Templates fill strikes and premiums for you.
+          </div>
+          <button type="button" onClick={openCreateWizard} style={{ ...styles.primaryButton, marginTop: 14 }}>
+            + Create your first strategy
+          </button>
+        </div>
       ) : null}
 
       {(() => {
         const activeStrategies = savedStrategies.filter((s) => s.status === 'active');
         const watchingStrategies = savedStrategies.filter((s) => !s.status || s.status === 'watching');
         const closedStrategies = savedStrategies.filter((s) => s.status === 'closed');
+        const visibleStrategies = portfolioTab === 'active'
+          ? activeStrategies
+          : portfolioTab === 'watching'
+            ? watchingStrategies
+            : portfolioTab === 'closed'
+              ? closedStrategies
+              : savedStrategies;
 
         const renderCard = (strategy, defaultOpen) => {
           const metrics = strategy.liveMetrics || computeStrategyMetrics(strategy.legs || [], Number(strategy.lotSize) || 65, Number(strategy.savedAtSpot) || 0);
@@ -2838,7 +3088,7 @@ export default function NiftyStrategiesPage() {
             : 0;
           const isActive = strategy.status === 'active';
           const isClosed = strategy.status === 'closed';
-          const statusLabel = isActive ? '✅ BOUGHT' : isClosed ? '🔒 CLOSED' : '👁 WATCHING';
+          const statusLabel = isActive ? 'ACTIVE' : isClosed ? 'CLOSED' : 'WATCHLIST';
           const statusColor = isActive ? theme.green : isClosed ? theme.textSecondary : theme.blue;
           const isPastDateEnabled = Boolean(usePastActionDate[strategy.id]);
           const actionDateTime = actionDateTimeByStrategy[strategy.id] || '';
@@ -2854,13 +3104,8 @@ export default function NiftyStrategiesPage() {
                       <span style={{ ...styles.statusBadge, color: statusColor, borderColor: statusColor }}>{statusLabel}</span>
                     </div>
                     <div style={styles.strategyMeta}>
-                      {strategy.expiryLabel || 'No expiry'} · {(strategy.legs || []).length} open legs{(strategy.closedLegs || []).length > 0 ? ` · ${strategy.closedLegs.length} closed` : ''} · built with {getPricingSourceLabel(strategy.strategyPricingSource || strategy.pricingSource || 'blend')}
+                      {strategy.expiryLabel || 'No expiry'} · {(strategy.legs || []).length} open legs{(strategy.closedLegs || []).length > 0 ? ` · ${strategy.closedLegs.length} closed` : ''}
                     </div>
-                    {!isClosed && (
-                      <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '4px' }}>
-                        Current valuation: {getPricingSourceLabel(strategy.currentValuationSource || currentValuationSource)} · {strategy.liveSource || 'saved'}
-                      </div>
-                    )}
                   </div>
                 </div>
                 <div style={styles.summaryBadges}>
@@ -3099,15 +3344,15 @@ export default function NiftyStrategiesPage() {
                     ) : null}
                   </div>
                   {(!strategy.status || strategy.status === 'watching') && (
-                    <button onClick={() => updateStrategyStatus(strategy.id, 'active', getActionTimestamp(strategy.id))} style={styles.buyButton}>✅ Mark as Bought</button>
+                    <button onClick={() => updateStrategyStatus(strategy.id, 'active', getActionTimestamp(strategy.id))} style={styles.buyButton}>Mark Active</button>
                   )}
                   {isActive && (strategy.legs || []).length > 0 && (
-                    <button onClick={() => openLearningModal(strategy.id, getActionTimestamp(strategy.id))} style={styles.closeStratBtn}>🔒 Close Strategy</button>
+                    <button onClick={() => openLearningModal(strategy.id, getActionTimestamp(strategy.id))} style={styles.closeStratBtn}>Close Strategy</button>
                   )}
                   {isClosed && (
-                    <button onClick={() => updateStrategyStatus(strategy.id, 'watching')} style={styles.secondaryButton}>↩ Move to Watchlist</button>
+                    <button onClick={() => updateStrategyStatus(strategy.id, 'watching')} style={styles.secondaryButton}>Move to Watchlist</button>
                   )}
-                  <button onClick={() => openEmbeddedBuilder(String(strategy.id))} style={styles.primaryButton}>Edit In Builder</button>
+                  <button onClick={() => openEmbeddedBuilder(String(strategy.id))} style={styles.primaryButton}>Edit</button>
                   <button onClick={() => deleteSavedStrategy(strategy.id)} style={styles.deleteButton}>Delete</button>
                 </div>
               </div>
@@ -3117,59 +3362,94 @@ export default function NiftyStrategiesPage() {
 
         return (
           <>
-            {activeStrategies.length > 0 && (
-              <>
-                <div style={styles.sectionHeader} className="nifty-section-header">
-                  <span style={styles.sectionIcon}>✅</span>
-                  <span>Active Positions ({activeStrategies.length})</span>
-                </div>
-                <div style={styles.strategyStack}>
-                  {activeStrategies.map((s) => renderCard(s, false))}
-                </div>
-              </>
-            )}
+            {portfolioTab === 'all' || portfolioTab === 'active' ? (
+              activeStrategies.length > 0 ? (
+                <>
+                  {portfolioTab === 'all' ? (
+                    <div style={styles.sectionHeader} className="nifty-section-header">
+                      <span>Active ({activeStrategies.length})</span>
+                    </div>
+                  ) : null}
+                  <div style={styles.strategyStack}>
+                    {activeStrategies.map((s) => renderCard(s, portfolioTab !== 'all'))}
+                  </div>
+                </>
+              ) : portfolioTab === 'active' ? (
+                <div style={{ ...styles.emptyState, marginTop: 8 }}>No active strategies. Create one or move a Watchlist idea to Active.</div>
+              ) : null
+            ) : null}
 
-            {watchingStrategies.length > 0 && (
-              <>
-                <div style={styles.sectionHeader} className="nifty-section-header">
-                  <span style={styles.sectionIcon}>👁</span>
-                  <span>Watchlist ({watchingStrategies.length})</span>
-                </div>
-                <div style={styles.strategyStack}>
-                  {watchingStrategies.map((s) => renderCard(s, false))}
-                </div>
-              </>
-            )}
+            {portfolioTab === 'all' || portfolioTab === 'watching' ? (
+              watchingStrategies.length > 0 ? (
+                <>
+                  {portfolioTab === 'all' ? (
+                    <div style={styles.sectionHeader} className="nifty-section-header">
+                      <span>Watchlist ({watchingStrategies.length})</span>
+                    </div>
+                  ) : null}
+                  <div style={styles.strategyStack}>
+                    {watchingStrategies.map((s) => renderCard(s, portfolioTab !== 'all'))}
+                  </div>
+                </>
+              ) : portfolioTab === 'watching' ? (
+                <div style={{ ...styles.emptyState, marginTop: 8 }}>Watchlist is empty. Save an idea with New Strategy.</div>
+              ) : null
+            ) : null}
 
-            {closedStrategies.length > 0 && (
-              <details style={{ marginTop: 8 }}>
-                <summary style={styles.sectionHeader}>
-                  <span style={styles.sectionIcon}>🔒</span>
-                  <span>Closed ({closedStrategies.length})</span>
-                </summary>
-                <div style={styles.strategyStack}>
-                  {closedStrategies.map((s) => renderCard(s, false))}
-                </div>
-              </details>
-            )}
+            {portfolioTab === 'all' || portfolioTab === 'closed' ? (
+              closedStrategies.length > 0 ? (
+                portfolioTab === 'closed' ? (
+                  <div style={styles.strategyStack}>
+                    {closedStrategies.map((s) => renderCard(s, false))}
+                  </div>
+                ) : (
+                  <details style={{ marginTop: 8 }}>
+                    <summary style={styles.sectionHeader}>
+                      <span>Closed ({closedStrategies.length})</span>
+                    </summary>
+                    <div style={styles.strategyStack}>
+                      {closedStrategies.map((s) => renderCard(s, false))}
+                    </div>
+                  </details>
+                )
+              ) : portfolioTab === 'closed' ? (
+                <div style={{ ...styles.emptyState, marginTop: 8 }}>No closed strategies yet.</div>
+              ) : null
+            ) : null}
+
+            {portfolioTab === 'all' && !visibleStrategies.length && savedStrategies.length > 0 ? (
+              <div style={{ ...styles.emptyState, marginTop: 8 }}>No strategies match this view.</div>
+            ) : null}
           </>
         );
       })()}
 
       {builderModalOpen ? (
-        <div className="nifty-builder-modal-overlay" role="dialog" aria-modal="true" aria-label="Strategy builder">
-          <div className="nifty-builder-modal-sheet">
+        <div className="nifty-builder-modal-overlay" role="dialog" aria-modal="true" aria-label={builderMode === 'wizard' ? 'Create strategy' : 'Strategy builder'}>
+          <div className={`nifty-builder-modal-sheet ${builderMode === 'wizard' ? 'is-wizard' : 'is-advanced'}`}>
             <div className="nifty-builder-modal-header">
               <div>
                 <div style={{ fontSize: '11px', fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: theme.textMuted }}>
-                  {embeddedBuilderStrategyId ? 'Edit strategy' : 'New strategy'}
+                  {embeddedBuilderStrategyId ? 'Edit strategy' : builderMode === 'wizard' ? 'New strategy' : 'Advanced builder'}
                 </div>
-                <div style={{ fontSize: '18px', fontWeight: 800, color: theme.textHeading, marginTop: '4px' }}>Strategy Builder</div>
+                <div style={{ fontSize: '18px', fontWeight: 800, color: theme.textHeading, marginTop: '4px' }}>
+                  {builderMode === 'wizard' ? 'Create Strategy' : 'Strategy Builder'}
+                </div>
               </div>
               <button type="button" onClick={closeBuilderModal} style={styles.secondaryButton}>Close</button>
             </div>
             <div className="nifty-builder-modal-body">
-              {embeddedBuilderLoaded ? (
+              {builderMode === 'wizard' && !embeddedBuilderStrategyId ? (
+                <CreateStrategyWizard
+                  theme={theme}
+                  onClose={closeBuilderModal}
+                  onSaved={() => {
+                    loadSavedStrategies({ showSpinner: false, includeWhatIf: true, refreshIndices: true });
+                    closeBuilderModal();
+                  }}
+                  onOpenAdvanced={() => openEmbeddedBuilder(null)}
+                />
+              ) : embeddedBuilderLoaded ? (
                 <EmbeddedOptionsStrategyPage
                   key={`${embeddedBuilderStrategyId || 'new'}-${embeddedBuilderVersion}`}
                   embedded
@@ -3192,6 +3472,8 @@ export default function NiftyStrategiesPage() {
         </div>
       ) : null}
 
+      <FloatingCreateFab theme={theme} onClick={openCreateWizard} hidden={builderModalOpen || Boolean(learningModal)} />
+
       <MobileBottomNav
         theme={theme}
         activeId="nifty"
@@ -3199,7 +3481,6 @@ export default function NiftyStrategiesPage() {
           { id: 'home', label: 'Home', icon: '🏠', href: '/dashboard' },
           { id: 'nifty', label: 'Nifty', icon: '📊', href: '/nifty-strategies' },
           { id: 'history', label: 'History', icon: '📋', href: '/strategy-history' },
-          { id: 'create', label: 'Create', icon: '＋', onClick: () => openEmbeddedBuilder(null) },
         ]}
       />
 

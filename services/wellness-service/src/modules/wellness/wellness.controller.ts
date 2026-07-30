@@ -185,16 +185,24 @@ export class WellnessController {
     @Param('userId') userId: string,
     @Query('days') days?: string,
     @Query('import') shouldImport?: string,
+    @Query('full') full?: string,
   ) {
-    const windowDays = Number(days) || 90;
-    const activities = await this.stravaService.getRecentActivities(userId, windowDays);
     const existingState = await this.storageService.load(userId);
     const knownIds = this.stravaService.collectKnownActivityIds(existingState.entries || []);
+    const isFirstSync = knownIds.size === 0 || String(full || '') === '1';
+    const windowDays = isFirstSync
+      ? Math.max(Number(days) || 730, 365)
+      : (Number(days) || 90);
+
+    const activities = await this.stravaService.getRecentActivities(userId, windowDays, {
+      enrichHeartRate: true,
+    });
     const { newActivities, skipped } = this.stravaService.filterNewActivities(activities, knownIds);
+    const todayKey = new Date().toISOString().slice(0, 10);
     const fields = this.stravaService.mapToWellnessFields(
       activities.filter((activity) => {
         const date = String(activity.start_date_local || activity.start_date || '').slice(0, 10);
-        return date === new Date().toISOString().slice(0, 10);
+        return date === todayKey;
       }),
     );
     const entries = this.stravaService.buildWellnessEntriesFromActivities(newActivities);
@@ -204,11 +212,24 @@ export class WellnessController {
     let newActivitiesCount = newActivities.length;
     let newDays = 0;
     const alreadyUpToDate = newActivities.length === 0;
+    let state = existingState;
+    let heartRateUpdated = 0;
 
     if (String(shouldImport || '1') !== '0' && newActivities.length) {
       const result = await this.storageService.importStravaEntries(userId, entries);
       imported = result.newDays;
       newDays = result.newDays;
+      state = result.state;
+    }
+
+    // Always refresh heart-rate on already-imported activities (detail enrichment / older syncs missing HR).
+    if (String(shouldImport || '1') !== '0' && activities.length) {
+      const hrResult = await this.storageService.refreshStravaHeartRate(
+        userId,
+        this.stravaService.buildWellnessEntriesFromActivities(activities),
+      );
+      heartRateUpdated = hrResult.updatedDays;
+      state = hrResult.state;
     }
 
     return {
@@ -216,12 +237,26 @@ export class WellnessController {
       newActivities: newActivitiesCount,
       skippedActivities: skipped,
       newDays,
-      alreadyUpToDate,
+      alreadyUpToDate: alreadyUpToDate && heartRateUpdated === 0,
       imported,
+      firstSync: isFirstSync,
+      windowDays,
+      heartRateUpdated,
       fields,
       entries,
       insights,
+      heartRateDays: (state.entries || []).filter((entry) => Number(entry.stravaAvgHeartRate || entry.heartRateAvg || 0) > 0).length,
     };
+  }
+
+  @Put('strava/runs/:userId/:activityId/shoe')
+  async assignStravaRunShoe(
+    @Param('userId') userId: string,
+    @Param('activityId') activityId: string,
+    @Body() body: { shoeId?: string },
+  ) {
+    const result = await this.storageService.assignStravaRunShoe(userId, Number(activityId), String(body?.shoeId || ''));
+    return result;
   }
 
   @Get('strava/insights/:userId')
@@ -231,10 +266,30 @@ export class WellnessController {
   ) {
     const connected = await this.stravaService.isConnected(userId);
     if (!connected) {
-      return { connected: false, runCount: 0, recentRuns: [], paceByMinuteBuckets: [] };
+      return {
+        connected: false,
+        runCount: 0,
+        recentRuns: [],
+        paceByMinuteBuckets: [],
+        heartRateZones: [],
+        heartRateZoneRuns: 0,
+      };
     }
-    const activities = await this.stravaService.getRecentActivities(userId, Number(days) || 90);
-    return this.stravaService.buildRunInsights(activities);
+    const activities = await this.stravaService.getRecentActivities(userId, Number(days) || 180, {
+      enrichHeartRate: true,
+    });
+    const zoneEnrichment = await this.stravaService.enrichActivitiesWithHeartRateZones(userId, activities, {
+      maxActivities: 25,
+    });
+    const insights = this.stravaService.buildRunInsights(zoneEnrichment.activities);
+    return {
+      ...insights,
+      zoneSource: zoneEnrichment.zoneSource,
+      paceZoneSource: zoneEnrichment.paceZoneSource,
+      athleteZones: zoneEnrichment.athleteZones,
+      premiumRequired: zoneEnrichment.premiumRequired,
+      heartRateAvailable: zoneEnrichment.heartRateAvailable,
+    };
   }
 
   @Delete('strava/:userId')

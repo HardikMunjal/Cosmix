@@ -12,6 +12,7 @@ import {
   getRunningShoeLabel,
   loadRunningShoesFromServer,
   readRunningShoes,
+  resolveWellnessApiBase,
   saveRunningShoesLocal,
   syncRunningShoesToServer,
 } from '../lib/runningShoes';
@@ -437,11 +438,14 @@ function WeeklyMileageChart({ runRows, theme }) {
   );
 }
 
-function RunningShoesPanel({ userId, shoes, onChange, theme }) {
+function RunningShoesPanel({ userId, shoes, onChange, theme, importedRuns = [], onAssignShoe, savingShoeId }) {
   const [name, setName] = useState('');
-  const [brand, setBrand] = useState('');
+  const activeShoes = (shoes || []).filter((shoe) => !shoe.retired);
+  const needsShoe = (importedRuns || []).filter((run) => run.stravaId && !run.shoeId).slice(0, 12);
+  const assignedCount = (importedRuns || []).filter((run) => run.stravaId && run.shoeId).length;
 
-  function handleAdd() {
+  function handleAdd(event) {
+    if (event?.preventDefault) event.preventDefault();
     const trimmedName = String(name || '').trim();
     if (!trimmedName) return;
     const next = [
@@ -449,7 +453,7 @@ function RunningShoesPanel({ userId, shoes, onChange, theme }) {
       {
         id: createRunningShoeId(),
         name: trimmedName,
-        brand: String(brand || '').trim(),
+        brand: '',
         createdAt: new Date().toISOString(),
         retired: false,
       },
@@ -458,7 +462,6 @@ function RunningShoesPanel({ userId, shoes, onChange, theme }) {
     onChange(saved);
     void syncRunningShoesToServer(userId, saved);
     setName('');
-    setBrand('');
   }
 
   function handleRemove(shoeId) {
@@ -470,25 +473,134 @@ function RunningShoesPanel({ userId, shoes, onChange, theme }) {
 
   return (
     <div style={{ display: 'grid', gap: 12 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8 }}>
-        <input value={brand} onChange={(e) => setBrand(e.target.value)} placeholder="Brand (optional)" style={{ padding: '10px 12px', borderRadius: 12, border: `1px solid ${theme.cardBorder}`, background: theme.cardBg, color: theme.textPrimary }} />
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Shoe name" style={{ padding: '10px 12px', borderRadius: 12, border: `1px solid ${theme.cardBorder}`, background: theme.cardBg, color: theme.textPrimary }} />
-        <button type="button" onClick={handleAdd} style={{ border: 'none', borderRadius: 12, padding: '10px 14px', background: theme.orange, color: '#fff', fontWeight: 800, cursor: 'pointer' }}>Add</button>
-      </div>
-      {!shoes.length ? (
-        <div style={{ fontSize: 13, color: theme.textMuted }}>No shoes yet. Add your running shoes to track km, pace, and speed per pair.</div>
+      <form onSubmit={handleAdd} style={{ display: 'flex', gap: 8 }}>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="e.g. Nike Pegasus 40"
+          aria-label="Shoe name"
+          style={{
+            flex: 1,
+            minWidth: 0,
+            padding: '10px 12px',
+            borderRadius: 12,
+            border: `1px solid ${theme.cardBorder}`,
+            background: theme.cardBg,
+            color: theme.textPrimary,
+            fontSize: 14,
+          }}
+        />
+        <button
+          type="submit"
+          disabled={!String(name || '').trim()}
+          style={{
+            border: 'none',
+            borderRadius: 12,
+            padding: '10px 16px',
+            background: theme.orange,
+            color: '#fff',
+            fontWeight: 800,
+            cursor: String(name || '').trim() ? 'pointer' : 'default',
+            opacity: String(name || '').trim() ? 1 : 0.55,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          Add
+        </button>
+      </form>
+
+      {activeShoes.length ? (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {activeShoes.map((shoe) => (
+            <span
+              key={shoe.id}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '6px 8px 6px 12px',
+                borderRadius: 999,
+                border: `1px solid ${theme.cardBorder}`,
+                background: theme.pageBgSolid || theme.cardBg,
+                fontSize: 13,
+                fontWeight: 700,
+                color: theme.textHeading,
+              }}
+            >
+              {getRunningShoeLabel(shoe)}
+              <button
+                type="button"
+                onClick={() => handleRemove(shoe.id)}
+                aria-label={`Remove ${getRunningShoeLabel(shoe)}`}
+                style={{
+                  border: 'none',
+                  background: 'transparent',
+                  color: theme.textMuted,
+                  cursor: 'pointer',
+                  fontSize: 14,
+                  lineHeight: 1,
+                  padding: '2px 4px',
+                }}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
       ) : (
-        <div style={{ display: 'grid', gap: 8 }}>
-          {shoes.map((shoe) => (
-            <div key={shoe.id} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 10, alignItems: 'center', padding: '12px 14px', borderRadius: 14, border: `1px solid ${theme.cardBorder}`, background: theme.cardBg }}>
-              <div>
-                <div style={{ fontWeight: 800, color: theme.textHeading }}>{getRunningShoeLabel(shoe)}</div>
+        <div style={{ fontSize: 13, color: theme.textMuted }}>Type a shoe name and hit Add.</div>
+      )}
+
+      {importedRuns.length ? (
+        <div style={{ display: 'grid', gap: 8, paddingTop: 4, borderTop: `1px solid ${theme.cardBorder}` }}>
+          <div style={{ fontSize: 12, color: theme.textMuted }}>
+            {needsShoe.length
+              ? `${needsShoe.length} recent Strava run${needsShoe.length === 1 ? '' : 's'} need a shoe`
+              : `${assignedCount} Strava run${assignedCount === 1 ? '' : 's'} tagged`}
+          </div>
+          {needsShoe.length && !activeShoes.length ? (
+            <div style={{ fontSize: 12, color: theme.textMuted }}>Add a shoe above, then pick it for each run.</div>
+          ) : null}
+          {needsShoe.map((run) => (
+            <div
+              key={run.stravaId}
+              style={{
+                display: 'flex',
+                gap: 10,
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: theme.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {fmtDate(run.date)} · {run.distance} km
+                </div>
               </div>
-              <button type="button" onClick={() => handleRemove(shoe.id)} style={{ border: `1px solid ${theme.cardBorder}`, borderRadius: 10, background: 'transparent', color: theme.textMuted, padding: '6px 10px', cursor: 'pointer' }}>Remove</button>
+              <select
+                value={run.shoeId || ''}
+                disabled={!activeShoes.length || savingShoeId === run.stravaId}
+                onChange={(event) => onAssignShoe?.(run.stravaId, event.target.value)}
+                style={{
+                  width: 148,
+                  flexShrink: 0,
+                  borderRadius: 10,
+                  border: `1px solid ${theme.cardBorder}`,
+                  background: theme.inputBg || '#fff',
+                  color: theme.textPrimary,
+                  padding: '7px 8px',
+                  fontSize: 12,
+                  fontWeight: 600,
+                }}
+              >
+                <option value="">{activeShoes.length ? 'Shoe…' : 'Add shoe first'}</option>
+                {activeShoes.map((shoe) => (
+                  <option key={shoe.id} value={shoe.id}>{getRunningShoeLabel(shoe)}</option>
+                ))}
+              </select>
             </div>
           ))}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -588,19 +700,60 @@ function CollapsibleBlock({ title, children, theme, defaultOpen = false }) {
   );
 }
 
-function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, userId, onOpenMarathonPlan, goalRefreshKey, entries, runningShoes, onRunningShoesChange, stravaInsights }) {
+function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, userId, onOpenMarathonPlan, goalRefreshKey, entries, runningShoes, onRunningShoesChange, onEntriesChange, stravaInsights }) {
   const noData = !runStats || runStats.totalRuns === 0;
   const insights = useMemo(() => buildRunningInsights(runRows), [runRows]);
   const paceDelta = insights.avgPace7 && insights.avgPace30
     ? insights.avgPace7 - insights.avgPace30
     : null;
+  const importedRuns = useMemo(() => buildRunningRows(entries).filter((row) => row.stravaId), [entries]);
+  const [savingShoeId, setSavingShoeId] = useState(null);
+
+  const handleAssignShoe = async (stravaId, shoeId) => {
+    if (!userId || !stravaId) return;
+    const apiBase = resolveWellnessApiBase();
+    if (!apiBase) return;
+    setSavingShoeId(stravaId);
+    try {
+      const response = await fetch(`${apiBase}/wellness/strava/runs/${encodeURIComponent(userId)}/${encodeURIComponent(stravaId)}/shoe`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shoeId: shoeId || '' }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (response.ok && Array.isArray(payload?.state?.entries) && typeof onEntriesChange === 'function') {
+        onEntriesChange(payload.state.entries);
+        try {
+          localStorage.setItem(`cosmix-wellness-${userId}-entries`, JSON.stringify(payload.state.entries));
+        } catch (_) { /* ignore */ }
+      }
+    } finally {
+      setSavingShoeId(null);
+    }
+  };
 
   return (
     <div style={{ display: 'grid', gap: '14px' }}>
       <MarathonRaceHub userId={userId} runRows={runRows} theme={theme} onOpenPlan={onOpenMarathonPlan} refreshKey={goalRefreshKey} compact />
 
-      <CollapsibleBlock title="My running shoes" theme={theme} defaultOpen>
-        <RunningShoesPanel userId={userId} shoes={runningShoes} onChange={onRunningShoesChange} theme={theme} />
+      <CollapsibleBlock
+        title={
+          runningShoes.filter((s) => !s.retired).length
+            ? `Shoes (${runningShoes.filter((s) => !s.retired).length})`
+            : 'Shoes'
+        }
+        theme={theme}
+        defaultOpen={!runningShoes.filter((s) => !s.retired).length}
+      >
+        <RunningShoesPanel
+          userId={userId}
+          shoes={runningShoes}
+          onChange={onRunningShoesChange}
+          theme={theme}
+          importedRuns={importedRuns}
+          onAssignShoe={handleAssignShoe}
+          savingShoeId={savingShoeId}
+        />
       </CollapsibleBlock>
 
       {stravaInsights?.connected ? (
@@ -608,13 +761,88 @@ function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, us
           <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
             <div className="run-dash-mini-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 8 }}>
               <MiniStat label="Strava runs" value={`${stravaInsights.runCount || 0}`} sub={`${stravaInsights.totalDistanceKm || 0} km total`} accent="#fc5200" theme={theme} />
-              <MiniStat label="Max speed" value={stravaInsights.maxSpeedKmh ? `${stravaInsights.maxSpeedKmh} km/h` : '--'} sub="from GPS" accent={theme.green} theme={theme} />
+              <MiniStat label="Max speed" value={stravaInsights.maxSpeedKmh ? `${stravaInsights.maxSpeedKmh} km/h` : '--'} sub="GPS spike-filtered" accent={theme.green} theme={theme} />
               <MiniStat label="Best pace" value={stravaInsights.bestPaceMinPerKm ? fmtPace(stravaInsights.bestPaceMinPerKm) : '--'} sub={stravaInsights.bestPaceRun ? fmtDate(stravaInsights.bestPaceRun.date) : 'min/km'} accent={theme.cyan} theme={theme} />
               <MiniStat label="Elevation" value={`${stravaInsights.elevationGainM || 0} m`} sub="total climb" accent={theme.purple} theme={theme} />
               <MiniStat label="Avg heart rate" value={stravaInsights.avgHeartRate ? `${stravaInsights.avgHeartRate} bpm` : '--'} sub={stravaInsights.maxHeartRate ? `max ${stravaInsights.maxHeartRate} bpm` : 'from Strava'} accent="#f43f5e" theme={theme} />
               <MiniStat label="Avg speed" value={stravaInsights.avgSpeedKmh ? `${stravaInsights.avgSpeedKmh} km/h` : '--'} sub="moving average" accent={theme.orange} theme={theme} />
               <MiniStat label="Longest run" value={stravaInsights.longestRunKm ? `${stravaInsights.longestRunKm} km` : '--'} sub={stravaInsights.longestRun ? fmtDate(stravaInsights.longestRun.date) : 'distance'} accent={theme.blue} theme={theme} />
+              <MiniStat
+                label="Dominant HR zone"
+                value={stravaInsights.dominantHeartRateZone ? `Z${stravaInsights.dominantHeartRateZone.zone}` : '--'}
+                sub={stravaInsights.dominantHeartRateZone ? `${stravaInsights.dominantHeartRateZone.percent}% · ${stravaInsights.heartRateZoneRuns || 0} runs` : (stravaInsights.heartRateAvailable === false ? 'no HR on Strava activities' : 'needs HR activities')}
+                accent="#fb7185"
+                theme={theme}
+              />
+              <MiniStat
+                label="Dominant pace zone"
+                value={stravaInsights.dominantPaceZone ? `Z${stravaInsights.dominantPaceZone.zone}` : '--'}
+                sub={stravaInsights.dominantPaceZone ? `${stravaInsights.dominantPaceZone.percent}% · ${stravaInsights.paceZoneRuns || 0} runs` : 'from Strava /zones'}
+                accent="#38bdf8"
+                theme={theme}
+              />
             </div>
+            {(stravaInsights.paceZones || []).length ? (
+              <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 18, padding: 14, display: 'grid', gap: 10 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>Pace zones (Strava)</div>
+                  <div style={{ fontSize: 11, color: theme.textMuted }}>
+                    {stravaInsights.paceZoneRuns || 0} runs · what Strava has for Amazfit/GPS runs
+                  </div>
+                </div>
+                {(stravaInsights.paceZones || []).map((zone) => (
+                  <div key={`pace-zone-${zone.zone}`} style={{ display: 'grid', gridTemplateColumns: '170px 1fr 64px', gap: 8, alignItems: 'center' }}>
+                    <span style={{ fontSize: 11, color: theme.textMuted, fontWeight: 700 }}>{zone.label}</span>
+                    <div style={{ height: 10, borderRadius: 999, background: `${theme.cardBorder}`, overflow: 'hidden' }}>
+                      <div style={{
+                        width: `${Math.min(100, Number(zone.percent || 0))}%`,
+                        height: '100%',
+                        background: ['#94a3b8', '#38bdf8', '#22c55e', '#f59e0b', '#ef4444', '#a855f7'][Math.max(0, Number(zone.zone || 1) - 1)] || '#38bdf8',
+                      }}
+                      />
+                    </div>
+                    <span style={{ fontSize: 12, fontWeight: 800, color: theme.textHeading, textAlign: 'right' }}>{zone.percent}%</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {(stravaInsights.heartRateZones || []).length ? (
+              <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 18, padding: 14, display: 'grid', gap: 10 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>Heart rate zones (Strava)</div>
+                  <div style={{ fontSize: 11, color: theme.textMuted }}>
+                    {stravaInsights.heartRateZoneRuns || 0} runs · source {stravaInsights.zoneSource || 'strava'}
+                  </div>
+                </div>
+                {(stravaInsights.heartRateZones || []).map((zone) => (
+                  <div key={`hr-zone-${zone.zone}`} style={{ display: 'grid', gridTemplateColumns: '150px 1fr 64px', gap: 8, alignItems: 'center' }}>
+                    <span style={{ fontSize: 11, color: theme.textMuted, fontWeight: 700 }}>{zone.label}</span>
+                    <div style={{ height: 10, borderRadius: 999, background: `${theme.cardBorder}`, overflow: 'hidden' }}>
+                      <div style={{
+                        width: `${Math.min(100, Number(zone.percent || 0))}%`,
+                        height: '100%',
+                        background: ['#94a3b8', '#38bdf8', '#22c55e', '#f59e0b', '#ef4444', '#a855f7'][Math.max(0, Number(zone.zone || 1) - 1)] || '#fb7185',
+                      }}
+                      />
+                    </div>
+                    <span style={{ fontSize: 12, fontWeight: 800, color: theme.textHeading, textAlign: 'right' }}>{zone.percent}%</span>
+                  </div>
+                ))}
+                <div style={{ fontSize: 11, color: theme.textMuted }}>
+                  Time in HR zone across recent runs
+                  {stravaInsights.zoneSource === 'stream'
+                    ? ' · rebuilt from HR streams'
+                    : stravaInsights.zoneSource === 'activity_zones'
+                      ? ' · from Strava activity zones'
+                      : ''}
+                  .
+                </div>
+              </div>
+            ) : (
+              <div style={{ borderRadius: 14, border: `1px dashed ${theme.cardBorder}`, padding: 12, fontSize: 12, color: theme.textMuted }}>
+                No heart-rate zones on these Strava activities (API has pace/power zones only). Open a run in Strava — if there is no HR chart, Amazfit/Zepp is not uploading HR. Enable HR sync in Zepp → Strava, then reconnect Strava here.
+              </div>
+            )}
             {(stravaInsights.paceByMinuteBuckets || []).some((b) => b.count > 0) ? (
               <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 18, padding: 14, display: 'grid', gap: 8 }}>
                 <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>Pace by minutes (Strava)</div>
@@ -631,12 +859,12 @@ function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, us
             ) : null}
             {(stravaInsights.fastestRuns || []).length ? (
               <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 18, overflow: 'hidden' }}>
-                <div style={{ padding: '14px 18px', fontWeight: 800, fontSize: 14, color: theme.textHeading, borderBottom: `1px solid ${theme.cardBorder}` }}>Highest max speeds (Strava)</div>
+                <div style={{ padding: '14px 18px', fontWeight: 800, fontSize: 14, color: theme.textHeading, borderBottom: `1px solid ${theme.cardBorder}` }}>Fastest average speeds (Strava)</div>
                 {stravaInsights.fastestRuns.slice(0, 6).map((run, index) => (
                   <div key={`${run.id || run.date}-${index}`} style={{ display: 'grid', gridTemplateColumns: '28px 1fr auto auto', gap: 10, padding: '11px 18px', borderTop: index > 0 ? `1px solid ${theme.cardBorder}` : 'none', alignItems: 'center' }}>
                     <span style={{ fontSize: 12, fontWeight: 800, color: index === 0 ? '#fc5200' : theme.textMuted }}>#{index + 1}</span>
                     <span style={{ fontSize: 12, color: theme.textSecondary }}>{fmtDate(run.date)} · {run.name}</span>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: theme.green }}>{run.maxSpeedKmh} km/h</span>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: theme.green }}>{run.avgSpeedKmh || run.rankSpeedKmh} km/h avg</span>
                     <span style={{ fontSize: 11, color: theme.textMuted }}>{run.distanceKm} km · {fmtPace(run.paceMinPerKm)}</span>
                   </div>
                 ))}
@@ -653,6 +881,7 @@ function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, us
                         {fmtDate(run.date)} · {run.distanceKm} km · {fmtPace(run.paceMinPerKm)}
                         {run.elevationGainM ? ` · ↑${run.elevationGainM}m` : ''}
                         {run.maxSpeedKmh ? ` · max ${run.maxSpeedKmh} km/h` : ''}
+                        {run.avgHeartrate ? ` · HR ${run.avgHeartrate} bpm` : ''}
                       </div>
                     </div>
                     <span style={{ fontSize: 12, fontWeight: 800, color: '#fc5200' }}>{run.minutes} min</span>
@@ -904,6 +1133,7 @@ export default function RunningAnalytics() {
   const [showOtherSports, setShowOtherSports] = useState(false);
   const [runningShoes, setRunningShoes] = useState([]);
   const [stravaInsights, setStravaInsights] = useState(null);
+  const [serverEntries, setServerEntries] = useState(null);
 
   useEffect(() => {
     restoreUserSession(router, setUser);
@@ -924,9 +1154,25 @@ export default function RunningAnalytics() {
 
   useEffect(() => {
     if (!user?.id) return undefined;
-    const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:3000';
+    const apiBase = resolveWellnessApiBase();
+    if (!apiBase) return undefined;
     let cancelled = false;
-    fetch(`${API_BASE}/wellness/strava/insights/${encodeURIComponent(user.id)}?days=90`)
+    fetch(`${apiBase}/wellness/data/${encodeURIComponent(user.id)}`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload) => {
+        if (cancelled || !payload) return;
+        if (Array.isArray(payload.entries)) {
+          setServerEntries(payload.entries);
+          try {
+            localStorage.setItem(`cosmix-wellness-${user.id}-entries`, JSON.stringify(payload.entries));
+          } catch (_) { /* ignore */ }
+        }
+        if (Array.isArray(payload.runningShoes) && payload.runningShoes.length) {
+          setRunningShoes(saveRunningShoesLocal(user.id, payload.runningShoes));
+        }
+      })
+      .catch(() => {});
+    fetch(`${apiBase}/wellness/strava/insights/${encodeURIComponent(user.id)}?days=180`)
       .then((response) => (response.ok ? response.json() : null))
       .then((payload) => {
         if (!cancelled) setStravaInsights(payload);
@@ -937,12 +1183,14 @@ export default function RunningAnalytics() {
     return () => { cancelled = true; };
   }, [user?.id]);
 
-  const runStats = useMemo(() => (user?.id ? computeRunningStats(user.id) : null), [user?.id]);
-  const wellStats = useMemo(() => (user?.id ? computeWellnessStats(user.id) : null), [user?.id]);
-  const wellSummary = useMemo(() => (user?.id ? buildWellnessSummary(user.id) : null), [user?.id]);
-
-  const entries = useMemo(() => wellSummary?.entries || [], [wellSummary]);
+  const wellSummary = useMemo(() => (user?.id ? buildWellnessSummary(user.id) : null), [user?.id, serverEntries]);
+  const entries = useMemo(
+    () => (Array.isArray(serverEntries) && serverEntries.length ? serverEntries : (wellSummary?.entries || [])),
+    [serverEntries, wellSummary],
+  );
   const runRows = useMemo(() => buildRunningRows(entries), [entries]);
+  const runStats = useMemo(() => (user?.id ? computeRunningStats(user.id) : null), [user?.id, entries]);
+  const wellStats = useMemo(() => (user?.id ? computeWellnessStats(user.id) : null), [user?.id, entries]);
 
   const allSportStats = useMemo(() => ({
     running: computeSportStats(entries, 'runningMinutes', 'runningDistanceKm'),
@@ -1101,6 +1349,7 @@ export default function RunningAnalytics() {
             entries={entries}
             runningShoes={runningShoes}
             onRunningShoesChange={setRunningShoes}
+            onEntriesChange={setServerEntries}
             userId={user?.id}
             onOpenMarathonPlan={() => setShowMarathonModal(true)}
             goalRefreshKey={goalRefreshKey}

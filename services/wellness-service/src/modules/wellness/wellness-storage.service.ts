@@ -1067,28 +1067,184 @@ export class WellnessStorageService {
     const existingIds = Array.isArray(existing.stravaActivityIds) ? existing.stravaActivityIds : [];
     const deltaIds = Array.isArray(delta.stravaActivityIds) ? delta.stravaActivityIds : [];
     merged.stravaActivityIds = [...new Set([...existingIds, ...deltaIds].map((id) => Number(id)).filter((id) => id > 0))];
-    merged.stravaRuns = [...(Array.isArray(existing.stravaRuns) ? existing.stravaRuns : []), ...(Array.isArray(delta.stravaRuns) ? delta.stravaRuns : [])];
 
-    const existingHrWeight = Number(existing.runningMinutes || 0) + Number(existing.walkingMinutes || 0);
-    const deltaHrWeight = Number(delta.runningMinutes || 0) + Number(delta.walkingMinutes || 0);
-    const existingAvgHr = Number(existing.stravaAvgHeartRate || 0);
-    const deltaAvgHr = Number(delta.stravaAvgHeartRate || 0);
+    const existingRuns = Array.isArray(existing.stravaRuns) ? existing.stravaRuns : [];
+    const deltaRuns = Array.isArray(delta.stravaRuns) ? delta.stravaRuns : [];
+    const runById = new Map<number, any>();
+    for (const run of [...existingRuns, ...deltaRuns]) {
+      const id = Number(run?.id || run?.stravaId || 0);
+      if (!Number.isFinite(id) || id <= 0) continue;
+      const previous = runById.get(id) || {};
+      runById.set(id, {
+        ...previous,
+        ...run,
+        // Keep shoe assignment if the incoming delta does not include one.
+        shoeId: run?.shoeId || previous?.shoeId || '',
+      });
+    }
+    merged.stravaRuns = [...runById.values()];
+
+    const existingHrWeight = Number(existing.runningMinutes || 0) + Number(existing.walkingMinutes || 0) + Number(existing.cyclingMinutes || 0);
+    const deltaHrWeight = Number(delta.runningMinutes || 0) + Number(delta.walkingMinutes || 0) + Number(delta.cyclingMinutes || 0);
+    const existingAvgHr = Number(existing.stravaAvgHeartRate || existing.heartRateAvg || 0);
+    const deltaAvgHr = Number(delta.stravaAvgHeartRate || delta.heartRateAvg || 0);
     const totalHrWeight = existingHrWeight + deltaHrWeight;
     if (totalHrWeight > 0 && (existingAvgHr || deltaAvgHr)) {
       merged.stravaAvgHeartRate = Math.round(
-        ((existingAvgHr * existingHrWeight) + (deltaAvgHr * deltaHrWeight)) / totalHrWeight,
+        ((existingAvgHr * Math.max(1, existingHrWeight)) + (deltaAvgHr * Math.max(1, deltaHrWeight))) / Math.max(1, totalHrWeight),
       );
     } else {
-      merged.stravaAvgHeartRate = delta.stravaAvgHeartRate || existing.stravaAvgHeartRate || null;
+      merged.stravaAvgHeartRate = delta.stravaAvgHeartRate || existing.stravaAvgHeartRate || delta.heartRateAvg || existing.heartRateAvg || null;
     }
     merged.stravaMaxHeartRate = Math.max(
-      Number(existing.stravaMaxHeartRate || 0),
-      Number(delta.stravaMaxHeartRate || 0),
+      Number(existing.stravaMaxHeartRate || existing.heartRateMax || 0),
+      Number(delta.stravaMaxHeartRate || delta.heartRateMax || 0),
     ) || null;
+    merged.heartRateAvg = merged.stravaAvgHeartRate || null;
+    merged.heartRateMax = merged.stravaMaxHeartRate || null;
 
     merged.source = existing.source && existing.source !== 'strava' ? 'mixed' : 'strava';
     merged.updatedAt = this.nowIso();
     return this.normalizeEntryRecord(merged, activePlanId ?? existing.planId ?? null);
+  }
+
+  async assignStravaRunShoe(userId: string, activityId: number, shoeId: string): Promise<{ ok: boolean; state?: WellnessState; error?: string }> {
+    const numericId = Number(activityId);
+    if (!Number.isFinite(numericId) || numericId <= 0) {
+      return { ok: false, error: 'Invalid Strava activity id.' };
+    }
+
+    const [store, scoringRules] = await Promise.all([this.loadStore(userId), this.loadScoringRules()]);
+    const normalizedStore = this.normalizeStore(store);
+    const nextShoeId = String(shoeId || '').trim();
+    let changed = false;
+
+    const entries = normalizedStore.entries.map((entry) => {
+      const runs = Array.isArray(entry.stravaRuns) ? entry.stravaRuns : [];
+      if (!runs.length) return entry;
+      let entryChanged = false;
+      const nextRuns = runs.map((run: any) => {
+        const id = Number(run?.id || run?.stravaId || 0);
+        if (id !== numericId) return run;
+        entryChanged = true;
+        return { ...run, shoeId: nextShoeId };
+      });
+      if (!entryChanged) return entry;
+      changed = true;
+      const preferredShoe = nextShoeId || entry.runningShoeId || '';
+      return this.normalizeEntryRecord({
+        ...entry,
+        stravaRuns: nextRuns,
+        runningShoeId: preferredShoe,
+        updatedAt: this.nowIso(),
+      }, entry.planId);
+    });
+
+    if (!changed) {
+      return { ok: false, error: 'Strava run not found in wellness history.' };
+    }
+
+    const nextStore = this.normalizeStore({
+      ...normalizedStore,
+      entries: this.sortEntries(entries),
+      updatedAt: this.nowIso(),
+    });
+    const derived = this.deriveScoresWithCache(nextStore, scoringRules);
+    await this.persistStore(userId, derived.store);
+    return {
+      ok: true,
+      state: this.buildPublicState(derived.store, scoringRules),
+    };
+  }
+
+  async refreshStravaHeartRate(
+    userId: string,
+    sourceEntries: WellnessEntry[] = [],
+  ): Promise<{ state: WellnessState; updatedDays: number }> {
+    const [store, scoringRules] = await Promise.all([this.loadStore(userId), this.loadScoringRules()]);
+    const normalizedStore = this.normalizeStore(store);
+    const activePlan = this.activePlanForStore(normalizedStore);
+    const activePlanId = activePlan?.id || null;
+    const byDate = new Map(
+      sourceEntries
+        .map((entry) => [this.normalizeDate(entry.date), entry] as const)
+        .filter(([date]) => Boolean(date)),
+    );
+
+    let updatedDays = 0;
+    const entries = normalizedStore.entries.map((entry) => {
+      const date = this.normalizeDate(entry.date);
+      const incoming = byDate.get(date);
+      if (!incoming) return entry;
+      if (entry.status === 'inactive') return entry;
+      if (activePlanId && entry.planId && entry.planId !== activePlanId) return entry;
+
+      const nextAvg = Number(incoming.stravaAvgHeartRate || incoming.heartRateAvg || 0);
+      const nextMax = Number(incoming.stravaMaxHeartRate || incoming.heartRateMax || 0);
+      const currentAvg = Number(entry.stravaAvgHeartRate || entry.heartRateAvg || 0);
+      const currentMax = Number(entry.stravaMaxHeartRate || entry.heartRateMax || 0);
+      const incomingRuns = Array.isArray(incoming.stravaRuns) ? incoming.stravaRuns : [];
+      const existingRuns = Array.isArray(entry.stravaRuns) ? entry.stravaRuns : [];
+
+      let runsChanged = false;
+      const runById = new Map<number, any>();
+      for (const run of existingRuns) {
+        const id = Number(run?.id || run?.stravaId || 0);
+        if (id > 0) runById.set(id, { ...run });
+      }
+      for (const run of incomingRuns) {
+        const id = Number(run?.id || run?.stravaId || 0);
+        if (id <= 0) continue;
+        const previous = runById.get(id) || {};
+        const mergedRun = {
+          ...previous,
+          ...run,
+          shoeId: previous.shoeId || run.shoeId || '',
+          avgHeartrate: run.avgHeartrate || previous.avgHeartrate || null,
+          maxHeartrate: run.maxHeartrate || previous.maxHeartrate || null,
+        };
+        if (
+          Number(mergedRun.avgHeartrate || 0) !== Number(previous.avgHeartrate || 0)
+          || Number(mergedRun.maxHeartrate || 0) !== Number(previous.maxHeartrate || 0)
+        ) {
+          runsChanged = true;
+        }
+        runById.set(id, mergedRun);
+      }
+
+      const shouldUpdateHr = (nextAvg > 0 && nextAvg !== currentAvg) || (nextMax > 0 && nextMax !== currentMax);
+      if (!shouldUpdateHr && !runsChanged) return entry;
+
+      updatedDays += 1;
+      return this.normalizeEntryRecord({
+        ...entry,
+        stravaAvgHeartRate: nextAvg || currentAvg || null,
+        stravaMaxHeartRate: Math.max(nextMax, currentMax) || null,
+        heartRateAvg: nextAvg || currentAvg || null,
+        heartRateMax: Math.max(nextMax, currentMax) || null,
+        stravaRuns: [...runById.values()],
+        updatedAt: this.nowIso(),
+      }, activePlanId ?? entry.planId ?? null);
+    });
+
+    if (!updatedDays) {
+      return {
+        state: this.buildPublicState(normalizedStore, scoringRules),
+        updatedDays: 0,
+      };
+    }
+
+    const nextStore = this.normalizeStore({
+      ...normalizedStore,
+      entries: this.sortEntries(entries),
+      updatedAt: this.nowIso(),
+    });
+    const derived = this.deriveScoresWithCache(nextStore, scoringRules);
+    await this.persistStore(userId, derived.store);
+    return {
+      state: this.buildPublicState(derived.store, scoringRules),
+      updatedDays,
+    };
   }
 
   async importStravaEntries(userId: string, deltaEntries: WellnessEntry[]): Promise<{ state: WellnessState; newDays: number }> {

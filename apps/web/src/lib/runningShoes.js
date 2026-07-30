@@ -69,15 +69,48 @@ export function findRunningShoe(shoes, shoeId) {
 }
 
 export function buildRunningRows(entries = []) {
-  return [...entries]
-    .filter((entry) => Number(entry.runningMinutes || 0) > 0 || Number(entry.runningDistanceKm || 0) > 0)
-    .map((entry) => ({
-      date: entry.date,
-      minutes: Number(entry.runningMinutes || 0),
-      distance: Number(entry.runningDistanceKm || 0),
-      shoeId: String(entry.runningShoeId || '').trim(),
-    }))
-    .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const rows = [];
+
+  [...entries].forEach((entry) => {
+    const stravaRuns = Array.isArray(entry?.stravaRuns) ? entry.stravaRuns : [];
+    if (stravaRuns.length) {
+      stravaRuns.forEach((run) => {
+        const minutes = Number(run.minutes || 0);
+        const distance = Number(run.distanceKm || 0);
+        if (minutes <= 0 && distance <= 0) return;
+        rows.push({
+          date: run.date || entry.date,
+          minutes,
+          distance,
+          shoeId: String(run.shoeId || entry.runningShoeId || '').trim(),
+          stravaId: Number(run.id || run.stravaId || 0) || null,
+          name: run.name || 'Run',
+          avgHeartrate: Number(run.avgHeartrate || 0) || null,
+          maxHeartrate: Number(run.maxHeartrate || 0) || null,
+          avgSpeedKmh: Number(run.avgSpeedKmh || 0) || null,
+          source: 'strava',
+        });
+      });
+      return;
+    }
+
+    if (Number(entry.runningMinutes || 0) > 0 || Number(entry.runningDistanceKm || 0) > 0) {
+      rows.push({
+        date: entry.date,
+        minutes: Number(entry.runningMinutes || 0),
+        distance: Number(entry.runningDistanceKm || 0),
+        shoeId: String(entry.runningShoeId || '').trim(),
+        stravaId: null,
+        name: 'Run',
+        avgHeartrate: Number(entry.stravaAvgHeartRate || entry.heartRateAvg || 0) || null,
+        maxHeartrate: Number(entry.stravaMaxHeartRate || entry.heartRateMax || 0) || null,
+        avgSpeedKmh: null,
+        source: entry.source || 'manual',
+      });
+    }
+  });
+
+  return rows.sort((a, b) => String(b.date).localeCompare(String(a.date)));
 }
 
 export function computeShoeStats(entries = [], shoes = []) {
@@ -105,7 +138,7 @@ export function computeShoeStats(entries = [], shoes = []) {
       }
       const bucket = buckets.get(key);
       const pace = row.minutes / row.distance;
-      const speed = row.distance / (row.minutes / 60);
+      const speed = row.avgSpeedKmh || (row.distance / (row.minutes / 60));
       bucket.runs += 1;
       bucket.totalKm += row.distance;
       bucket.totalMinutes += row.minutes;
