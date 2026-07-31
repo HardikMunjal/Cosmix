@@ -198,11 +198,11 @@ export class WellnessController {
       enrichHeartRate: true,
     });
     const { newActivities, skipped } = this.stravaService.filterNewActivities(activities, knownIds);
-    const todayKey = new Date().toISOString().slice(0, 10);
+    const todayLocal = new Date(Date.now() + (5.5 * 60 * 60 * 1000)).toISOString().slice(0, 10);
     const fields = this.stravaService.mapToWellnessFields(
       activities.filter((activity) => {
         const date = String(activity.start_date_local || activity.start_date || '').slice(0, 10);
-        return date === todayKey;
+        return date === todayLocal;
       }),
     );
     const entries = this.stravaService.buildWellnessEntriesFromActivities(newActivities);

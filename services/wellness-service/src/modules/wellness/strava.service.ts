@@ -235,14 +235,20 @@ export class StravaService {
   }
 
   private async enrichActivitiesWithHeartRate(accessToken: string, activities: any[] = []): Promise<any[]> {
+    const cutoffMs = Date.now() - 21 * 86400000;
     const needsDetail = activities.filter((activity) => {
-      const hasFlag = Boolean(activity?.has_heartrate);
       const avg = Number(activity?.average_heartrate || 0);
       const max = Number(activity?.max_heartrate || 0);
-      return hasFlag && !(avg > 0) && !(max > 0);
+      if (avg > 0 || max > 0) return false;
+      const started = Date.parse(String(activity?.start_date_local || activity?.start_date || ''));
+      const recent = Number.isFinite(started) ? started >= cutoffMs : true;
+      // Prefer flagged HR activities; also probe recent runs in case list summary omitted BPM.
+      const likelyHr = Boolean(activity?.has_heartrate) || recent;
+      return likelyHr && this.normalizeActivityType(activity.type) === 'run';
     });
 
-    const toFetch = needsDetail.slice(0, 50);
+    // Keep sync snappy — detail calls are sequential and previously timed out incremental syncs.
+    const toFetch = needsDetail.slice(0, 12);
     const detailById = new Map<number, any>();
     for (const activity of toFetch) {
       const id = Number(activity?.id);

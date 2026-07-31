@@ -5,6 +5,7 @@ import { MarathonGoalModal, MarathonRaceHub } from '../lib/MarathonRaceHub';
 import { MobileBottomNav } from '../lib/MobileNav';
 import { useTheme } from '../lib/ThemePicker';
 import { computeRunningStats, computeWellnessStats, buildWellnessSummary } from '../lib/userInsights';
+import { formatStravaSyncMessage, runStravaAutoSync } from '../lib/stravaAutoSync';
 import {
   buildRunningRows,
   computeShoeStats,
@@ -65,7 +66,149 @@ function computeSportStats(entries = [], minKey, distKey = null) {
 }
 
 // ─── small reusable components ────────────────────────────
-function HeroStat({ label, value, sub, accent, theme }) {
+function buildHeartRateDashboard(runRows = [], stravaInsights = null) {
+  const hrRuns = (runRows || [])
+    .filter((row) => Number(row.avgHeartrate || row.avgHeartRate || 0) > 0 && Number(row.distance || 0) > 0)
+    .map((row) => ({
+      date: row.date,
+      name: row.name || 'Run',
+      distance: Number(row.distance || 0),
+      minutes: Number(row.minutes || 0),
+      avgHr: Number(row.avgHeartrate || row.avgHeartRate || 0),
+      maxHr: Number(row.maxHeartrate || row.maxHeartRate || 0) || null,
+      pace: row.distance > 0 ? row.minutes / row.distance : null,
+    }))
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+
+  if (!hrRuns.length && !stravaInsights?.avgHeartRate) {
+    return null;
+  }
+
+  const avgHr = hrRuns.length
+    ? Math.round(hrRuns.reduce((sum, run) => sum + run.avgHr, 0) / hrRuns.length)
+    : Number(stravaInsights?.avgHeartRate || 0) || null;
+  const maxHr = hrRuns.reduce((best, run) => Math.max(best, Number(run.maxHr || run.avgHr || 0)), 0)
+    || Number(stravaInsights?.maxHeartRate || 0)
+    || null;
+  const latest = hrRuns[0] || null;
+  const previous = hrRuns[1] || null;
+  const delta = latest && previous ? latest.avgHr - previous.avgHr : null;
+
+  return {
+    hrRuns,
+    avgHr,
+    maxHr,
+    latest,
+    delta,
+    runCount: hrRuns.length || Number(stravaInsights?.heartRateZoneRuns || 0) || 0,
+    zones: stravaInsights?.heartRateZones || [],
+    dominantZone: stravaInsights?.dominantHeartRateZone || null,
+  };
+}
+
+function HeartRateSparkline({ runs, theme }) {
+  const points = [...(runs || [])].slice(0, 12).reverse();
+  if (points.length < 2) return null;
+  const values = points.map((run) => run.avgHr);
+  const min = Math.min(...values) - 4;
+  const max = Math.max(...values) + 4;
+  const W = 420;
+  const H = 90;
+  const step = W / Math.max(1, points.length - 1);
+  const coords = points.map((run, index) => {
+    const x = index * step;
+    const y = H - ((run.avgHr - min) / Math.max(1, max - min)) * (H - 12) - 6;
+    return `${x},${y}`;
+  }).join(' ');
+
+  return (
+    <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 18, padding: 14 }}>
+      <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, marginBottom: 8 }}>
+        Avg HR trend · last {points.length} runs
+      </div>
+      <svg viewBox={`0 0 ${W} ${H + 18}`} style={{ width: '100%', height: H + 18 }}>
+        <polyline fill="none" stroke="#f43f5e" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" points={coords} />
+        {points.map((run, index) => {
+          const x = index * step;
+          const y = H - ((run.avgHr - min) / Math.max(1, max - min)) * (H - 12) - 6;
+          return <circle key={`${run.date}-${index}`} cx={x} cy={y} r="3.5" fill="#fb7185" />;
+        })}
+        <text x="0" y={H + 14} fill={theme.textMuted} fontSize="9">{fmtDate(points[0].date)}</text>
+        <text x={W} y={H + 14} textAnchor="end" fill={theme.textMuted} fontSize="9">{fmtDate(points[points.length - 1].date)}</text>
+      </svg>
+    </div>
+  );
+}
+
+function HeartRateDashboard({ hrDashboard, theme }) {
+  if (!hrDashboard) {
+    return (
+      <div style={{ borderRadius: 14, border: `1px dashed ${theme.cardBorder}`, padding: 12, fontSize: 12, color: theme.textMuted }}>
+        No heart-rate runs yet. After a Strava sync with HR enabled, avg/max BPM and zones show up here.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'grid', gap: 12 }}>
+      <div className="run-dash-mini-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 8 }}>
+        <MiniStat label="Avg HR" value={hrDashboard.avgHr ? `${hrDashboard.avgHr} bpm` : '--'} sub={`${hrDashboard.runCount} HR run${hrDashboard.runCount === 1 ? '' : 's'}`} accent="#f43f5e" theme={theme} />
+        <MiniStat label="Max HR" value={hrDashboard.maxHr ? `${hrDashboard.maxHr} bpm` : '--'} sub="peak across synced runs" accent="#fb7185" theme={theme} />
+        <MiniStat
+          label="Latest run HR"
+          value={hrDashboard.latest ? `${hrDashboard.latest.avgHr} bpm` : '--'}
+          sub={hrDashboard.latest ? `${fmtDate(hrDashboard.latest.date)} · ${hrDashboard.latest.distance} km` : 'waiting for sync'}
+          accent="#e11d48"
+          theme={theme}
+        />
+        <MiniStat
+          label="Vs previous"
+          value={hrDashboard.delta == null ? '--' : `${hrDashboard.delta > 0 ? '+' : ''}${hrDashboard.delta} bpm`}
+          sub={hrDashboard.dominantZone ? `most time Z${hrDashboard.dominantZone.zone}` : 'avg HR change'}
+          accent={hrDashboard.delta == null ? theme.textMuted : (hrDashboard.delta > 0 ? '#f59e0b' : '#22c55e')}
+          theme={theme}
+        />
+      </div>
+      <HeartRateSparkline runs={hrDashboard.hrRuns} theme={theme} />
+      {(hrDashboard.zones || []).length ? (
+        <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 18, padding: 14, display: 'grid', gap: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>Time in HR zones</div>
+          {hrDashboard.zones.map((zone) => (
+            <div key={`dash-hr-zone-${zone.zone}`} style={{ display: 'grid', gridTemplateColumns: '150px 1fr 64px', gap: 8, alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: theme.textMuted, fontWeight: 700 }}>{zone.label}</span>
+              <div style={{ height: 10, borderRadius: 999, background: `${theme.cardBorder}`, overflow: 'hidden' }}>
+                <div style={{
+                  width: `${Math.min(100, Number(zone.percent || 0))}%`,
+                  height: '100%',
+                  background: ['#94a3b8', '#38bdf8', '#22c55e', '#f59e0b', '#ef4444', '#a855f7'][Math.max(0, Number(zone.zone || 1) - 1)] || '#fb7185',
+                }}
+                />
+              </div>
+              <span style={{ fontSize: 12, fontWeight: 800, color: theme.textHeading, textAlign: 'right' }}>{zone.percent}%</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {hrDashboard.hrRuns.length ? (
+        <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 18, overflow: 'hidden' }}>
+          <div style={{ padding: '12px 14px', fontWeight: 800, fontSize: 13, color: theme.textHeading, borderBottom: `1px solid ${theme.cardBorder}` }}>
+            Recent runs with heart rate
+          </div>
+          {hrDashboard.hrRuns.slice(0, 8).map((run) => (
+            <div key={`${run.date}-${run.avgHr}-${run.distance}`} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 10, padding: '10px 14px', borderBottom: `1px solid ${theme.cardBorder}` }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: theme.textHeading }}>{fmtDate(run.date)} · {run.distance} km</div>
+                <div style={{ fontSize: 11, color: theme.textMuted }}>{fmtPace(run.pace)}{run.maxHr ? ` · max ${run.maxHr} bpm` : ''}</div>
+              </div>
+              <div style={{ fontSize: 16, fontWeight: 900, color: '#f43f5e' }}>{run.avgHr}</div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
   return (
     <div style={{ padding: '20px 22px', borderRadius: '22px', border: `1px solid ${theme.cardBorder}`, background: theme.cardBg, display: 'grid', gap: '6px', position: 'relative', overflow: 'hidden' }}>
       <div style={{ position: 'absolute', top: '-18px', right: '-18px', width: '80px', height: '80px', borderRadius: '50%', background: `${accent}18`, filter: 'blur(12px)' }} />
@@ -441,11 +584,13 @@ function WeeklyMileageChart({ runRows, theme }) {
 
 function RunningShoesPanel({ userId, shoes, onChange, theme, importedRuns = [], onAssignShoe, savingShoeId, assignError }) {
   const [name, setName] = useState('');
+  const [editPastRuns, setEditPastRuns] = useState(false);
   const activeShoes = (shoes || []).filter((shoe) => !shoe.retired);
-  const stravaRuns = (importedRuns || []).filter((run) => run.stravaId).slice(0, 15);
+  const stravaRuns = (importedRuns || []).filter((run) => run.stravaId).slice(0, 20);
   const needsShoe = stravaRuns.filter((run) => !run.shoeId);
   const assignedCount = stravaRuns.filter((run) => run.shoeId).length;
-  const runsToShow = needsShoe.length ? needsShoe.slice(0, 12) : stravaRuns.slice(0, 8);
+  const showAssignList = needsShoe.length > 0 || editPastRuns;
+  const runsToShow = (needsShoe.length && !editPastRuns ? needsShoe : stravaRuns).slice(0, 12);
 
   function handleAdd(event) {
     if (event?.preventDefault) event.preventDefault();
@@ -556,18 +701,40 @@ function RunningShoesPanel({ userId, shoes, onChange, theme, importedRuns = [], 
 
       {stravaRuns.length ? (
         <div style={{ display: 'grid', gap: 8, paddingTop: 4, borderTop: `1px solid ${theme.cardBorder}` }}>
-          <div style={{ fontSize: 12, color: theme.textMuted }}>
-            {needsShoe.length
-              ? `${needsShoe.length} recent Strava run${needsShoe.length === 1 ? '' : 's'} need a shoe`
-              : `${assignedCount} Strava run${assignedCount === 1 ? '' : 's'} tagged — change anytime`}
-          </div>
+          {needsShoe.length ? (
+            <div style={{ fontSize: 12, color: theme.textMuted }}>
+              {needsShoe.length} recent run{needsShoe.length === 1 ? '' : 's'} still need a shoe
+            </div>
+          ) : (
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 12, color: theme.textMuted }}>
+                {assignedCount} Strava run{assignedCount === 1 ? '' : 's'} tagged
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditPastRuns((open) => !open)}
+                style={{
+                  border: `1px solid ${theme.cardBorder}`,
+                  background: 'transparent',
+                  color: theme.textMuted,
+                  borderRadius: 999,
+                  padding: '5px 10px',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                {editPastRuns ? 'Hide past runs' : 'Edit past runs'}
+              </button>
+            </div>
+          )}
           {assignError ? (
             <div style={{ fontSize: 12, color: theme.red || '#ef4444', fontWeight: 600 }}>{assignError}</div>
           ) : null}
-          {runsToShow.length && !activeShoes.length ? (
+          {showAssignList && runsToShow.length && !activeShoes.length ? (
             <div style={{ fontSize: 12, color: theme.textMuted }}>Add a shoe above, then pick it for each run.</div>
           ) : null}
-          {runsToShow.map((run) => (
+          {showAssignList ? runsToShow.map((run) => (
             <div
               key={run.stravaId}
               style={{
@@ -580,6 +747,7 @@ function RunningShoesPanel({ userId, shoes, onChange, theme, importedRuns = [], 
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: theme.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {fmtDate(run.date)} · {run.distance} km
+                  {run.shoeId ? '' : ' · no shoe'}
                 </div>
               </div>
               <select
@@ -604,7 +772,7 @@ function RunningShoesPanel({ userId, shoes, onChange, theme, importedRuns = [], 
                 ))}
               </select>
             </div>
-          ))}
+          )) : null}
         </div>
       ) : null}
     </div>
@@ -715,7 +883,7 @@ function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, us
   const importedRuns = useMemo(() => buildRunningRows(entries).filter((row) => row.stravaId), [entries]);
   const [savingShoeId, setSavingShoeId] = useState(null);
   const [assignError, setAssignError] = useState('');
-  const unassignedCount = importedRuns.filter((run) => !run.shoeId).length;
+  const hrDashboard = useMemo(() => buildHeartRateDashboard(runRows, stravaInsights), [runRows, stravaInsights]);
 
   const handleAssignShoe = async (stravaId, shoeId) => {
     if (!userId || !stravaId) return;
@@ -760,7 +928,7 @@ function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, us
             : 'Shoes'
         }
         theme={theme}
-        defaultOpen={!runningShoes.filter((s) => !s.retired).length || unassignedCount > 0}
+        defaultOpen={!runningShoes.filter((s) => !s.retired).length}
       >
         <RunningShoesPanel
           userId={userId}
@@ -772,6 +940,10 @@ function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, us
           savingShoeId={savingShoeId}
           assignError={assignError}
         />
+      </CollapsibleBlock>
+
+      <CollapsibleBlock title="Heart rate" theme={theme} defaultOpen>
+        <HeartRateDashboard hrDashboard={hrDashboard} theme={theme} />
       </CollapsibleBlock>
 
       {stravaInsights?.connected ? (
@@ -1152,6 +1324,53 @@ export default function RunningAnalytics() {
   const [runningShoes, setRunningShoes] = useState([]);
   const [stravaInsights, setStravaInsights] = useState(null);
   const [serverEntries, setServerEntries] = useState(null);
+  const [stravaSyncing, setStravaSyncing] = useState(false);
+  const [stravaSyncMsg, setStravaSyncMsg] = useState('');
+
+  const refreshWellnessPayload = async (uid) => {
+    if (!uid || !isWellnessApiReady()) return;
+    const [dataPayload, insightsPayload] = await Promise.all([
+      fetch(wellnessApiUrl(`/wellness/data/${encodeURIComponent(uid)}`)).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(wellnessApiUrl(`/wellness/strava/insights/${encodeURIComponent(uid)}?days=180`)).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    ]);
+    if (Array.isArray(dataPayload?.entries)) {
+      setServerEntries(dataPayload.entries);
+      try {
+        localStorage.setItem(`cosmix-wellness-${uid}-entries`, JSON.stringify(dataPayload.entries));
+      } catch (_) { /* ignore */ }
+    }
+    if (Array.isArray(dataPayload?.runningShoes) && dataPayload.runningShoes.length) {
+      setRunningShoes(saveRunningShoesLocal(uid, dataPayload.runningShoes));
+    }
+    if (insightsPayload) setStravaInsights(insightsPayload);
+  };
+
+  const handleStravaSync = async () => {
+    if (!user?.id || stravaSyncing) return;
+    setStravaSyncing(true);
+    setStravaSyncMsg('Syncing Strava…');
+    try {
+      const payload = await runStravaAutoSync({
+        userId: user.id,
+        apiBase: '',
+        force: true,
+        onMessage: setStravaSyncMsg,
+        onEntries: (nextEntries) => {
+          if (Array.isArray(nextEntries)) {
+            setServerEntries(nextEntries);
+            try {
+              localStorage.setItem(`cosmix-wellness-${user.id}-entries`, JSON.stringify(nextEntries));
+            } catch (_) { /* ignore */ }
+          }
+        },
+      });
+      await refreshWellnessPayload(user.id);
+      if (!payload) setStravaSyncMsg('Strava sync failed — try again.');
+      else setStravaSyncMsg(formatStravaSyncMessage(payload));
+    } finally {
+      setStravaSyncing(false);
+    }
+  };
 
   useEffect(() => {
     restoreUserSession(router, setUser);
@@ -1287,8 +1506,32 @@ export default function RunningAnalytics() {
             <h1 style={{ margin: '4px 0 0', fontSize: 'clamp(20px,4vw,26px)', fontWeight: 900, color: theme.textHeading, lineHeight: 1.1 }}>Race cockpit</h1>
             <p style={{ margin: '6px 0 0', fontSize: '12px', color: theme.textSecondary }}>{runStats?.totalRuns || 0} runs · goal-based plan</p>
           </div>
-          <button type="button" onClick={() => setShowMarathonModal(true)} style={{ border: 'none', background: theme.orange, color: '#fff', borderRadius: '12px', padding: '10px 14px', cursor: 'pointer', fontWeight: 800, fontSize: '12px', whiteSpace: 'nowrap', flexShrink: 0 }}>🏁 Goal</button>
+          <div style={{ display: 'flex', gap: 8, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <button
+              type="button"
+              onClick={handleStravaSync}
+              disabled={stravaSyncing}
+              style={{
+                border: `1px solid ${theme.cardBorder}`,
+                background: theme.cardBg,
+                color: theme.textHeading,
+                borderRadius: 12,
+                padding: '10px 14px',
+                cursor: stravaSyncing ? 'default' : 'pointer',
+                fontWeight: 800,
+                fontSize: 12,
+                whiteSpace: 'nowrap',
+                opacity: stravaSyncing ? 0.7 : 1,
+              }}
+            >
+              {stravaSyncing ? 'Syncing…' : 'Sync Strava'}
+            </button>
+            <button type="button" onClick={() => setShowMarathonModal(true)} style={{ border: 'none', background: theme.orange, color: '#fff', borderRadius: '12px', padding: '10px 14px', cursor: 'pointer', fontWeight: 800, fontSize: '12px', whiteSpace: 'nowrap' }}>🏁 Goal</button>
+          </div>
         </div>
+        {stravaSyncMsg ? (
+          <div style={{ marginTop: -8, fontSize: 12, color: theme.textSecondary }}>{stravaSyncMsg}</div>
+        ) : null}
 
         <div className="sport-tab-strip" role="tablist" aria-label="Sport analytics">
           {PRIMARY_TABS.map((tab) => {
