@@ -4,8 +4,13 @@ export function runningShoesStorageKey(userId) {
   return `${WELLNESS_PREFIX}${userId}-runningShoes`;
 }
 
+/**
+ * Base URL for wellness API calls.
+ * - Local: http://localhost:3004
+ * - Production: '' (same-origin /wellness/... via nginx → wellness-service)
+ */
 export function resolveWellnessApiBase() {
-  const configured = process.env.NEXT_PUBLIC_WELLNESS_API_BASE || '';
+  const configured = String(process.env.NEXT_PUBLIC_WELLNESS_API_BASE || '').trim().replace(/\/$/, '');
   if (configured) return configured;
   if (typeof window === 'undefined') return '';
   const { hostname, protocol } = window.location;
@@ -13,6 +18,16 @@ export function resolveWellnessApiBase() {
     return `${protocol}//${hostname}:3004`;
   }
   return '';
+}
+
+export function isWellnessApiReady() {
+  return typeof window !== 'undefined';
+}
+
+export function wellnessApiUrl(path = '') {
+  const base = resolveWellnessApiBase();
+  const normalized = String(path || '').startsWith('/') ? path : `/${path}`;
+  return `${base}${normalized}`;
 }
 
 function parseStoredJson(key, fallback) {
@@ -168,9 +183,7 @@ let syncTimer = null;
 
 export function syncRunningShoesToServer(userId, shoes, options = {}) {
   const { entries = null, form = null } = options;
-  if (!userId) return Promise.resolve(null);
-  const apiBase = resolveWellnessApiBase();
-  if (!apiBase) return Promise.resolve(null);
+  if (!userId || !isWellnessApiReady()) return Promise.resolve(null);
 
   if (syncTimer) clearTimeout(syncTimer);
 
@@ -180,7 +193,7 @@ export function syncRunningShoesToServer(userId, shoes, options = {}) {
       if (Array.isArray(entries)) payload.entries = entries;
       if (form) payload.form = form;
 
-      fetch(`${apiBase}/wellness/data/${encodeURIComponent(userId)}`, {
+      fetch(wellnessApiUrl(`/wellness/data/${encodeURIComponent(userId)}`), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -194,11 +207,10 @@ export function syncRunningShoesToServer(userId, shoes, options = {}) {
 
 export async function loadRunningShoesFromServer(userId) {
   if (!userId) return [];
-  const apiBase = resolveWellnessApiBase();
-  if (!apiBase) return readRunningShoes(userId);
+  if (!isWellnessApiReady()) return readRunningShoes(userId);
 
   try {
-    const response = await fetch(`${apiBase}/wellness/data/${encodeURIComponent(userId)}`);
+    const response = await fetch(wellnessApiUrl(`/wellness/data/${encodeURIComponent(userId)}`));
     if (!response.ok) return readRunningShoes(userId);
     const data = await response.json();
     const shoes = normalizeRunningShoes(data?.runningShoes || []);

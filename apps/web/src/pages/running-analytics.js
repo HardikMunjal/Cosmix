@@ -10,11 +10,12 @@ import {
   computeShoeStats,
   createRunningShoeId,
   getRunningShoeLabel,
+  isWellnessApiReady,
   loadRunningShoesFromServer,
   readRunningShoes,
-  resolveWellnessApiBase,
   saveRunningShoesLocal,
   syncRunningShoesToServer,
+  wellnessApiUrl,
 } from '../lib/runningShoes';
 
 // ─── helpers ─────────────────────────────────────────────
@@ -438,11 +439,13 @@ function WeeklyMileageChart({ runRows, theme }) {
   );
 }
 
-function RunningShoesPanel({ userId, shoes, onChange, theme, importedRuns = [], onAssignShoe, savingShoeId }) {
+function RunningShoesPanel({ userId, shoes, onChange, theme, importedRuns = [], onAssignShoe, savingShoeId, assignError }) {
   const [name, setName] = useState('');
   const activeShoes = (shoes || []).filter((shoe) => !shoe.retired);
-  const needsShoe = (importedRuns || []).filter((run) => run.stravaId && !run.shoeId).slice(0, 12);
-  const assignedCount = (importedRuns || []).filter((run) => run.stravaId && run.shoeId).length;
+  const stravaRuns = (importedRuns || []).filter((run) => run.stravaId).slice(0, 15);
+  const needsShoe = stravaRuns.filter((run) => !run.shoeId);
+  const assignedCount = stravaRuns.filter((run) => run.shoeId).length;
+  const runsToShow = needsShoe.length ? needsShoe.slice(0, 12) : stravaRuns.slice(0, 8);
 
   function handleAdd(event) {
     if (event?.preventDefault) event.preventDefault();
@@ -551,17 +554,20 @@ function RunningShoesPanel({ userId, shoes, onChange, theme, importedRuns = [], 
         <div style={{ fontSize: 13, color: theme.textMuted }}>Type a shoe name and hit Add.</div>
       )}
 
-      {importedRuns.length ? (
+      {stravaRuns.length ? (
         <div style={{ display: 'grid', gap: 8, paddingTop: 4, borderTop: `1px solid ${theme.cardBorder}` }}>
           <div style={{ fontSize: 12, color: theme.textMuted }}>
             {needsShoe.length
               ? `${needsShoe.length} recent Strava run${needsShoe.length === 1 ? '' : 's'} need a shoe`
-              : `${assignedCount} Strava run${assignedCount === 1 ? '' : 's'} tagged`}
+              : `${assignedCount} Strava run${assignedCount === 1 ? '' : 's'} tagged — change anytime`}
           </div>
-          {needsShoe.length && !activeShoes.length ? (
+          {assignError ? (
+            <div style={{ fontSize: 12, color: theme.red || '#ef4444', fontWeight: 600 }}>{assignError}</div>
+          ) : null}
+          {runsToShow.length && !activeShoes.length ? (
             <div style={{ fontSize: 12, color: theme.textMuted }}>Add a shoe above, then pick it for each run.</div>
           ) : null}
-          {needsShoe.map((run) => (
+          {runsToShow.map((run) => (
             <div
               key={run.stravaId}
               style={{
@@ -708,25 +714,36 @@ function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, us
     : null;
   const importedRuns = useMemo(() => buildRunningRows(entries).filter((row) => row.stravaId), [entries]);
   const [savingShoeId, setSavingShoeId] = useState(null);
+  const [assignError, setAssignError] = useState('');
+  const unassignedCount = importedRuns.filter((run) => !run.shoeId).length;
 
   const handleAssignShoe = async (stravaId, shoeId) => {
     if (!userId || !stravaId) return;
-    const apiBase = resolveWellnessApiBase();
-    if (!apiBase) return;
+    if (!isWellnessApiReady()) {
+      setAssignError('Unable to reach wellness API from this page.');
+      return;
+    }
+    setAssignError('');
     setSavingShoeId(stravaId);
     try {
-      const response = await fetch(`${apiBase}/wellness/strava/runs/${encodeURIComponent(userId)}/${encodeURIComponent(stravaId)}/shoe`, {
+      const response = await fetch(wellnessApiUrl(`/wellness/strava/runs/${encodeURIComponent(userId)}/${encodeURIComponent(stravaId)}/shoe`), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ shoeId: shoeId || '' }),
       });
       const payload = await response.json().catch(() => null);
-      if (response.ok && Array.isArray(payload?.state?.entries) && typeof onEntriesChange === 'function') {
+      if (!response.ok || !payload?.ok) {
+        setAssignError(payload?.error || 'Could not save shoe on that run. Try again.');
+        return;
+      }
+      if (Array.isArray(payload?.state?.entries) && typeof onEntriesChange === 'function') {
         onEntriesChange(payload.state.entries);
         try {
           localStorage.setItem(`cosmix-wellness-${userId}-entries`, JSON.stringify(payload.state.entries));
         } catch (_) { /* ignore */ }
       }
+    } catch (_) {
+      setAssignError('Network error while saving shoe. Try again.');
     } finally {
       setSavingShoeId(null);
     }
@@ -743,7 +760,7 @@ function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, us
             : 'Shoes'
         }
         theme={theme}
-        defaultOpen={!runningShoes.filter((s) => !s.retired).length}
+        defaultOpen={!runningShoes.filter((s) => !s.retired).length || unassignedCount > 0}
       >
         <RunningShoesPanel
           userId={userId}
@@ -753,6 +770,7 @@ function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, us
           importedRuns={importedRuns}
           onAssignShoe={handleAssignShoe}
           savingShoeId={savingShoeId}
+          assignError={assignError}
         />
       </CollapsibleBlock>
 
@@ -1153,11 +1171,9 @@ export default function RunningAnalytics() {
   }, [user?.id]);
 
   useEffect(() => {
-    if (!user?.id) return undefined;
-    const apiBase = resolveWellnessApiBase();
-    if (!apiBase) return undefined;
+    if (!user?.id || !isWellnessApiReady()) return undefined;
     let cancelled = false;
-    fetch(`${apiBase}/wellness/data/${encodeURIComponent(user.id)}`)
+    fetch(wellnessApiUrl(`/wellness/data/${encodeURIComponent(user.id)}`))
       .then((response) => (response.ok ? response.json() : null))
       .then((payload) => {
         if (cancelled || !payload) return;
@@ -1172,7 +1188,7 @@ export default function RunningAnalytics() {
         }
       })
       .catch(() => {});
-    fetch(`${apiBase}/wellness/strava/insights/${encodeURIComponent(user.id)}?days=180`)
+    fetch(wellnessApiUrl(`/wellness/strava/insights/${encodeURIComponent(user.id)}?days=180`))
       .then((response) => (response.ok ? response.json() : null))
       .then((payload) => {
         if (!cancelled) setStravaInsights(payload);
