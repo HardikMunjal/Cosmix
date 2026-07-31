@@ -560,8 +560,16 @@ export default function WellnessPage() {
       setScoringRules(normalizeScoringRules(serverData.scoringRules));
     }
     if (Array.isArray(serverData.runningShoes)) {
-      const nextShoes = saveRunningShoesLocal(userIdRef.current, serverData.runningShoes);
-      setRunningShoes(nextShoes);
+      const localShoes = readRunningShoes(userIdRef.current);
+      const merged = serverData.runningShoes.length
+        ? saveRunningShoesLocal(userIdRef.current, serverData.runningShoes)
+        : (localShoes.length ? localShoes : []);
+      // If server lost the catalog but local still has shoes, keep local and don't wipe.
+      if (serverData.runningShoes.length || !localShoes.length) {
+        setRunningShoes(merged);
+      } else {
+        setRunningShoes(localShoes);
+      }
     }
     if (syncLocal && typeof window !== 'undefined' && userIdRef.current) {
       // Only overwrite local entries if the server returned real data.
@@ -761,10 +769,15 @@ export default function WellnessPage() {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       const payloadEntries = Array.isArray(newEntries) ? newEntries : [];
+      // Never send an empty shoe catalog — Wellness autosave was wiping shoes added on Running Analytics.
+      const payload = { entries: payloadEntries, form: newForm };
+      if (Array.isArray(nextRunningShoes) && nextRunningShoes.length) {
+        payload.runningShoes = nextRunningShoes;
+      }
       fetch(`${API_BASE}/wellness/data/${encodeURIComponent(uid)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entries: payloadEntries, form: newForm, runningShoes: nextRunningShoes }),
+        body: JSON.stringify(payload),
       })
         .then((r) => {
           if (!r.ok) throw new Error(`Sync failed with status ${r.status}`);

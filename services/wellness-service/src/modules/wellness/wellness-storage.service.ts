@@ -1331,9 +1331,20 @@ export class WellnessStorageService {
       entries: mergedEntries,
       form: payload.form === undefined ? normalizedStore.form : payload.form,
       plans: updatedPlans,
-      runningShoes: payload.runningShoes === undefined
-        ? normalizedStore.runningShoes
-        : this.normalizeRunningShoes(payload.runningShoes),
+      runningShoes: (() => {
+        if (payload.runningShoes === undefined) return normalizedStore.runningShoes;
+        const incoming = this.normalizeRunningShoes(payload.runningShoes);
+        const existing = normalizedStore.runningShoes || [];
+        // Wellness autosave used to send runningShoes:[] and wipe the catalog.
+        // Allow an empty catalog only when this request is a shoes-only update.
+        const shoesOnlyUpdate = payload.entries === undefined && payload.form === undefined;
+        if (!incoming.length) {
+          return shoesOnlyUpdate ? [] : existing;
+        }
+        const byId = new Map(existing.map((shoe) => [shoe.id, shoe]));
+        for (const shoe of incoming) byId.set(shoe.id, shoe);
+        return this.normalizeRunningShoes([...byId.values()]);
+      })(),
       updatedAt: this.nowIso(),
     });
 

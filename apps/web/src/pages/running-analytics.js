@@ -609,7 +609,7 @@ function RunningShoesPanel({ userId, shoes, onChange, theme, importedRuns = [], 
     ];
     const saved = saveRunningShoesLocal(userId, next);
     onChange(saved);
-    void syncRunningShoesToServer(userId, saved);
+    void syncRunningShoesToServer(userId, saved, { immediate: true });
     setName('');
   }
 
@@ -617,7 +617,7 @@ function RunningShoesPanel({ userId, shoes, onChange, theme, importedRuns = [], 
     const next = shoes.filter((shoe) => shoe.id !== shoeId);
     const saved = saveRunningShoesLocal(userId, next);
     onChange(saved);
-    void syncRunningShoesToServer(userId, saved);
+    void syncRunningShoesToServer(userId, saved, { immediate: true });
   }
 
   return (
@@ -819,7 +819,7 @@ function ShoeStatsSection({ entries, shoes, theme }) {
   if (!shoeStats.length) {
     return (
       <div style={{ padding: 16, borderRadius: 16, border: `1px solid ${theme.cardBorder}`, color: theme.textMuted, fontSize: 13 }}>
-        Log runs with shoes selected to see per-shoe pace, speed, and distance stats.
+        Log runs and tag them with a shoe to fill distance/pace here. Your shoe list always shows above even at 0 km.
       </div>
     );
   }

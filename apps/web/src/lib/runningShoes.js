@@ -59,6 +59,21 @@ export function normalizeRunningShoes(shoes = []) {
     .filter((shoe) => shoe.id && shoe.name);
 }
 
+/** Prefer later lists for the same id. Keeps the union of both catalogs. */
+export function mergeRunningShoes(...lists) {
+  const map = new Map();
+  lists.flat().forEach((shoe) => {
+    const id = String(shoe?.id || '').trim();
+    if (!id) return;
+    map.set(id, {
+      ...(map.get(id) || {}),
+      ...shoe,
+      id,
+    });
+  });
+  return normalizeRunningShoes([...map.values()]);
+}
+
 export function readRunningShoes(userId) {
   if (!userId) return [];
   return normalizeRunningShoes(parseStoredJson(runningShoesStorageKey(userId), []));
@@ -132,6 +147,22 @@ export function computeShoeStats(entries = [], shoes = []) {
   const shoeMap = new Map((shoes || []).map((shoe) => [shoe.id, shoe]));
   const buckets = new Map();
 
+  // Always show every shoe in the catalog, even before any run is tagged.
+  (shoes || []).filter((shoe) => shoe?.id && !shoe.retired).forEach((shoe) => {
+    buckets.set(shoe.id, {
+      shoeId: shoe.id,
+      label: getRunningShoeLabel(shoe),
+      brand: shoe.brand || '',
+      name: shoe.name || 'Shoe',
+      runs: 0,
+      totalKm: 0,
+      totalMinutes: 0,
+      longestRunKm: 0,
+      fastestSpeed: 0,
+      paces: [],
+    });
+  });
+
   buildRunningRows(entries)
     .filter((row) => row.distance > 0 && row.minutes > 0)
     .forEach((row) => {
@@ -140,9 +171,9 @@ export function computeShoeStats(entries = [], shoes = []) {
         const shoe = shoeMap.get(row.shoeId) || null;
         buckets.set(key, {
           shoeId: row.shoeId || '',
-          label: shoe ? getRunningShoeLabel(shoe) : 'No shoe selected',
+          label: shoe ? getRunningShoeLabel(shoe) : 'Untagged runs',
           brand: shoe?.brand || '',
-          name: shoe?.name || (row.shoeId ? 'Unknown shoe' : 'Unassigned'),
+          name: shoe?.name || (row.shoeId ? 'Unknown shoe' : 'Untagged'),
           runs: 0,
           totalKm: 0,
           totalMinutes: 0,
@@ -166,7 +197,7 @@ export function computeShoeStats(entries = [], shoes = []) {
     .map((bucket) => ({
       ...bucket,
       totalKm: Number(bucket.totalKm.toFixed(1)),
-      avgDistance: Number((bucket.totalKm / bucket.runs).toFixed(2)),
+      avgDistance: bucket.runs ? Number((bucket.totalKm / bucket.runs).toFixed(2)) : 0,
       avgPace: bucket.paces.length
         ? Number((bucket.paces.reduce((sum, pace) => sum + pace, 0) / bucket.paces.length).toFixed(2))
         : null,
@@ -176,47 +207,62 @@ export function computeShoeStats(entries = [], shoes = []) {
       fastestSpeed: Number(bucket.fastestSpeed.toFixed(2)),
       longestRunKm: Number(bucket.longestRunKm.toFixed(1)),
     }))
-    .sort((a, b) => b.totalKm - a.totalKm);
+    .sort((a, b) => {
+      if (a.shoeId && !b.shoeId) return -1;
+      if (!a.shoeId && b.shoeId) return 1;
+      return b.totalKm - a.totalKm;
+    });
 }
 
 let syncTimer = null;
 
 export function syncRunningShoesToServer(userId, shoes, options = {}) {
-  const { entries = null, form = null } = options;
+  const { entries = null, form = null, immediate = false } = options;
   if (!userId || !isWellnessApiReady()) return Promise.resolve(null);
 
   if (syncTimer) clearTimeout(syncTimer);
 
+  const runSync = () => {
+    const payload = { runningShoes: normalizeRunningShoes(shoes) };
+    if (Array.isArray(entries)) payload.entries = entries;
+    if (form) payload.form = form;
+
+    return fetch(wellnessApiUrl(`/wellness/data/${encodeURIComponent(userId)}`), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+      .then((response) => (response.ok ? response.json() : null))
+      .catch(() => null);
+  };
+
+  if (immediate) return runSync();
+
   return new Promise((resolve) => {
     syncTimer = setTimeout(() => {
-      const payload = { runningShoes: normalizeRunningShoes(shoes) };
-      if (Array.isArray(entries)) payload.entries = entries;
-      if (form) payload.form = form;
-
-      fetch(wellnessApiUrl(`/wellness/data/${encodeURIComponent(userId)}`), {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-        .then((response) => (response.ok ? response.json() : null))
-        .then(resolve)
-        .catch(() => resolve(null));
-    }, 800);
+      runSync().then(resolve);
+    }, 250);
   });
 }
 
 export async function loadRunningShoesFromServer(userId) {
   if (!userId) return [];
-  if (!isWellnessApiReady()) return readRunningShoes(userId);
+  const localShoes = readRunningShoes(userId);
+  if (!isWellnessApiReady()) return localShoes;
 
   try {
     const response = await fetch(wellnessApiUrl(`/wellness/data/${encodeURIComponent(userId)}`));
-    if (!response.ok) return readRunningShoes(userId);
+    if (!response.ok) return localShoes;
     const data = await response.json();
-    const shoes = normalizeRunningShoes(data?.runningShoes || []);
-    if (shoes.length) saveRunningShoesLocal(userId, shoes);
-    return shoes.length ? shoes : readRunningShoes(userId);
+    const serverShoes = normalizeRunningShoes(data?.runningShoes || []);
+    const merged = mergeRunningShoes(serverShoes, localShoes);
+    saveRunningShoesLocal(userId, merged);
+    // If browser has shoes the server lost/never got, push the merge up.
+    if (merged.length > serverShoes.length) {
+      void syncRunningShoesToServer(userId, merged, { immediate: true });
+    }
+    return merged;
   } catch (_) {
-    return readRunningShoes(userId);
+    return localShoes;
   }
 }
