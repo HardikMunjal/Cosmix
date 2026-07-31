@@ -209,6 +209,7 @@ function HeartRateDashboard({ hrDashboard, theme }) {
   );
 }
 
+function HeroStat({ label, value, sub, accent, theme }) {
   return (
     <div style={{ padding: '20px 22px', borderRadius: '22px', border: `1px solid ${theme.cardBorder}`, background: theme.cardBg, display: 'grid', gap: '6px', position: 'relative', overflow: 'hidden' }}>
       <div style={{ position: 'absolute', top: '-18px', right: '-18px', width: '80px', height: '80px', borderRadius: '50%', background: `${accent}18`, filter: 'blur(12px)' }} />
