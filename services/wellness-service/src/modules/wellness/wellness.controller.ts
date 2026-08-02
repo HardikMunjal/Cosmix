@@ -232,21 +232,45 @@ export class WellnessController {
       state = hrResult.state;
     }
 
+    // Persist map/streams/splits for newest runs so detail pages work offline (no Strava Premium needed).
+    let detailsEnriched = 0;
+    if (String(shouldImport || '1') !== '0') {
+      const runIds = activities
+        .filter((activity) => String(activity?.type || '').toLowerCase().includes('run'))
+        .map((activity) => Number(activity?.id))
+        .filter((id) => id > 0);
+      const detailResult = await this.stravaService.enrichRecentActivityDetails(userId, runIds, {
+        maxActivities: isFirstSync ? 6 : 10,
+      });
+      detailsEnriched = detailResult.enriched || 0;
+    }
+
     return {
       activities: activities.length,
       newActivities: newActivitiesCount,
       skippedActivities: skipped,
       newDays,
-      alreadyUpToDate: alreadyUpToDate && heartRateUpdated === 0,
+      alreadyUpToDate: alreadyUpToDate && heartRateUpdated === 0 && detailsEnriched === 0,
       imported,
       firstSync: isFirstSync,
       windowDays,
       heartRateUpdated,
+      detailsEnriched,
       fields,
       entries,
       insights,
       heartRateDays: (state.entries || []).filter((entry) => Number(entry.stravaAvgHeartRate || entry.heartRateAvg || 0) > 0).length,
     };
+  }
+
+  @Get('strava/maps/:userId')
+  async listStravaRunMaps(
+    @Param('userId') userId: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.stravaService.listActivityMapCards(userId, {
+      limit: Number(limit) || 12,
+    });
   }
 
   @Put('strava/runs/:userId/:activityId/shoe')
@@ -259,23 +283,131 @@ export class WellnessController {
     return result;
   }
 
+  @Get('strava/runs/:userId/:activityId')
+  async getStravaRunDetail(
+    @Param('userId') userId: string,
+    @Param('activityId') activityId: string,
+    @Query('force') force?: string,
+  ) {
+    const detail = await this.stravaService.getActivityDetail(userId, Number(activityId), {
+      force: String(force || '') === '1',
+    });
+
+    // Attach shoe / summary from stored wellness entries when available.
+    try {
+      const state = await this.storageService.load(userId);
+      const runs = (state.entries || []).flatMap((entry: any) => entry.stravaRuns || []);
+      const stored = runs.find((run: any) => Number(run.stravaId || run.id) === Number(activityId));
+      if (stored && detail?.ok !== false) {
+        return {
+          ...detail,
+          summary: {
+            ...(detail.summary || {}),
+            ...stored,
+            ...(detail.summary || {}),
+            shoeId: stored.shoeId || detail.summary?.shoeId || '',
+          },
+        };
+      }
+      if ((!detail || detail.ok === false) && stored) {
+        return {
+          ok: true,
+          activityId: Number(activityId),
+          summary: stored,
+          polyline: [],
+          streams: { time: [], distance: [], heartrate: [], velocityKmh: [], altitude: [], latlng: [] },
+          splits: [],
+          heartrateZones: stored.heartrateZones || [],
+          hasMap: false,
+          hasHeartRate: Boolean(stored.avgHeartrate),
+          offline: true,
+          needsEnrich: true,
+        };
+      }
+    } catch (_) { /* ignore */ }
+
+    return detail;
+  }
+
+  @Post('strava/runs/:userId/enrich-details')
+  async enrichStravaRunDetails(
+    @Param('userId') userId: string,
+    @Body() body: { activityIds?: number[]; limit?: number } = {},
+  ) {
+    let ids = Array.isArray(body?.activityIds) ? body.activityIds.map(Number) : [];
+    if (!ids.length) {
+      const state = await this.storageService.load(userId);
+      ids = (state.entries || [])
+        .flatMap((entry: any) => (entry.stravaRuns || []).map((run: any) => Number(run.stravaId || run.id)))
+        .filter((id: number) => id > 0)
+        .slice(0, 40);
+    }
+    return this.stravaService.enrichRecentActivityDetails(userId, ids, {
+      maxActivities: Number(body?.limit) || 8,
+    });
+  }
+
   @Get('strava/insights/:userId')
   async stravaInsights(
     @Param('userId') userId: string,
     @Query('days') days?: string,
+    @Query('live') live?: string,
   ) {
     const connected = await this.stravaService.isConnected(userId);
-    if (!connected) {
+    const windowDays = Number(days) || 180;
+    const wantLive = String(live || '') === '1';
+
+    // Fast path: build insights from Cosmix activity_details (no Strava, no giant wellness JSON).
+    let storedRuns = await this.stravaService.listStoredRunSummaries(userId, {
+      days: windowDays,
+      limit: 50,
+    });
+
+    // Fallback: wellness entries if details table is thin.
+    if (storedRuns.length < 3) {
+      try {
+        const state = await this.storageService.load(userId);
+        const cutoffMs = Date.now() - windowDays * 86400000;
+        const fromEntries = (state.entries || [])
+          .flatMap((entry: any) => entry.stravaRuns || [])
+          .filter((run: any) => {
+            const distance = Number(run?.distanceKm || 0);
+            if (!(distance > 0)) return false;
+            const started = Date.parse(String(run?.date || ''));
+            return Number.isFinite(started) ? started >= cutoffMs : true;
+          });
+        if (fromEntries.length > storedRuns.length) {
+          storedRuns = await this.stravaService.attachStoredDetailFields(userId, fromEntries, { maxLookups: 16 });
+        }
+      } catch (_) { /* keep details-only */ }
+    }
+
+    const dbInsights = this.stravaService.buildRunInsightsFromSummaries(storedRuns);
+
+    if (!wantLive && dbInsights.runCount > 0) {
       return {
-        connected: false,
-        runCount: 0,
-        recentRuns: [],
-        paceByMinuteBuckets: [],
-        heartRateZones: [],
-        heartRateZoneRuns: 0,
+        ...dbInsights,
+        connected: connected || dbInsights.runCount > 0,
+        source: 'database',
+        live: false,
+        heartRateAvailable: Boolean(dbInsights.avgHeartRate || dbInsights.heartRateZoneRuns),
+        zoneSource: dbInsights.heartRateZoneRuns ? 'database' : 'none',
+        paceZoneSource: dbInsights.paceZoneRuns ? 'database' : 'none',
+        premiumRequired: false,
       };
     }
-    const activities = await this.stravaService.getRecentActivities(userId, Number(days) || 180, {
+
+    if (!connected) {
+      return {
+        ...dbInsights,
+        connected: dbInsights.runCount > 0,
+        source: 'database',
+        live: false,
+        heartRateAvailable: Boolean(dbInsights.avgHeartRate || dbInsights.heartRateZoneRuns),
+      };
+    }
+
+    const activities = await this.stravaService.getRecentActivities(userId, windowDays, {
       enrichHeartRate: true,
     });
     const zoneEnrichment = await this.stravaService.enrichActivitiesWithHeartRateZones(userId, activities, {
@@ -284,6 +416,8 @@ export class WellnessController {
     const insights = this.stravaService.buildRunInsights(zoneEnrichment.activities);
     return {
       ...insights,
+      source: 'strava',
+      live: true,
       zoneSource: zoneEnrichment.zoneSource,
       paceZoneSource: zoneEnrichment.paceZoneSource,
       athleteZones: zoneEnrichment.athleteZones,

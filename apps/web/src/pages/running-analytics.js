@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import { restoreUserSession } from '../lib/auth-client';
 import { MarathonGoalModal, MarathonRaceHub } from '../lib/MarathonRaceHub';
@@ -18,6 +18,10 @@ import {
   syncRunningShoesToServer,
   wellnessApiUrl,
 } from '../lib/runningShoes';
+import { DepthMetric, GlowTrend, DepthBars, DepthHBars, ShoeMixChart } from '../lib/RunningModernCharts';
+import { loadRunningSurfaceId, saveRunningSurfaceId, mergeRunningSurface } from '../lib/runningThemes';
+import Link from 'next/link';
+import { StravaRunExplorer } from '../lib/StravaRunExplorer';
 
 // ─── helpers ─────────────────────────────────────────────
 function fmtDate(dateStr) {
@@ -77,6 +81,7 @@ function buildHeartRateDashboard(runRows = [], stravaInsights = null) {
       avgHr: Number(row.avgHeartrate || row.avgHeartRate || 0),
       maxHr: Number(row.maxHeartrate || row.maxHeartRate || 0) || null,
       pace: row.distance > 0 ? row.minutes / row.distance : null,
+      stravaId: Number(row.stravaId || row.id || 0) || null,
     }))
     .sort((a, b) => String(b.date).localeCompare(String(a.date)));
 
@@ -107,26 +112,29 @@ function buildHeartRateDashboard(runRows = [], stravaInsights = null) {
 }
 
 function HeartRateSparkline({ runs, theme }) {
-  const points = [...(runs || [])].slice(0, 12).reverse();
+  const points = [...(runs || [])].slice(0, 30).reverse();
   if (points.length < 2) return null;
   const values = points.map((run) => run.avgHr);
   const min = Math.min(...values) - 4;
   const max = Math.max(...values) + 4;
   const W = 420;
-  const H = 90;
+  const H = 110;
   const step = W / Math.max(1, points.length - 1);
   const coords = points.map((run, index) => {
     const x = index * step;
     const y = H - ((run.avgHr - min) / Math.max(1, max - min)) * (H - 12) - 6;
     return `${x},${y}`;
   }).join(' ');
+  const avgLine = values.reduce((a, b) => a + b, 0) / values.length;
+  const avgY = H - ((avgLine - min) / Math.max(1, max - min)) * (H - 12) - 6;
 
   return (
     <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 18, padding: 14 }}>
       <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, marginBottom: 8 }}>
-        Avg HR trend · last {points.length} runs
+        Average heart rate · last {points.length} runs
       </div>
       <svg viewBox={`0 0 ${W} ${H + 18}`} style={{ width: '100%', height: H + 18 }}>
+        <line x1="0" y1={avgY} x2={W} y2={avgY} stroke={`${theme.cardBorder}`} strokeWidth="1" strokeDasharray="4 4" />
         <polyline fill="none" stroke="#f43f5e" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" points={coords} />
         {points.map((run, index) => {
           const x = index * step;
@@ -136,11 +144,14 @@ function HeartRateSparkline({ runs, theme }) {
         <text x="0" y={H + 14} fill={theme.textMuted} fontSize="9">{fmtDate(points[0].date)}</text>
         <text x={W} y={H + 14} textAnchor="end" fill={theme.textMuted} fontSize="9">{fmtDate(points[points.length - 1].date)}</text>
       </svg>
+      <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 4 }}>
+        Season avg {Math.round(avgLine)} bpm · tap a run below for map, splits & HR graph
+      </div>
     </div>
   );
 }
 
-function HeartRateDashboard({ hrDashboard, theme }) {
+function HeartRateDashboard({ hrDashboard, theme, onOpenRun }) {
   if (!hrDashboard) {
     return (
       <div style={{ borderRadius: 14, border: `1px dashed ${theme.cardBorder}`, padding: 12, fontSize: 12, color: theme.textMuted }}>
@@ -185,22 +196,6 @@ function HeartRateDashboard({ hrDashboard, theme }) {
                 />
               </div>
               <span style={{ fontSize: 12, fontWeight: 800, color: theme.textHeading, textAlign: 'right' }}>{zone.percent}%</span>
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {hrDashboard.hrRuns.length ? (
-        <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 18, overflow: 'hidden' }}>
-          <div style={{ padding: '12px 14px', fontWeight: 800, fontSize: 13, color: theme.textHeading, borderBottom: `1px solid ${theme.cardBorder}` }}>
-            Recent runs with heart rate
-          </div>
-          {hrDashboard.hrRuns.slice(0, 8).map((run) => (
-            <div key={`${run.date}-${run.avgHr}-${run.distance}`} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 10, padding: '10px 14px', borderBottom: `1px solid ${theme.cardBorder}` }}>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: theme.textHeading }}>{fmtDate(run.date)} · {run.distance} km</div>
-                <div style={{ fontSize: 11, color: theme.textMuted }}>{fmtPace(run.pace)}{run.maxHr ? ` · max ${run.maxHr} bpm` : ''}</div>
-              </div>
-              <div style={{ fontSize: 16, fontWeight: 900, color: '#f43f5e' }}>{run.avgHr}</div>
             </div>
           ))}
         </div>
@@ -383,10 +378,44 @@ function buildRunningInsights(runRows = []) {
 
 function MiniStat({ label, value, sub, accent, theme }) {
   return (
-    <div style={{ padding: '12px 14px', borderRadius: 14, background: `${accent}12`, border: `1px solid ${accent}33` }}>
+    <div style={{
+      padding: '14px 14px 12px',
+      borderRadius: 16,
+      background: `linear-gradient(145deg, ${accent}18 0%, ${theme.cardBg} 55%)`,
+      border: `1px solid ${accent}44`,
+      boxShadow: `0 10px 24px ${accent}14, inset 0 1px 0 rgba(255,255,255,0.06)`,
+      transform: 'perspective(800px) rotateX(2deg)',
+      transformOrigin: 'center top',
+    }}
+    >
       <div style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', color: theme.textMuted }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 900, color: accent, marginTop: 4 }}>{value}</div>
-      {sub ? <div style={{ fontSize: 11, color: theme.textSecondary, marginTop: 2 }}>{sub}</div> : null}
+      <div style={{ fontSize: 20, fontWeight: 900, color: accent, marginTop: 6, letterSpacing: '-0.02em' }}>{value}</div>
+      {sub ? <div style={{ fontSize: 11, color: theme.textSecondary, marginTop: 3 }}>{sub}</div> : null}
+    </div>
+  );
+}
+
+function DashPanel({ title, subtitle, theme, children, accent }) {
+  return (
+    <div style={{
+      background: `linear-gradient(165deg, ${theme.cardBg} 0%, ${theme.pageBgSolid || theme.cardBg} 100%)`,
+      border: `1px solid ${theme.cardBorder}`,
+      borderRadius: 20,
+      padding: 14,
+      display: 'grid',
+      gap: 10,
+      boxShadow: `0 16px 40px rgba(0,0,0,0.18), 0 1px 0 ${accent || theme.orange}33 inset`,
+      transform: 'perspective(900px) rotateX(1.5deg)',
+      transformOrigin: 'center top',
+    }}
+    >
+      {(title || subtitle) ? (
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+          {title ? <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>{title}</div> : <span />}
+          {subtitle ? <div style={{ fontSize: 11, color: theme.textMuted }}>{subtitle}</div> : null}
+        </div>
+      ) : null}
+      {children}
     </div>
   );
 }
@@ -583,15 +612,19 @@ function WeeklyMileageChart({ runRows, theme }) {
   );
 }
 
-function RunningShoesPanel({ userId, shoes, onChange, theme, importedRuns = [], onAssignShoe, savingShoeId, assignError }) {
+function RunningShoesPanel({ userId, shoes, onChange, theme, importedRuns = [], onAssignShoe, savingShoeId, assignError, forceEditPastRuns = false }) {
   const [name, setName] = useState('');
-  const [editPastRuns, setEditPastRuns] = useState(false);
+  const [editPastRuns, setEditPastRuns] = useState(Boolean(forceEditPastRuns));
   const activeShoes = (shoes || []).filter((shoe) => !shoe.retired);
   const stravaRuns = (importedRuns || []).filter((run) => run.stravaId).slice(0, 20);
-  const needsShoe = stravaRuns.filter((run) => !run.shoeId);
-  const assignedCount = stravaRuns.filter((run) => run.shoeId).length;
-  const showAssignList = needsShoe.length > 0 || editPastRuns;
-  const runsToShow = (needsShoe.length && !editPastRuns ? needsShoe : stravaRuns).slice(0, 12);
+  const needsShoe = stravaRuns.filter((run) => !run.shoeId || !activeShoes.some((shoe) => shoe.id === run.shoeId));
+  const assignedCount = stravaRuns.filter((run) => run.shoeId && activeShoes.some((shoe) => shoe.id === run.shoeId)).length;
+  const showAssignList = needsShoe.length > 0 || editPastRuns || forceEditPastRuns;
+  const runsToShow = (needsShoe.length && !editPastRuns && !forceEditPastRuns ? needsShoe : stravaRuns).slice(0, 12);
+
+  useEffect(() => {
+    if (forceEditPastRuns) setEditPastRuns(true);
+  }, [forceEditPastRuns]);
 
   function handleAdd(event) {
     if (event?.preventDefault) event.preventDefault();
@@ -814,8 +847,10 @@ function ShoeKmChart({ shoeStats, theme }) {
   );
 }
 
-function ShoeStatsSection({ entries, shoes, theme }) {
+function ShoeStatsSection({ entries, shoes, theme, onAssignShoes }) {
   const shoeStats = useMemo(() => computeShoeStats(entries, shoes), [entries, shoes]);
+  const untagged = shoeStats.filter((row) => !row.shoeId);
+  const unknown = shoeStats.filter((row) => row.shoeId && !(shoes || []).some((shoe) => shoe.id === row.shoeId));
   if (!shoeStats.length) {
     return (
       <div style={{ padding: 16, borderRadius: 16, border: `1px solid ${theme.cardBorder}`, color: theme.textMuted, fontSize: 13 }}>
@@ -826,10 +861,72 @@ function ShoeStatsSection({ entries, shoes, theme }) {
 
   return (
     <div style={{ display: 'grid', gap: 12 }}>
-      <ShoeKmChart shoeStats={shoeStats} theme={theme} />
-      <div className="sport-3col" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 10 }}>
+      {(untagged.length || unknown.length || !(shoes || []).length) ? (
+        <div style={{
+          display: 'flex',
+          gap: 10,
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          padding: '12px 14px',
+          borderRadius: 14,
+          border: `1px solid ${theme.cardBorder}`,
+          background: theme.pageBgSolid || theme.cardBg,
+        }}
+        >
+          <div style={{ fontSize: 12, color: theme.textMuted, lineHeight: 1.45 }}>
+            This chart is stats only. Add shoes and tag runs in the <strong style={{ color: theme.textHeading }}>Shoes</strong> section above
+            {untagged.length ? ' — untagged km stays here until you assign a shoe.' : '.'}
+          </div>
+          <button
+            type="button"
+            onClick={() => onAssignShoes?.()}
+            style={{
+              border: 'none',
+              borderRadius: 12,
+              padding: '10px 14px',
+              background: theme.orange,
+              color: '#fff',
+              fontWeight: 800,
+              fontSize: 12,
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Assign shoes to runs
+          </button>
+        </div>
+      ) : null}
+      <ShoeMixChart shoeStats={shoeStats} theme={theme} />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10, minWidth: 0 }}>
+        <DepthHBars
+          title="Runs per shoe"
+          theme={theme}
+          accent={theme.blue}
+          items={shoeStats.slice(0, 6).map((r) => ({ label: String(r.label || r.name || 'Shoe').slice(0, 18), value: r.runs }))}
+        />
+        <DepthHBars
+          title="Avg pace (min/km)"
+          theme={theme}
+          accent={theme.cyan}
+          items={shoeStats.filter((r) => r.avgPace).slice(0, 6).map((r) => ({
+            label: String(r.label || r.name || 'Shoe').slice(0, 18),
+            value: Number(r.avgPace).toFixed(1),
+          }))}
+        />
+      </div>
+      <div className="sport-3col" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 10, minWidth: 0 }}>
         {shoeStats.map((row) => (
-          <div key={row.shoeId || row.label} style={{ padding: '14px 16px', borderRadius: 16, border: `1px solid ${theme.cardBorder}`, background: theme.cardBg }}>
+          <div key={row.shoeId || row.label} style={{
+            padding: '14px 16px',
+            borderRadius: 18,
+            border: `1px solid ${theme.cardBorder}`,
+            background: theme.cardBg,
+            boxShadow: theme.chartDepth,
+            overflow: 'hidden',
+            minWidth: 0,
+          }}
+          >
             <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', color: theme.textMuted }}>{row.label}</div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 10, fontSize: 12 }}>
               <div><span style={{ color: theme.textMuted }}>Runs</span><div style={{ fontWeight: 800, color: theme.orange }}>{row.runs}</div></div>
@@ -846,8 +943,70 @@ function ShoeStatsSection({ entries, shoes, theme }) {
   );
 }
 
-function CollapsibleBlock({ title, children, theme, defaultOpen = false }) {
-  const [open, setOpen] = useState(defaultOpen);
+function ZonePercentBars({ zones = [], theme, colors }) {
+  const palette = colors || ['#94a3b8', '#38bdf8', '#22c55e', '#f59e0b', '#ef4444', '#a855f7'];
+  if (!zones.length) {
+    return <div style={{ fontSize: 12, color: theme.textMuted }}>No zone data for this selection</div>;
+  }
+  return (
+    <div style={{ display: 'grid', gap: 8 }}>
+      {zones.map((zone) => (
+        <div key={`z-${zone.zone || zone.label}`} style={{ display: 'grid', gridTemplateColumns: '150px 1fr 64px', gap: 8, alignItems: 'center' }}>
+          <span style={{ fontSize: 11, color: theme.textMuted, fontWeight: 700 }}>{zone.label || `Z${zone.zone}`}</span>
+          <div style={{ height: 10, borderRadius: 999, background: `${theme.cardBorder}`, overflow: 'hidden' }}>
+            <div style={{
+              width: `${Math.min(100, Number(zone.percent || 0))}%`,
+              height: '100%',
+              background: palette[Math.max(0, Number(zone.zone || 1) - 1)] || palette[0],
+            }}
+            />
+          </div>
+          <span style={{ fontSize: 12, fontWeight: 800, color: theme.textHeading, textAlign: 'right' }}>
+            {zone.percent != null ? `${zone.percent}%` : (zone.count ?? '--')}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PaceMinuteBars({ buckets = [], theme, denominator }) {
+  const max = Math.max(1, Number(denominator) || Math.max(...buckets.map((b) => Number(b.count || b.percent || 0)), 1));
+  if (!buckets.some((b) => Number(b.count || b.seconds || b.percent || 0) > 0)) {
+    return <div style={{ fontSize: 12, color: theme.textMuted }}>No pace distribution for this selection</div>;
+  }
+  return (
+    <div style={{ display: 'grid', gap: 8 }}>
+      {buckets.map((bucket) => {
+        const value = Number(bucket.percent != null ? bucket.percent : bucket.count || 0);
+        const widthPct = bucket.percent != null
+          ? Math.min(100, value)
+          : Math.min(100, (Number(bucket.count || 0) / max) * 100);
+        return (
+          <div key={bucket.label} style={{ display: 'grid', gridTemplateColumns: '110px 1fr 48px', gap: 8, alignItems: 'center' }}>
+            <span style={{ fontSize: 11, color: theme.textMuted, fontWeight: 700 }}>{bucket.label}</span>
+            <div style={{ height: 8, borderRadius: 999, background: `${theme.cardBorder}`, overflow: 'hidden' }}>
+              <div style={{ width: `${widthPct}%`, height: '100%', background: 'linear-gradient(90deg,#fc5200,#f97316)' }} />
+            </div>
+            <span style={{ fontSize: 12, fontWeight: 800, color: theme.textHeading, textAlign: 'right' }}>
+              {bucket.percent != null ? `${bucket.percent}%` : bucket.count}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function CollapsibleBlock({ title, children, theme, defaultOpen = false, open: openProp, onOpenChange }) {
+  const [openInternal, setOpenInternal] = useState(defaultOpen);
+  const controlled = typeof openProp === 'boolean';
+  const open = controlled ? openProp : openInternal;
+  const setOpen = (next) => {
+    const value = typeof next === 'function' ? next(open) : next;
+    if (!controlled) setOpenInternal(value);
+    if (onOpenChange) onOpenChange(value);
+  };
   return (
     <div style={{ borderRadius: 16, border: `1px solid ${theme.cardBorder}`, background: theme.cardBg, overflow: 'hidden' }}>
       <button
@@ -875,7 +1034,7 @@ function CollapsibleBlock({ title, children, theme, defaultOpen = false }) {
   );
 }
 
-function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, userId, onOpenMarathonPlan, goalRefreshKey, entries, runningShoes, onRunningShoesChange, onEntriesChange, stravaInsights }) {
+function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, userId, onOpenMarathonPlan, goalRefreshKey, entries, runningShoes, onRunningShoesChange, onEntriesChange, stravaInsights, onOpenRun }) {
   const noData = !runStats || runStats.totalRuns === 0;
   const insights = useMemo(() => buildRunningInsights(runRows), [runRows]);
   const paceDelta = insights.avgPace7 && insights.avgPace30
@@ -884,7 +1043,18 @@ function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, us
   const importedRuns = useMemo(() => buildRunningRows(entries).filter((row) => row.stravaId), [entries]);
   const [savingShoeId, setSavingShoeId] = useState(null);
   const [assignError, setAssignError] = useState('');
+  const [shoesOpen, setShoesOpen] = useState(!runningShoes.filter((s) => !s.retired).length);
+  const [forceEditPastRuns, setForceEditPastRuns] = useState(false);
+  const shoesSectionRef = useRef(null);
   const hrDashboard = useMemo(() => buildHeartRateDashboard(runRows, stravaInsights), [runRows, stravaInsights]);
+
+  const openShoeAssigner = () => {
+    setShoesOpen(true);
+    setForceEditPastRuns(true);
+    if (shoesSectionRef.current?.scrollIntoView) {
+      shoesSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
 
   const handleAssignShoe = async (stravaId, shoeId) => {
     if (!userId || !stravaId) return;
@@ -918,263 +1088,157 @@ function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, us
     }
   };
 
+  const paceTrendPoints = useMemo(() => {
+    return [...(runRows || [])]
+      .filter((r) => r.distance > 0 && r.minutes > 0)
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+      .slice(-10)
+      .map((r) => ({
+        label: String(r.date).slice(5),
+        y: Number((r.minutes / r.distance).toFixed(2)),
+      }));
+  }, [runRows]);
+
+  const speedTrendPoints = useMemo(() => {
+    return [...(runRows || [])]
+      .filter((r) => r.distance > 0 && r.minutes > 0)
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+      .slice(-10)
+      .map((r) => ({
+        label: String(r.date).slice(5),
+        y: Number((r.distance / (r.minutes / 60)).toFixed(2)),
+      }));
+  }, [runRows]);
+
+  const weeklyBars = useMemo(() => {
+    const weekMap = {};
+    (runRows || []).forEach((r) => {
+      const d = new Date(`${r.date}T00:00:00`);
+      const dayOfWeek = d.getDay();
+      const monday = new Date(d);
+      monday.setDate(d.getDate() - ((dayOfWeek + 6) % 7));
+      const key = monday.toISOString().slice(0, 10);
+      if (!weekMap[key]) weekMap[key] = 0;
+      weekMap[key] += Number(r.distance || 0);
+    });
+    return Object.entries(weekMap)
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .slice(-8)
+      .map(([week, km]) => ({ label: week.slice(5), value: Number(km.toFixed(1)) }));
+  }, [runRows]);
+
+  const hrTrendPoints = useMemo(() => {
+    return (hrDashboard?.hrRuns || [])
+      .slice()
+      .reverse()
+      .slice(-10)
+      .map((r) => ({ label: String(r.date).slice(5), y: Number(r.avgHr) }));
+  }, [hrDashboard]);
+
   return (
     <div style={{ display: 'grid', gap: '14px' }}>
       <MarathonRaceHub userId={userId} runRows={runRows} theme={theme} onOpenPlan={onOpenMarathonPlan} refreshKey={goalRefreshKey} compact />
 
-      <CollapsibleBlock
-        title={
-          runningShoes.filter((s) => !s.retired).length
-            ? `Shoes (${runningShoes.filter((s) => !s.retired).length})`
-            : 'Shoes'
-        }
-        theme={theme}
-        defaultOpen={!runningShoes.filter((s) => !s.retired).length}
-      >
-        <RunningShoesPanel
-          userId={userId}
-          shoes={runningShoes}
-          onChange={onRunningShoesChange}
-          theme={theme}
-          importedRuns={importedRuns}
-          onAssignShoe={handleAssignShoe}
-          savingShoeId={savingShoeId}
-          assignError={assignError}
-        />
-      </CollapsibleBlock>
+      {!noData ? (
+        <div className="run-dash-mini-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 10 }}>
+          <DepthMetric label="7-day km" value={`${insights.km7.toFixed(1)}`} sub={`${insights.runs7} runs`} accent={theme.orange} theme={theme} />
+          <DepthMetric label="30-day km" value={`${insights.km30.toFixed(1)}`} sub={`${insights.runs30} runs`} accent={theme.blue} theme={theme} />
+          <DepthMetric label="Pace 7d" value={insights.avgPace7 ? fmtPace(insights.avgPace7) : '--'} sub={paceDelta != null ? `${paceDelta < 0 ? 'Faster' : 'Slower'} vs 30d` : 'rolling'} accent={theme.cyan} theme={theme} />
+          <DepthMetric label="Peak speed" value={runStats.fastestSpeed != null ? `${runStats.fastestSpeed}` : '--'} sub="km/h best" accent={theme.green} theme={theme} />
+        </div>
+      ) : null}
 
-      <CollapsibleBlock title="Heart rate" theme={theme} defaultOpen>
-        <HeartRateDashboard hrDashboard={hrDashboard} theme={theme} />
-      </CollapsibleBlock>
-
-      {stravaInsights?.connected ? (
-        <CollapsibleBlock title="Strava insights" theme={theme} defaultOpen>
+      {(stravaInsights?.connected || stravaInsights?.runCount > 0) ? (
+        <CollapsibleBlock title="Route & zones" theme={theme} defaultOpen>
           <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
             <div className="run-dash-mini-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 8 }}>
-              <MiniStat label="Strava runs" value={`${stravaInsights.runCount || 0}`} sub={`${stravaInsights.totalDistanceKm || 0} km total`} accent="#fc5200" theme={theme} />
-              <MiniStat label="Max speed" value={stravaInsights.maxSpeedKmh ? `${stravaInsights.maxSpeedKmh} km/h` : '--'} sub="GPS spike-filtered" accent={theme.green} theme={theme} />
-              <MiniStat label="Best pace" value={stravaInsights.bestPaceMinPerKm ? fmtPace(stravaInsights.bestPaceMinPerKm) : '--'} sub={stravaInsights.bestPaceRun ? fmtDate(stravaInsights.bestPaceRun.date) : 'min/km'} accent={theme.cyan} theme={theme} />
-              <MiniStat label="Elevation" value={`${stravaInsights.elevationGainM || 0} m`} sub="total climb" accent={theme.purple} theme={theme} />
-              <MiniStat label="Avg heart rate" value={stravaInsights.avgHeartRate ? `${stravaInsights.avgHeartRate} bpm` : '--'} sub={stravaInsights.maxHeartRate ? `max ${stravaInsights.maxHeartRate} bpm` : 'from Strava'} accent="#f43f5e" theme={theme} />
-              <MiniStat label="Avg speed" value={stravaInsights.avgSpeedKmh ? `${stravaInsights.avgSpeedKmh} km/h` : '--'} sub="moving average" accent={theme.orange} theme={theme} />
-              <MiniStat label="Longest run" value={stravaInsights.longestRunKm ? `${stravaInsights.longestRunKm} km` : '--'} sub={stravaInsights.longestRun ? fmtDate(stravaInsights.longestRun.date) : 'distance'} accent={theme.blue} theme={theme} />
-              <MiniStat
-                label="Dominant HR zone"
-                value={stravaInsights.dominantHeartRateZone ? `Z${stravaInsights.dominantHeartRateZone.zone}` : '--'}
-                sub={stravaInsights.dominantHeartRateZone ? `${stravaInsights.dominantHeartRateZone.percent}% · ${stravaInsights.heartRateZoneRuns || 0} runs` : (stravaInsights.heartRateAvailable === false ? 'no HR on Strava activities' : 'needs HR activities')}
-                accent="#fb7185"
-                theme={theme}
-              />
-              <MiniStat
-                label="Dominant pace zone"
-                value={stravaInsights.dominantPaceZone ? `Z${stravaInsights.dominantPaceZone.zone}` : '--'}
-                sub={stravaInsights.dominantPaceZone ? `${stravaInsights.dominantPaceZone.percent}% · ${stravaInsights.paceZoneRuns || 0} runs` : 'from Strava /zones'}
-                accent="#38bdf8"
-                theme={theme}
-              />
+              <MiniStat label="Synced runs" value={`${stravaInsights.runCount || 0}`} sub={`${stravaInsights.totalDistanceKm || 0} km`} accent="#fc5200" theme={theme} />
+              <MiniStat label="Best pace" value={stravaInsights.bestPaceMinPerKm ? fmtPace(stravaInsights.bestPaceMinPerKm) : '--'} sub="season" accent={theme.cyan} theme={theme} />
+              <MiniStat label="Longest" value={stravaInsights.longestRunKm ? `${stravaInsights.longestRunKm} km` : '--'} sub={stravaInsights.longestRun ? fmtDate(stravaInsights.longestRun.date) : ''} accent={theme.blue} theme={theme} />
+              <MiniStat label="Avg HR" value={stravaInsights.avgHeartRate ? `${stravaInsights.avgHeartRate}` : '--'} sub="bpm" accent="#f43f5e" theme={theme} />
             </div>
-            {(stravaInsights.paceZones || []).length ? (
-              <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 18, padding: 14, display: 'grid', gap: 10 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
-                  <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>Pace zones (Strava)</div>
-                  <div style={{ fontSize: 11, color: theme.textMuted }}>
-                    {stravaInsights.paceZoneRuns || 0} runs · what Strava has for Amazfit/GPS runs
-                  </div>
-                </div>
-                {(stravaInsights.paceZones || []).map((zone) => (
-                  <div key={`pace-zone-${zone.zone}`} style={{ display: 'grid', gridTemplateColumns: '170px 1fr 64px', gap: 8, alignItems: 'center' }}>
-                    <span style={{ fontSize: 11, color: theme.textMuted, fontWeight: 700 }}>{zone.label}</span>
-                    <div style={{ height: 10, borderRadius: 999, background: `${theme.cardBorder}`, overflow: 'hidden' }}>
-                      <div style={{
-                        width: `${Math.min(100, Number(zone.percent || 0))}%`,
-                        height: '100%',
-                        background: ['#94a3b8', '#38bdf8', '#22c55e', '#f59e0b', '#ef4444', '#a855f7'][Math.max(0, Number(zone.zone || 1) - 1)] || '#38bdf8',
-                      }}
-                      />
-                    </div>
-                    <span style={{ fontSize: 12, fontWeight: 800, color: theme.textHeading, textAlign: 'right' }}>{zone.percent}%</span>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-            {(stravaInsights.heartRateZones || []).length ? (
-              <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 18, padding: 14, display: 'grid', gap: 10 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
-                  <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>Heart rate zones (Strava)</div>
-                  <div style={{ fontSize: 11, color: theme.textMuted }}>
-                    {stravaInsights.heartRateZoneRuns || 0} runs · source {stravaInsights.zoneSource || 'strava'}
-                  </div>
-                </div>
-                {(stravaInsights.heartRateZones || []).map((zone) => (
-                  <div key={`hr-zone-${zone.zone}`} style={{ display: 'grid', gridTemplateColumns: '150px 1fr 64px', gap: 8, alignItems: 'center' }}>
-                    <span style={{ fontSize: 11, color: theme.textMuted, fontWeight: 700 }}>{zone.label}</span>
-                    <div style={{ height: 10, borderRadius: 999, background: `${theme.cardBorder}`, overflow: 'hidden' }}>
-                      <div style={{
-                        width: `${Math.min(100, Number(zone.percent || 0))}%`,
-                        height: '100%',
-                        background: ['#94a3b8', '#38bdf8', '#22c55e', '#f59e0b', '#ef4444', '#a855f7'][Math.max(0, Number(zone.zone || 1) - 1)] || '#fb7185',
-                      }}
-                      />
-                    </div>
-                    <span style={{ fontSize: 12, fontWeight: 800, color: theme.textHeading, textAlign: 'right' }}>{zone.percent}%</span>
-                  </div>
-                ))}
-                <div style={{ fontSize: 11, color: theme.textMuted }}>
-                  Time in HR zone across recent runs
-                  {stravaInsights.zoneSource === 'stream'
-                    ? ' · rebuilt from HR streams'
-                    : stravaInsights.zoneSource === 'activity_zones'
-                      ? ' · from Strava activity zones'
-                      : ''}
-                  .
-                </div>
-              </div>
-            ) : (
-              <div style={{ borderRadius: 14, border: `1px dashed ${theme.cardBorder}`, padding: 12, fontSize: 12, color: theme.textMuted }}>
-                No heart-rate zones on these Strava activities (API has pace/power zones only). Open a run in Strava — if there is no HR chart, Amazfit/Zepp is not uploading HR. Enable HR sync in Zepp → Strava, then reconnect Strava here.
-              </div>
-            )}
-            {(stravaInsights.paceByMinuteBuckets || []).some((b) => b.count > 0) ? (
-              <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 18, padding: 14, display: 'grid', gap: 8 }}>
-                <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>Pace by minutes (Strava)</div>
-                {(stravaInsights.paceByMinuteBuckets || []).map((bucket) => (
-                  <div key={bucket.label} style={{ display: 'grid', gridTemplateColumns: '110px 1fr 40px', gap: 8, alignItems: 'center' }}>
-                    <span style={{ fontSize: 11, color: theme.textMuted, fontWeight: 700 }}>{bucket.label}</span>
-                    <div style={{ height: 8, borderRadius: 999, background: `${theme.cardBorder}`, overflow: 'hidden' }}>
-                      <div style={{ width: `${Math.min(100, (bucket.count / Math.max(1, stravaInsights.runCount)) * 100)}%`, height: '100%', background: 'linear-gradient(90deg,#fc5200,#f97316)' }} />
-                    </div>
-                    <span style={{ fontSize: 12, fontWeight: 800, color: theme.textHeading, textAlign: 'right' }}>{bucket.count}</span>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-            {(stravaInsights.fastestRuns || []).length ? (
-              <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 18, overflow: 'hidden' }}>
-                <div style={{ padding: '14px 18px', fontWeight: 800, fontSize: 14, color: theme.textHeading, borderBottom: `1px solid ${theme.cardBorder}` }}>Fastest average speeds (Strava)</div>
-                {stravaInsights.fastestRuns.slice(0, 6).map((run, index) => (
-                  <div key={`${run.id || run.date}-${index}`} style={{ display: 'grid', gridTemplateColumns: '28px 1fr auto auto', gap: 10, padding: '11px 18px', borderTop: index > 0 ? `1px solid ${theme.cardBorder}` : 'none', alignItems: 'center' }}>
-                    <span style={{ fontSize: 12, fontWeight: 800, color: index === 0 ? '#fc5200' : theme.textMuted }}>#{index + 1}</span>
-                    <span style={{ fontSize: 12, color: theme.textSecondary }}>{fmtDate(run.date)} · {run.name}</span>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: theme.green }}>{run.avgSpeedKmh || run.rankSpeedKmh} km/h avg</span>
-                    <span style={{ fontSize: 11, color: theme.textMuted }}>{run.distanceKm} km · {fmtPace(run.paceMinPerKm)}</span>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-            {(stravaInsights.recentRuns || []).length ? (
-              <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 18, overflow: 'hidden' }}>
-                <div style={{ padding: '14px 18px', fontWeight: 800, fontSize: 14, color: theme.textHeading, borderBottom: `1px solid ${theme.cardBorder}` }}>Recent Strava runs</div>
-                {stravaInsights.recentRuns.slice(0, 8).map((run, index) => (
-                  <div key={`recent-${run.id || run.date}-${index}`} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 10, padding: '11px 18px', borderTop: index > 0 ? `1px solid ${theme.cardBorder}` : 'none', alignItems: 'center' }}>
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: theme.textHeading }}>{run.name || 'Run'}</div>
-                      <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 2 }}>
-                        {fmtDate(run.date)} · {run.distanceKm} km · {fmtPace(run.paceMinPerKm)}
-                        {run.elevationGainM ? ` · ↑${run.elevationGainM}m` : ''}
-                        {run.maxSpeedKmh ? ` · max ${run.maxSpeedKmh} km/h` : ''}
-                        {run.avgHeartrate ? ` · HR ${run.avgHeartrate} bpm` : ''}
-                      </div>
-                    </div>
-                    <span style={{ fontSize: 12, fontWeight: 800, color: '#fc5200' }}>{run.minutes} min</span>
-                  </div>
-                ))}
-              </div>
-            ) : null}
+            <StravaRunExplorer userId={userId} theme={theme} onOpenRun={onOpenRun} />
           </div>
         </CollapsibleBlock>
       ) : (
         <div style={{ borderRadius: 18, border: `1px dashed ${theme.cardBorder}`, padding: 16, color: theme.textMuted, fontSize: 13 }}>
-          Connect Strava on the Wellness page to import GPS max speed, pace buckets, and elevation here.
+          Connect Strava on Wellness to import GPS maps and pace zones.
         </div>
       )}
 
       {noData ? <EmptyState sport="Running" theme={theme} /> : (
       <>
-      <CollapsibleBlock title="Performance dashboards" theme={theme} defaultOpen>
+      <CollapsibleBlock title="Trends" theme={theme} defaultOpen>
         <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
-          <div className="run-dash-mini-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 8 }}>
-            <MiniStat label="7-day km" value={`${insights.km7.toFixed(1)} km`} sub={`${insights.runs7} runs`} accent={theme.orange} theme={theme} />
-            <MiniStat label="30-day km" value={`${insights.km30.toFixed(1)} km`} sub={`${insights.runs30} runs`} accent={theme.blue} theme={theme} />
-            <MiniStat label="Pace (7d)" value={insights.avgPace7 ? fmtPace(insights.avgPace7) : '--'} sub={paceDelta != null ? `${paceDelta < 0 ? 'Faster' : 'Slower'} vs 30d` : '—'} accent={paceDelta != null && paceDelta < 0 ? theme.green : theme.cyan} theme={theme} />
-            <MiniStat label="Pace (30d)" value={insights.avgPace30 ? fmtPace(insights.avgPace30) : '--'} sub="rolling average" accent={theme.purple} theme={theme} />
-          </div>
           <div className="run-dash-charts-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <RecentRunsChart runs={insights.recentRuns} theme={theme} />
-            <MonthlyVolumeChart months={insights.months} theme={theme} />
+            <GlowTrend
+              title="Pace trend (min/km)"
+              points={paceTrendPoints}
+              theme={theme}
+              accent={theme.cyan}
+              valueFmt={(v) => fmtPace(Math.abs(v)).replace(' /km', '')}
+            />
+            <GlowTrend
+              title="Speed trend (km/h)"
+              points={speedTrendPoints}
+              theme={theme}
+              accent={theme.green}
+              valueFmt={(v) => `${Number(v).toFixed(2)}`}
+            />
           </div>
-          {runRows.length > 1 && (
-            <div className="run-dash-charts-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <PaceTrendChart runRows={runRows} theme={theme} />
-              <WeeklyMileageChart runRows={runRows} theme={theme} />
-            </div>
-          )}
-          <div className="run-dash-charts-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <SpeedTrendChart runRows={runRows} theme={theme} />
-            <LongRunTrendChart months={insights.months} theme={theme} />
-          </div>
-          <WeekdayPatternChart weekdayKm={insights.weekdayKm} weekdayLabels={insights.weekdayLabels} theme={theme} />
+          <DepthBars title="Weekly distance (km)" items={weeklyBars} theme={theme} accent={theme.orange} />
+          {hrTrendPoints.length >= 2 ? (
+            <GlowTrend title="Heart rate trend (avg bpm)" points={hrTrendPoints} theme={theme} accent="#f43f5e" valueFmt={(v) => `${Math.round(v)}`} />
+          ) : null}
         </div>
       </CollapsibleBlock>
 
-      <CollapsibleBlock title="Key run metrics" theme={theme} defaultOpen>
-      <div className="sport-4col" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: '10px', marginTop: 4 }}>
-        <HeroStat label="Total Distance" value={`${runStats.totalDistance} km`} sub={`${runStats.totalRuns} runs`} accent={theme.blue} theme={theme} />
-        <HeroStat label="Fastest Speed" value={`${runStats.fastestSpeed ?? '--'} km/h`} sub={runStats.fastestSpeedRun ? `${runStats.fastestSpeedRun.distance} km · ${fmtDate(runStats.fastestSpeedRun.date)}` : null} accent={theme.green} theme={theme} />
-        <HeroStat label="Average Speed" value={`${runStats.averageSpeed} km/h`} sub={runStats.averagePace ? `Pace: ${fmtPace(runStats.averagePace)}` : null} accent={theme.cyan} theme={theme} />
-        <HeroStat label="Best Wellness" value={wellStats?.highestScore ? `${wellStats.highestScore.score.toFixed(0)} pts` : '--'} sub={wellStats?.highestScore ? fmtDate(wellStats.highestScore.date) : null} accent={theme.orange} theme={theme} />
-      </div>
+      <CollapsibleBlock title="Heart rate" theme={theme} defaultOpen={false}>
+        <HeartRateDashboard hrDashboard={hrDashboard} theme={theme} onOpenRun={onOpenRun} />
       </CollapsibleBlock>
 
-      <CollapsibleBlock title="Records & streaks" theme={theme} defaultOpen>
+      <CollapsibleBlock title="Shoe analytics" theme={theme} defaultOpen>
+        <ShoeStatsSection entries={entries} shoes={runningShoes} theme={theme} onAssignShoes={openShoeAssigner} />
+      </CollapsibleBlock>
+
+      <div ref={shoesSectionRef}>
+        <CollapsibleBlock
+          title={
+            runningShoes.filter((s) => !s.retired).length
+              ? `Manage shoes (${runningShoes.filter((s) => !s.retired).length})`
+              : 'Manage shoes'
+          }
+          theme={theme}
+          open={shoesOpen}
+          onOpenChange={setShoesOpen}
+        >
+          <RunningShoesPanel
+            userId={userId}
+            shoes={runningShoes}
+            onChange={onRunningShoesChange}
+            theme={theme}
+            importedRuns={importedRuns}
+            onAssignShoe={handleAssignShoe}
+            savingShoeId={savingShoeId}
+            assignError={assignError}
+            forceEditPastRuns={forceEditPastRuns}
+          />
+        </CollapsibleBlock>
+      </div>
+
+      <CollapsibleBlock title="Records" theme={theme} defaultOpen={false}>
         <div className="sport-3col" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: '10px', marginTop: 4 }}>
           <RecordCard label="Fastest Speed" value={runStats.fastestSpeedRun ? `${runStats.fastestSpeedRun.speed} km/h` : null} detail1={runStats.fastestSpeedRun ? `${runStats.fastestSpeedRun.distance} km in ${runStats.fastestSpeedRun.time}` : null} detail2={runStats.fastestSpeedRun ? fmtDate(runStats.fastestSpeedRun.date) : null} accent={theme.green} theme={theme} />
           <RecordCard label="Longest Run" value={runStats.longestDistanceRun ? `${runStats.longestDistanceRun.distance} km` : null} detail1={runStats.longestDistanceRun ? `${runStats.longestDistanceRun.time} · ${runStats.longestDistanceRun.speed} km/h` : null} detail2={runStats.longestDistanceRun ? fmtDate(runStats.longestDistanceRun.date) : null} accent={theme.blue} theme={theme} />
-          <RecordCard label="Best Pace" value={runStats.fastestSpeedRun ? fmtPace(60 / runStats.fastestSpeedRun.speed) : null} detail1={runStats.fastestSpeedRun ? `${runStats.fastestSpeedRun.speed} km/h on ${fmtDate(runStats.fastestSpeedRun.date)}` : null} detail2="Pace = minutes per km" accent={theme.cyan} theme={theme} />
+          <RecordCard label="Total Distance" value={`${runStats.totalDistance} km`} detail1={`${runStats.totalRuns} runs`} accent={theme.orange} theme={theme} />
+          {wellSummary ? <RecordCard label={`${name}'s streak`} value={`${wellSummary.runningStreak} days`} detail1={`Best ${wellSummary.longestRunningStreak} days`} accent={theme.emerald} theme={theme} /> : null}
         </div>
-        {wellSummary && (
-          <div style={{ display: 'grid', gap: 10, marginTop: 10 }}>
-            <RecordCard label={`${name}'s streak`} value={`${wellSummary.runningStreak} days`} detail1={`Best ${wellSummary.longestRunningStreak} days`} accent={theme.orange} theme={theme} />
-            <RecordCard label="Week km" value={wellSummary.dashboardStats?.weeklyRunningKm ? `${Number(wellSummary.dashboardStats.weeklyRunningKm).toFixed(1)} km` : '--'} detail1={`Total ${runStats.totalDistance} km`} accent={theme.emerald} theme={theme} />
-          </div>
-        )}
-      </CollapsibleBlock>
-
-      <CollapsibleBlock title="Top runs & history" theme={theme} defaultOpen>
-        <div className="sport-2col" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px', marginTop: 4 }}>
-          <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: '18px', overflow: 'hidden' }}>
-            <div style={{ padding: '14px 18px', fontWeight: 800, fontSize: '14px', color: theme.textHeading, borderBottom: `1px solid ${theme.cardBorder}` }}>{name}&apos;s Fastest Runs (min 2 km)</div>
-            {(runStats.topSpeeds || []).slice(0, 7).map((e, i) => (
-              <div key={`${e.date}-${i}`} style={{ display: 'grid', gridTemplateColumns: '28px 1fr 1fr auto', gap: '10px', padding: '11px 18px', borderTop: i > 0 ? `1px solid ${theme.cardBorder}` : 'none', alignItems: 'center' }}>
-                <span style={{ fontSize: '12px', fontWeight: 800, color: i === 0 ? theme.orange : theme.textMuted }}>#{i + 1}</span>
-                <span style={{ fontSize: '12px', color: theme.textSecondary }}>{fmtDate(e.date)}</span>
-                <span style={{ fontSize: '13px', fontWeight: 700, color: theme.green }}>{e.speed} km/h</span>
-                <span style={{ fontSize: '11px', color: theme.textMuted }}>{e.distance} km in {e.time}</span>
-              </div>
-            ))}
-          </div>
-          <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: '18px', overflow: 'hidden' }}>
-            <div style={{ padding: '14px 18px', fontWeight: 800, fontSize: '14px', color: theme.textHeading, borderBottom: `1px solid ${theme.cardBorder}` }}>{name}&apos;s Longest Runs</div>
-            {(runStats.topDistances || []).slice(0, 7).map((e, i) => (
-              <div key={`${e.date}-${i}`} style={{ display: 'grid', gridTemplateColumns: '28px 1fr auto auto', gap: '10px', padding: '11px 18px', borderTop: i > 0 ? `1px solid ${theme.cardBorder}` : 'none', alignItems: 'center' }}>
-                <span style={{ fontSize: '12px', fontWeight: 800, color: i === 0 ? theme.orange : theme.textMuted }}>#{i + 1}</span>
-                <span style={{ fontSize: '12px', color: theme.textSecondary }}>{fmtDate(e.date)}</span>
-                <span style={{ fontSize: '13px', fontWeight: 700, color: theme.blue }}>{e.distance} km</span>
-                <span style={{ fontSize: '11px', color: theme.textMuted }}>{e.speed} km/h</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </CollapsibleBlock>
-
-      <CollapsibleBlock title="Shoe analytics" theme={theme} defaultOpen={false}>
-        <ShoeStatsSection entries={entries} shoes={runningShoes} theme={theme} />
       </CollapsibleBlock>
       </>
       )}
     </div>
   );
 }
-
 function SimpleSportTab({ stats, name, sportLabel, minKey, showDistance, accent, theme }) {
   if (!stats) return <EmptyState sport={sportLabel} theme={theme} />;
   const topByTime = [...stats.rows].sort((a, b) => b.minutes - a.minutes);
@@ -1316,7 +1380,9 @@ const MORE_SPORT_TABS = [
 
 export default function RunningAnalytics() {
   const router = useRouter();
-  const { theme } = useTheme();
+  const { theme: baseTheme } = useTheme();
+  const [surfaceId, setSurfaceId] = useState('night');
+  const theme = useMemo(() => mergeRunningSurface(baseTheme, surfaceId), [baseTheme, surfaceId]);
   const [user, setUser] = useState(null);
   const [activeTab, setActiveTab] = useState('running');
   const [showMarathonModal, setShowMarathonModal] = useState(false);
@@ -1375,6 +1441,7 @@ export default function RunningAnalytics() {
 
   useEffect(() => {
     restoreUserSession(router, setUser);
+    setSurfaceId(loadRunningSurfaceId());
   }, [router]);
 
   useEffect(() => {
@@ -1454,10 +1521,12 @@ export default function RunningAnalytics() {
           gap: 6px;
           padding: 6px;
           border-radius: 16px;
-          background: rgba(15,23,42,0.35);
-          border: 1px solid rgba(148,163,184,0.18);
+          background: ${surfaceId === 'trail' ? 'rgba(255,255,255,0.7)' : 'rgba(15,23,42,0.35)'};
+          border: 1px solid ${theme.cardBorder};
           overflow-x: auto;
         }
+        .surface-trail .run-page-header h1 { letter-spacing: -0.02em; }
+        .surface-night .run-page-header h1 { letter-spacing: 0.02em; text-shadow: 0 0 24px ${theme.accentGlow || 'transparent'}; }
         .sport-tab-btn {
           appearance: none;
           border: 1px solid transparent;
@@ -1501,38 +1570,37 @@ export default function RunningAnalytics() {
 
       <div style={{ maxWidth: '1200px', margin: '0 auto', display: 'grid', gap: '20px' }}>
 
-        <div className="run-page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', padding: '16px', borderRadius: '20px', background: `linear-gradient(135deg, ${theme.orange}14, ${theme.cyan}10, ${theme.cardBg})`, border: `1px solid ${theme.cardBorder}` }}>
+        <div className={`run-page-header surface-${surfaceId}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', padding: '16px', borderRadius: '20px', background: surfaceId === 'night' ? `linear-gradient(135deg, ${theme.orange}22, ${theme.cyan}12, ${theme.cardBg})` : `linear-gradient(145deg, #ffffffee, ${theme.orange}12, ${theme.cardBg})`, border: `1px solid ${theme.cardBorder}`, boxShadow: theme.chartDepth, fontFamily: theme.font }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted }}>Running</div>
-            <h1 style={{ margin: '4px 0 0', fontSize: 'clamp(20px,4vw,26px)', fontWeight: 900, color: theme.textHeading, lineHeight: 1.1 }}>Race cockpit</h1>
-            <p style={{ margin: '6px 0 0', fontSize: '12px', color: theme.textSecondary }}>{runStats?.totalRuns || 0} runs · goal-based plan</p>
+            <div style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted }}>{surfaceId === 'night' ? 'Night track' : 'Trail light'}</div>
+            <h1 style={{ margin: '4px 0 0', fontSize: 'clamp(22px,4.5vw,30px)', fontWeight: 900, color: theme.textHeading, lineHeight: 1.1 }}>{surfaceId === 'night' ? 'Race cockpit' : 'Trail board'}</h1>
+            <p style={{ margin: '6px 0 0', fontSize: '12px', color: theme.textSecondary }}>{runStats?.totalRuns || 0} runs · <Link href="/running-maps" style={{ color: theme.orange, fontWeight: 800, textDecoration: 'none' }}>map archive</Link></p>
           </div>
           <div style={{ display: 'flex', gap: 8, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             <button
               type="button"
-              onClick={handleStravaSync}
-              disabled={stravaSyncing}
+              onClick={() => {
+                const next = surfaceId === 'night' ? 'trail' : 'night';
+                setSurfaceId(next);
+                saveRunningSurfaceId(next);
+              }}
               style={{
                 border: `1px solid ${theme.cardBorder}`,
                 background: theme.cardBg,
                 color: theme.textHeading,
                 borderRadius: 12,
                 padding: '10px 14px',
-                cursor: stravaSyncing ? 'default' : 'pointer',
+                cursor: 'pointer',
                 fontWeight: 800,
                 fontSize: 12,
                 whiteSpace: 'nowrap',
-                opacity: stravaSyncing ? 0.7 : 1,
               }}
             >
-              {stravaSyncing ? 'Syncing…' : 'Sync Strava'}
+              {surfaceId === 'night' ? '☀ Trail light' : '☾ Night track'}
             </button>
-            <button type="button" onClick={() => setShowMarathonModal(true)} style={{ border: 'none', background: theme.orange, color: '#fff', borderRadius: '12px', padding: '10px 14px', cursor: 'pointer', fontWeight: 800, fontSize: '12px', whiteSpace: 'nowrap' }}>🏁 Goal</button>
+            <button type="button" onClick={() => setShowMarathonModal(true)} style={{ border: 'none', background: theme.orange, color: '#fff', borderRadius: '12px', padding: '10px 14px', cursor: 'pointer', fontWeight: 800, fontSize: '12px', whiteSpace: 'nowrap' }}>Goal</button>
           </div>
         </div>
-        {stravaSyncMsg ? (
-          <div style={{ marginTop: -8, fontSize: 12, color: theme.textSecondary }}>{stravaSyncMsg}</div>
-        ) : null}
 
         <div className="sport-tab-strip" role="tablist" aria-label="Sport analytics">
           {PRIMARY_TABS.map((tab) => {
@@ -1614,6 +1682,7 @@ export default function RunningAnalytics() {
             onOpenMarathonPlan={() => setShowMarathonModal(true)}
             goalRefreshKey={goalRefreshKey}
             stravaInsights={stravaInsights}
+            onOpenRun={(activityId) => router.push(`/running/${activityId}`)}
           />
         )}
         {activeTab === 'badminton' && (

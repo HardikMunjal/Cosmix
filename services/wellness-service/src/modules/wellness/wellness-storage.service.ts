@@ -151,6 +151,10 @@ export class WellnessStorageService {
     const options: any = { connectionString: DATABASE_URL };
     if (DATABASE_URL.includes('sslmode=') || DATABASE_URL.includes('ssl=true') || DATABASE_URL.includes('rds.amazonaws.com')) {
       options.ssl = { rejectUnauthorized: false };
+      options.connectionString = String(DATABASE_URL)
+        .replace(/([?&])sslmode=[^&]*/g, '$1')
+        .replace(/[?&]$/, '')
+        .replace(/\?&/, '?');
     }
     return options;
   }

@@ -22,9 +22,13 @@ export function getCachedClientUser() {
 }
 
 export async function restoreUserSession(router, setUser) {
+  const applyUser = (value) => {
+    if (typeof setUser === 'function') setUser(value);
+  };
+
   const cached = getCachedClientUser();
   if (cached) {
-    setUser(cached);
+    applyUser(cached);
   }
 
   try {
@@ -32,19 +36,19 @@ export async function restoreUserSession(router, setUser) {
     const data = await response.json();
     if (!response.ok || !data.user) {
       clearClientUser();
-      setUser(null);
-      router.push('/');
+      applyUser(null);
+      if (router?.push) router.push('/');
       return null;
     }
     persistClientUser(data.user);
-    setUser(data.user);
+    applyUser(data.user);
     void subscribeToWebPush(data.user.username);
     return data.user;
   } catch (_) {
     if (!cached) {
       clearClientUser();
-      setUser(null);
-      router.push('/');
+      applyUser(null);
+      if (router?.push) router.push('/');
       return null;
     }
     return cached;

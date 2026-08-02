@@ -42,7 +42,12 @@ export class StravaService {
   private getPoolOptions() {
     const options: any = { connectionString: DATABASE_URL };
     if (DATABASE_URL.includes('sslmode=') || DATABASE_URL.includes('ssl=true') || DATABASE_URL.includes('rds.amazonaws.com')) {
+      // Local Node/pg may treat sslmode=require as verify-full; force accept RDS certs.
       options.ssl = { rejectUnauthorized: false };
+      options.connectionString = String(DATABASE_URL)
+        .replace(/([?&])sslmode=[^&]*/g, '$1')
+        .replace(/[?&]$/, '')
+        .replace(/\?&/, '?');
     }
     return options;
   }
@@ -65,6 +70,13 @@ export class StravaService {
           payload JSONB NOT NULL,
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+        CREATE TABLE IF NOT EXISTS wellness_strava_activity_details (
+          user_id TEXT NOT NULL,
+          activity_id BIGINT NOT NULL,
+          payload JSONB NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (user_id, activity_id)
+        );
       `);
     }
 
@@ -74,6 +86,10 @@ export class StravaService {
 
   private tokenPath(userId: string) {
     return path.join(DATA_DIR, `${sanitize(userId)}.json`);
+  }
+
+  private detailPath(userId: string, activityId: number) {
+    return path.join(DATA_DIR, 'details', sanitize(userId), `${activityId}.json`);
   }
 
   getAuthUrl(userId: string, redirectUri: string): string {
@@ -305,20 +321,567 @@ export class StravaService {
     }
   }
 
-  private async fetchHeartRateStream(accessToken: string, activityId: number): Promise<number[] | null> {
+  private extractStreamSeries(payload: any, type: string): any[] | null {
+    if (!payload) return null;
+    if (payload?.[type]?.data && Array.isArray(payload[type].data)) return payload[type].data;
+    if (Array.isArray(payload)) {
+      const match = payload.find((item: any) => String(item?.type || '') === type);
+      return Array.isArray(match?.data) ? match.data : null;
+    }
+    return null;
+  }
+
+  private async fetchActivityStreams(
+    accessToken: string,
+    activityId: number,
+    keys = 'time,latlng,distance,heartrate,velocity_smooth,altitude',
+  ): Promise<Record<string, any[]> | null> {
     try {
       const res = await fetch(
-        `https://www.strava.com/api/v3/activities/${activityId}/streams?keys=heartrate&key_by_type=true`,
+        `https://www.strava.com/api/v3/activities/${activityId}/streams?keys=${encodeURIComponent(keys)}&key_by_type=true`,
         { headers: { Authorization: `Bearer ${accessToken}` } },
       );
       if (!res.ok) return null;
       const payload: any = await res.json();
-      const series = payload?.heartrate?.data
-        || (Array.isArray(payload) ? payload.find((item: any) => item?.type === 'heartrate')?.data : null);
-      return Array.isArray(series) ? series.map((value: any) => Number(value)).filter((value: number) => value > 0) : null;
+      const out: Record<string, any[]> = {};
+      for (const key of String(keys).split(',')) {
+        const series = this.extractStreamSeries(payload, key.trim());
+        if (series?.length) out[key.trim()] = series;
+      }
+      return Object.keys(out).length ? out : null;
     } catch {
       return null;
     }
+  }
+
+  private async fetchHeartRateStream(accessToken: string, activityId: number): Promise<number[] | null> {
+    const streams = await this.fetchActivityStreams(accessToken, activityId, 'heartrate');
+    const series = streams?.heartrate;
+    if (!Array.isArray(series)) return null;
+    return series.map((value: any) => Number(value)).filter((value: number) => value > 0);
+  }
+
+  /** Google encoded polyline → [[lat, lng], ...] */
+  private decodePolyline(encoded: string): number[][] {
+    if (!encoded || typeof encoded !== 'string') return [];
+    let index = 0;
+    let lat = 0;
+    let lng = 0;
+    const coordinates: number[][] = [];
+    while (index < encoded.length) {
+      let result = 0;
+      let shift = 0;
+      let byte = 0;
+      do {
+        byte = encoded.charCodeAt(index++) - 63;
+        result |= (byte & 0x1f) << shift;
+        shift += 5;
+      } while (byte >= 0x20);
+      const deltaLat = (result & 1) ? ~(result >> 1) : (result >> 1);
+      lat += deltaLat;
+
+      result = 0;
+      shift = 0;
+      do {
+        byte = encoded.charCodeAt(index++) - 63;
+        result |= (byte & 0x1f) << shift;
+        shift += 5;
+      } while (byte >= 0x20);
+      const deltaLng = (result & 1) ? ~(result >> 1) : (result >> 1);
+      lng += deltaLng;
+
+      coordinates.push([lat / 1e5, lng / 1e5]);
+    }
+    return coordinates;
+  }
+
+  private downsampleSeries<T>(series: T[] = [], maxPoints = 1800): T[] {
+    if (!Array.isArray(series) || series.length <= maxPoints) return series || [];
+    const step = Math.ceil(series.length / maxPoints);
+    const out: T[] = [];
+    for (let i = 0; i < series.length; i += step) out.push(series[i]);
+    if (out[out.length - 1] !== series[series.length - 1]) out.push(series[series.length - 1]);
+    return out;
+  }
+
+  private computeKmSplits(streams: Record<string, any[]> = {}) {
+    const distance = Array.isArray(streams.distance) ? streams.distance.map((v) => Number(v) || 0) : [];
+    const time = Array.isArray(streams.time) ? streams.time.map((v) => Number(v) || 0) : [];
+    const heartrate = Array.isArray(streams.heartrate) ? streams.heartrate.map((v) => Number(v) || 0) : [];
+    if (distance.length < 2 || time.length < 2) return [];
+
+    const splits: any[] = [];
+    const totalM = distance[distance.length - 1] || 0;
+    const kmCount = Math.max(1, Math.ceil(totalM / 1000));
+    let startIdx = 0;
+
+    for (let km = 1; km <= kmCount; km += 1) {
+      const target = Math.min(km * 1000, totalM);
+      let endIdx = startIdx;
+      while (endIdx < distance.length - 1 && distance[endIdx] < target) endIdx += 1;
+      if (km === kmCount) endIdx = distance.length - 1;
+
+      const distM = Math.max(0, (distance[endIdx] || 0) - (distance[startIdx] || 0));
+      const sec = Math.max(1, (time[endIdx] || 0) - (time[startIdx] || 0));
+      const paceMinPerKm = distM > 0 ? round((sec / 60) / (distM / 1000), 2) : null;
+      const speedKmh = sec > 0 ? round((distM / sec) * 3.6, 2) : null;
+
+      let avgHr: number | null = null;
+      let maxHr: number | null = null;
+      if (heartrate.length > endIdx) {
+        const slice = heartrate.slice(startIdx, endIdx + 1).filter((bpm) => bpm > 0);
+        if (slice.length) {
+          avgHr = Math.round(slice.reduce((sum, bpm) => sum + bpm, 0) / slice.length);
+          maxHr = Math.max(...slice);
+        }
+      }
+
+      splits.push({
+        km,
+        distanceKm: round(distM / 1000, 2),
+        seconds: sec,
+        paceMinPerKm,
+        speedKmh,
+        avgHeartrate: avgHr,
+        maxHeartrate: maxHr,
+        elevGainM: null,
+      });
+      startIdx = endIdx;
+      if (startIdx >= distance.length - 1) break;
+    }
+    return splits;
+  }
+
+  private buildStreamPayload(raw: Record<string, any[]> | null) {
+    if (!raw) return null;
+    const time = this.downsampleSeries(raw.time || [], 2400).map((v) => Number(v) || 0);
+    const distance = this.downsampleSeries(raw.distance || [], 2400).map((v) => Number(v) || 0);
+    const heartrate = this.downsampleSeries(raw.heartrate || [], 2400).map((v) => Number(v) || 0);
+    const velocity = this.downsampleSeries(raw.velocity_smooth || [], 2400).map((v) => round((Number(v) || 0) * 3.6, 2));
+    const altitude = this.downsampleSeries(raw.altitude || [], 2400).map((v) => round(Number(v) || 0, 1));
+    const latlng = this.downsampleSeries(raw.latlng || [], 2400)
+      .map((pair: any) => {
+        if (Array.isArray(pair) && pair.length >= 2) return [Number(pair[0]), Number(pair[1])];
+        return null;
+      })
+      .filter(Boolean) as number[][];
+
+    return {
+      time,
+      distance,
+      heartrate,
+      velocityKmh: velocity,
+      altitude,
+      latlng,
+    };
+  }
+
+  private async saveActivityDetail(userId: string, activityId: number, payload: any) {
+    if (this.hasDatabase()) {
+      const pool = await this.ensureSchema();
+      await pool?.query(
+        `INSERT INTO wellness_strava_activity_details (user_id, activity_id, payload, updated_at)
+         VALUES ($1, $2, $3::jsonb, NOW())
+         ON CONFLICT (user_id, activity_id) DO UPDATE
+         SET payload = EXCLUDED.payload,
+             updated_at = NOW()`,
+        [userId, activityId, JSON.stringify(payload)],
+      );
+      return;
+    }
+    const fp = this.detailPath(userId, activityId);
+    fs.mkdirSync(path.dirname(fp), { recursive: true });
+    fs.writeFileSync(fp, JSON.stringify(payload), 'utf-8');
+  }
+
+  async loadActivityDetail(userId: string, activityId: number): Promise<any | null> {
+    if (this.hasDatabase()) {
+      const pool = await this.ensureSchema();
+      const result = await pool?.query(
+        'SELECT payload FROM wellness_strava_activity_details WHERE user_id = $1 AND activity_id = $2 LIMIT 1',
+        [userId, activityId],
+      );
+      return result?.rows?.[0]?.payload || null;
+    }
+    const fp = this.detailPath(userId, activityId);
+    if (!fs.existsSync(fp)) return null;
+    try {
+      return JSON.parse(fs.readFileSync(fp, 'utf-8'));
+    } catch {
+      return null;
+    }
+  }
+
+  private async fetchAndBuildActivityDetail(accessToken: string, activityId: number, athleteZones?: any) {
+    const [detail, rawStreams] = await Promise.all([
+      this.fetchActivityDetail(accessToken, activityId),
+      this.fetchActivityStreams(accessToken, activityId),
+    ]);
+
+    const streams = this.buildStreamPayload(rawStreams);
+    const summaryPolyline = String(detail?.map?.summary_polyline || detail?.map?.polyline || '');
+    const latlngFromPolyline = summaryPolyline ? this.decodePolyline(summaryPolyline) : [];
+    const latlng = (streams?.latlng?.length ? streams.latlng : latlngFromPolyline) as number[][];
+
+    const boundZones = this.parseAthleteHrZones(athleteZones) || this.defaultHrZoneBounds(
+      Number(detail?.max_heartrate || 190),
+    );
+
+    let heartrateZones: any[] = [];
+    let paceZones: any[] = [];
+    let zoneSource: string | null = null;
+    let paceZoneSource: string | null = null;
+    const zonesPayload = await this.fetchActivityZones(accessToken, activityId);
+    const hrZone = Array.isArray(zonesPayload)
+      ? zonesPayload.find((item) => String(item?.type || '').toLowerCase() === 'heartrate')
+      : null;
+    const paceZone = Array.isArray(zonesPayload)
+      ? zonesPayload.find((item) => String(item?.type || '').toLowerCase() === 'pace')
+      : null;
+    if (hrZone?.distribution_buckets?.length) {
+      heartrateZones = this.normalizeHrZoneBuckets(hrZone.distribution_buckets, Number(hrZone.max || detail?.max_heartrate || 190));
+      zoneSource = 'activity_zones';
+    } else if (streams?.heartrate?.length) {
+      heartrateZones = this.computeZonesFromStream(
+        streams.heartrate.filter((bpm: number) => bpm > 0),
+        boundZones,
+      );
+      zoneSource = 'stream';
+    }
+    if (paceZone?.distribution_buckets?.length) {
+      paceZones = this.normalizePaceZoneBuckets(paceZone.distribution_buckets);
+      paceZoneSource = 'activity_zones';
+    } else if (streams?.velocityKmh?.length) {
+      paceZones = this.computePaceZonesFromVelocity(streams.velocityKmh, streams.time || []);
+      paceZoneSource = paceZones.length ? 'stream' : null;
+    }
+
+    const splits = this.computeKmSplits({
+      distance: streams?.distance || [],
+      time: streams?.time || [],
+      heartrate: streams?.heartrate || [],
+    });
+
+    const paceByMinuteBuckets = this.computePaceByMinuteBucketsFromVelocity(
+      streams?.velocityKmh || [],
+      streams?.time || [],
+    );
+
+    const summary = this.summarizeRun({
+      ...(detail || {}),
+      id: activityId,
+      heartrateZones,
+      paceZones,
+      zoneSource,
+      paceZoneSource,
+    });
+
+    return {
+      ok: true,
+      activityId,
+      fetchedAt: new Date().toISOString(),
+      summary,
+      polyline: latlng,
+      summaryPolyline: summaryPolyline || null,
+      streams: streams || {
+        time: [],
+        distance: [],
+        heartrate: [],
+        velocityKmh: [],
+        altitude: [],
+        latlng: [],
+      },
+      splits,
+      heartrateZones,
+      paceZones,
+      paceByMinuteBuckets,
+      zoneSource,
+      paceZoneSource,
+      hasMap: latlng.length > 1,
+      hasHeartRate: Boolean(streams?.heartrate?.some((bpm: number) => bpm > 0) || summary.avgHeartrate),
+      source: 'strava',
+    };
+  }
+
+  private computePaceZonesFromVelocity(velocityKmh: number[] = [], time: number[] = []) {
+    // Fixed recreational pace bands when Strava /zones is unavailable (no Premium needed).
+    const bands = [
+      { zone: 1, label: 'Z1 Easy (8:00+/km)', maxPace: 999, minPace: 8, seconds: 0 },
+      { zone: 2, label: 'Z2 Endurance (7–8)', maxPace: 8, minPace: 7, seconds: 0 },
+      { zone: 3, label: 'Z3 Tempo (6–7)', maxPace: 7, minPace: 6, seconds: 0 },
+      { zone: 4, label: 'Z4 Threshold (5–6)', maxPace: 6, minPace: 5, seconds: 0 },
+      { zone: 5, label: 'Z5 Fast (<5:00)', maxPace: 5, minPace: 0, seconds: 0 },
+    ];
+    for (let i = 1; i < velocityKmh.length; i += 1) {
+      const kmh = Number(velocityKmh[i] || 0);
+      if (!(kmh > 0.8)) continue;
+      const pace = 60 / kmh;
+      const dt = Math.max(1, (Number(time[i]) || i) - (Number(time[i - 1]) || i - 1));
+      const band = bands.find((item) => pace >= item.minPace && pace < item.maxPace) || bands[0];
+      band.seconds += dt;
+    }
+    const total = bands.reduce((sum, band) => sum + band.seconds, 0);
+    if (!total) return [];
+    return bands
+      .filter((band) => band.seconds > 0)
+      .map((band) => ({
+        zone: band.zone,
+        label: band.label,
+        min: band.minPace,
+        max: band.maxPace >= 900 ? null : band.maxPace,
+        seconds: band.seconds,
+        minutes: round(band.seconds / 60, 1),
+        percent: round((band.seconds / total) * 100, 1),
+      }))
+      .sort((a, b) => a.zone - b.zone);
+  }
+
+  private computePaceByMinuteBucketsFromVelocity(velocityKmh: number[] = [], time: number[] = []) {
+    const buckets = [
+      { label: 'Under 5:00', max: 5, seconds: 0, count: 0 },
+      { label: '5:00–6:00', max: 6, seconds: 0, count: 0 },
+      { label: '6:00–7:00', max: 7, seconds: 0, count: 0 },
+      { label: '7:00–8:00', max: 8, seconds: 0, count: 0 },
+      { label: '8:00+', max: 999, seconds: 0, count: 0 },
+    ];
+    for (let i = 1; i < velocityKmh.length; i += 1) {
+      const kmh = Number(velocityKmh[i] || 0);
+      if (!(kmh > 0.8)) continue;
+      const pace = 60 / kmh;
+      const dt = Math.max(1, (Number(time[i]) || i) - (Number(time[i - 1]) || i - 1));
+      const bucket = buckets.find((entry) => pace < entry.max) || buckets[buckets.length - 1];
+      bucket.seconds += dt;
+    }
+    const total = buckets.reduce((sum, bucket) => sum + bucket.seconds, 0);
+    return buckets.map((bucket) => ({
+      label: bucket.label,
+      max: bucket.max,
+      seconds: bucket.seconds,
+      minutes: round(bucket.seconds / 60, 1),
+      // Keep `count` for UI compatibility — for a single run this is minutes in band.
+      count: total > 0 ? round(bucket.seconds / 60, 1) : 0,
+      percent: total > 0 ? round((bucket.seconds / total) * 100, 1) : 0,
+    }));
+  }
+
+  private simplifyPolyline(points: number[][] = [], maxPoints = 48): number[][] {
+    if (!Array.isArray(points) || points.length <= maxPoints) return points || [];
+    const step = Math.ceil(points.length / maxPoints);
+    const out: number[][] = [];
+    for (let i = 0; i < points.length; i += step) {
+      const pair = points[i];
+      if (Array.isArray(pair) && pair.length >= 2) out.push([Number(pair[0]), Number(pair[1])]);
+    }
+    const last = points[points.length - 1];
+    if (Array.isArray(last) && out.length) {
+      const prev = out[out.length - 1];
+      if (prev[0] !== Number(last[0]) || prev[1] !== Number(last[1])) {
+        out.push([Number(last[0]), Number(last[1])]);
+      }
+    }
+    return out;
+  }
+
+  async listStoredRunSummaries(userId: string, options: { days?: number; limit?: number } = {}) {
+    const limit = Math.max(1, Math.min(80, Number(options.limit) || 40));
+    const windowDays = Math.max(1, Math.min(1095, Number(options.days) || 180));
+    const cutoff = new Date(Date.now() - windowDays * 86400000).toISOString().slice(0, 10);
+    const summaries: any[] = [];
+
+    if (this.hasDatabase()) {
+      const pool = await this.ensureSchema();
+      const result = await pool?.query(
+        `SELECT activity_id, payload
+         FROM wellness_strava_activity_details
+         WHERE user_id = $1
+         ORDER BY COALESCE((payload->'summary'->>'date'), '') DESC, updated_at DESC
+         LIMIT $2`,
+        [userId, limit],
+      );
+      for (const row of result?.rows || []) {
+        const payload = row.payload || {};
+        const summary = payload.summary || {};
+        const date = String(summary.date || '').slice(0, 10);
+        if (date && date < cutoff) continue;
+        summaries.push({
+          ...summary,
+          id: Number(row.activity_id),
+          stravaId: Number(row.activity_id),
+          heartrateZones: payload.heartrateZones || summary.heartrateZones || [],
+          paceZones: payload.paceZones || summary.paceZones || [],
+          zoneSource: payload.zoneSource || summary.zoneSource || null,
+          paceZoneSource: payload.paceZoneSource || summary.paceZoneSource || null,
+        });
+      }
+      return summaries;
+    }
+
+    const cards = await this.listActivityMapCards(userId, { limit });
+    return (cards.cards || [])
+      .map((card: any) => ({
+        ...(card.summary || {}),
+        id: card.activityId,
+        stravaId: card.activityId,
+      }))
+      .filter((run: any) => {
+        const date = String(run.date || '').slice(0, 10);
+        return !date || date >= cutoff;
+      });
+  }
+
+  async listActivityMapCards(userId: string, options: { limit?: number } = {}) {
+    const limit = Math.max(1, Math.min(30, Number(options.limit) || 12));
+    const cards: any[] = [];
+
+    if (this.hasDatabase()) {
+      const pool = await this.ensureSchema();
+      const result = await pool?.query(
+        `SELECT activity_id, payload
+         FROM wellness_strava_activity_details
+         WHERE user_id = $1
+         ORDER BY
+           CASE WHEN COALESCE((payload->'summary'->>'distanceKm')::float, 0) >= 0.3 THEN 0 ELSE 1 END,
+           COALESCE((payload->'summary'->>'date'), '') DESC,
+           updated_at DESC
+         LIMIT $2`,
+        [userId, limit],
+      );
+      for (const row of result?.rows || []) {
+        const payload = row.payload || {};
+        const polyline = this.simplifyPolyline(
+          Array.isArray(payload.polyline) && payload.polyline.length
+            ? payload.polyline
+            : (payload.streams?.latlng || []),
+          56,
+        );
+        cards.push({
+          activityId: Number(row.activity_id),
+          summary: payload.summary || null,
+          polyline,
+          hasMap: polyline.length > 1,
+          splits: Array.isArray(payload.splits) ? payload.splits.length : 0,
+          hasHeartRate: Boolean(payload.hasHeartRate),
+        });
+      }
+      return { cards, count: cards.length };
+    }
+
+    const dir = path.join(DATA_DIR, 'details', sanitize(userId));
+    if (!fs.existsSync(dir)) return { cards: [], count: 0 };
+    const files = fs.readdirSync(dir).filter((name) => name.endsWith('.json')).slice(0, limit * 2);
+    for (const file of files) {
+      try {
+        const payload = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf-8'));
+        const polyline = this.simplifyPolyline(
+          Array.isArray(payload.polyline) && payload.polyline.length
+            ? payload.polyline
+            : (payload.streams?.latlng || []),
+          56,
+        );
+        cards.push({
+          activityId: Number(payload.activityId || String(file).replace(/\.json$/, '')),
+          summary: payload.summary || null,
+          polyline,
+          hasMap: polyline.length > 1,
+          splits: Array.isArray(payload.splits) ? payload.splits.length : 0,
+          hasHeartRate: Boolean(payload.hasHeartRate),
+        });
+      } catch {
+        /* ignore */
+      }
+    }
+    cards.sort((a, b) => String(b.summary?.date || '').localeCompare(String(a.summary?.date || '')));
+    return { cards: cards.slice(0, limit), count: Math.min(cards.length, limit) };
+  }
+
+  async getActivityDetail(userId: string, activityId: number, options: { force?: boolean } = {}) {
+    const id = Number(activityId);
+    if (!Number.isFinite(id) || id <= 0) {
+      return { ok: false, error: 'invalid_activity', activityId };
+    }
+
+    const cached = await this.loadActivityDetail(userId, id);
+    const hasUsableCache = cached?.ok !== false && (
+      (Array.isArray(cached?.polyline) && cached.polyline.length > 1)
+      || (Array.isArray(cached?.streams?.heartrate) && cached.streams.heartrate.length > 0)
+      || (Array.isArray(cached?.splits) && cached.splits.length > 0)
+    );
+
+    if (hasUsableCache && !options.force) {
+      const patched = { ...cached, ok: true, cached: true, activityId: id };
+      if (!(Array.isArray(patched.paceByMinuteBuckets) && patched.paceByMinuteBuckets.length)
+        && Array.isArray(patched.streams?.velocityKmh)
+        && patched.streams.velocityKmh.length) {
+        patched.paceByMinuteBuckets = this.computePaceByMinuteBucketsFromVelocity(
+          patched.streams.velocityKmh,
+          patched.streams.time || [],
+        );
+      }
+      if (!(Array.isArray(patched.paceZones) && patched.paceZones.length)
+        && Array.isArray(patched.streams?.velocityKmh)
+        && patched.streams.velocityKmh.length) {
+        patched.paceZones = this.computePaceZonesFromVelocity(
+          patched.streams.velocityKmh,
+          patched.streams.time || [],
+        );
+        patched.paceZoneSource = patched.paceZoneSource || 'stream';
+      }
+      return patched;
+    }
+
+    const accessToken = await this.refreshIfNeeded(userId);
+    if (!accessToken) {
+      if (cached) return { ...cached, ok: true, cached: true, offline: true, activityId: id };
+      return { ok: false, error: 'not_connected', activityId: id };
+    }
+
+    try {
+      const athleteZones = await this.fetchAthleteZones(accessToken);
+      const built = await this.fetchAndBuildActivityDetail(accessToken, id, athleteZones);
+      await this.saveActivityDetail(userId, id, built);
+      return { ...built, cached: false };
+    } catch (err) {
+      console.error('Strava activity detail fetch failed:', err);
+      if (cached) return { ...cached, ok: true, cached: true, stale: true, activityId: id };
+      return { ok: false, error: 'fetch_failed', activityId: id };
+    }
+  }
+
+  async enrichRecentActivityDetails(
+    userId: string,
+    activityIds: number[] = [],
+    options: { maxActivities?: number } = {},
+  ) {
+    const accessToken = await this.refreshIfNeeded(userId);
+    if (!accessToken) return { enriched: 0, skipped: activityIds.length, connected: false };
+
+    const limit = Math.max(1, Math.min(20, Number(options.maxActivities) || 8));
+    const uniqueIds = [...new Set(activityIds.map((id) => Number(id)).filter((id) => id > 0))];
+    let enriched = 0;
+    let skipped = 0;
+    const athleteZones = await this.fetchAthleteZones(accessToken);
+
+    for (const id of uniqueIds.slice(0, limit)) {
+      const existing = await this.loadActivityDetail(userId, id);
+      if (
+        existing
+        && ((Array.isArray(existing.polyline) && existing.polyline.length > 1)
+          || (Array.isArray(existing.streams?.latlng) && existing.streams.latlng.length > 1)
+          || (Array.isArray(existing.splits) && existing.splits.length > 0))
+      ) {
+        skipped += 1;
+        continue;
+      }
+      try {
+        const built = await this.fetchAndBuildActivityDetail(accessToken, id, athleteZones);
+        await this.saveActivityDetail(userId, id, built);
+        enriched += 1;
+      } catch (err) {
+        console.error(`Detail enrich failed for ${id}:`, err);
+      }
+    }
+
+    return { enriched, skipped, connected: true, attempted: Math.min(limit, uniqueIds.length) };
   }
 
   private defaultHrZoneBounds(maxHr = 190) {
@@ -758,6 +1321,97 @@ export class StravaService {
       .filter((run) => run.distanceKm > 0 && run.minutes > 0)
       .sort((a, b) => String(b.date).localeCompare(String(a.date)));
 
+    return this.aggregateRunInsights(runs);
+  }
+
+  /** Insights from Cosmix-stored run summaries (no live Strava required). */
+  buildRunInsightsFromSummaries(summaries: any[] = []) {
+    const runs = (summaries || [])
+      .map((run) => ({
+        id: run.id || run.stravaId,
+        stravaId: run.stravaId || run.id,
+        name: run.name || 'Run',
+        date: run.date,
+        type: 'run',
+        distanceKm: Number(run.distanceKm || 0),
+        minutes: Number(run.minutes || 0),
+        movingSeconds: Number(run.movingSeconds || (Number(run.minutes || 0) * 60) || 0),
+        elapsedSeconds: Number(run.elapsedSeconds || 0),
+        avgSpeedKmh: Number(run.avgSpeedKmh || 0),
+        maxSpeedKmh: Number(run.maxSpeedKmh || 0) || null,
+        paceMinPerKm: Number(run.paceMinPerKm || 0) || null,
+        elevationGainM: Number(run.elevationGainM || 0),
+        avgHeartrate: Number(run.avgHeartrate || 0) || null,
+        maxHeartrate: Number(run.maxHeartrate || 0) || null,
+        heartrateZones: Array.isArray(run.heartrateZones) ? run.heartrateZones : [],
+        paceZones: Array.isArray(run.paceZones) ? run.paceZones : [],
+        zoneSource: run.zoneSource || null,
+        paceZoneSource: run.paceZoneSource || null,
+      }))
+      .filter((run) => run.distanceKm > 0 && run.minutes > 0)
+      .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+
+    return this.aggregateRunInsights(runs);
+  }
+
+  async loadActivityDetailsByIds(userId: string, activityIds: number[] = []) {
+    const ids = [...new Set(activityIds.map((id) => Number(id)).filter((id) => id > 0))];
+    if (!ids.length) return new Map<number, any>();
+    const map = new Map<number, any>();
+
+    if (this.hasDatabase()) {
+      const pool = await this.ensureSchema();
+      const result = await pool?.query(
+        `SELECT activity_id, payload
+         FROM wellness_strava_activity_details
+         WHERE user_id = $1 AND activity_id = ANY($2::bigint[])`,
+        [userId, ids],
+      );
+      for (const row of result?.rows || []) {
+        map.set(Number(row.activity_id), row.payload);
+      }
+      return map;
+    }
+
+    for (const id of ids) {
+      const detail = await this.loadActivityDetail(userId, id);
+      if (detail) map.set(id, detail);
+    }
+    return map;
+  }
+
+  async attachStoredDetailFields(userId: string, summaries: any[] = [], options: { maxLookups?: number } = {}) {
+    const maxLookups = Math.max(1, Math.min(40, Number(options.maxLookups) || 20));
+    const candidates = [];
+    for (const run of summaries || []) {
+      const id = Number(run?.stravaId || run?.id || 0);
+      const needsZones = !(Array.isArray(run?.heartrateZones) && run.heartrateZones.length)
+        || !(Array.isArray(run?.paceZones) && run.paceZones.length);
+      if (id && needsZones && candidates.length < maxLookups) candidates.push(id);
+    }
+    const detailsById = await this.loadActivityDetailsByIds(userId, candidates);
+
+    return (summaries || []).map((run) => {
+      const id = Number(run?.stravaId || run?.id || 0);
+      const detail = id ? detailsById.get(id) : null;
+      if (!detail) return run;
+      return {
+        ...run,
+        heartrateZones: (Array.isArray(run.heartrateZones) && run.heartrateZones.length)
+          ? run.heartrateZones
+          : (detail.heartrateZones || []),
+        paceZones: (Array.isArray(run.paceZones) && run.paceZones.length)
+          ? run.paceZones
+          : (detail.paceZones || []),
+        zoneSource: run.zoneSource || detail.zoneSource || null,
+        paceZoneSource: run.paceZoneSource || detail.paceZoneSource || null,
+        avgHeartrate: run.avgHeartrate || detail.summary?.avgHeartrate || null,
+        maxHeartrate: run.maxHeartrate || detail.summary?.maxHeartrate || null,
+      };
+    });
+  }
+
+  private aggregateRunInsights(runs: any[] = []) {
     if (!runs.length) {
       return {
         connected: true,
@@ -813,7 +1467,6 @@ export class StravaService {
       bucket.count += 1;
     }
 
-    // Rank by average moving speed (reliable). Raw Strava max_speed is often a GPS spike.
     const qualifiedForSpeed = runs.filter((run) => run.distanceKm >= 2 && Number(run.avgSpeedKmh || 0) > 0);
     const fastestRuns = [...qualifiedForSpeed]
       .sort((a, b) => (b.avgSpeedKmh || 0) - (a.avgSpeedKmh || 0))

@@ -14,18 +14,76 @@ function ReadinessRing({ percent, color, label, theme, size = 148 }) {
   const stroke = Math.max(8, Math.round(size * 0.08));
   const radius = (size - stroke) / 2;
   const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (percent / 100) * circumference;
-  const fontSize = size < 120 ? 22 : 34;
+  const offset = circumference - (Math.max(0, Math.min(100, Number(percent) || 0)) / 100) * circumference;
+  const fontSize = size < 110 ? 20 : size < 130 ? 26 : 34;
+  const labelBelow = size < 120;
+  const trackStroke = theme?.pageBgSolid && !String(theme.pageBgSolid).startsWith('#0') && !String(theme.pageBgSolid).startsWith('#1')
+    ? 'rgba(15,23,42,0.12)'
+    : 'rgba(255,255,255,0.14)';
+
   return (
-    <div style={{ display: 'grid', justifyItems: 'center', gap: 4 }}>
-      <svg width={size} height={size} style={{ transform: 'rotate(-90deg)' }}>
-        <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth={stroke} />
-        <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={offset} />
-      </svg>
-      <div style={{ position: 'relative', marginTop: -size + 6, height: size - 12, display: 'grid', placeItems: 'center' }}>
-        <div style={{ fontSize, fontWeight: 900, color, lineHeight: 1 }}>{percent}%</div>
-        {label ? <div style={{ fontSize: 9, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em', color: theme.textMuted, marginTop: 2 }}>{label}</div> : null}
+    <div style={{ display: 'grid', justifyItems: 'center', gap: labelBelow ? 6 : 0, width: size, flexShrink: 0 }}>
+      <div style={{ position: 'relative', width: size, height: size }}>
+        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ display: 'block', transform: 'rotate(-90deg)' }}>
+          <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke={trackStroke} strokeWidth={stroke} />
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke={color}
+            strokeWidth={stroke}
+            strokeLinecap="round"
+            strokeDasharray={circumference}
+            strokeDashoffset={offset}
+          />
+        </svg>
+        <div style={{
+          position: 'absolute',
+          inset: stroke + 4,
+          display: 'grid',
+          placeItems: 'center',
+          textAlign: 'center',
+          pointerEvents: 'none',
+        }}
+        >
+          <div>
+            <div style={{ fontSize, fontWeight: 900, color, lineHeight: 1 }}>{percent}%</div>
+            {!labelBelow && label ? (
+              <div style={{
+                fontSize: 8,
+                fontWeight: 800,
+                textTransform: 'uppercase',
+                letterSpacing: '0.04em',
+                color: theme.textMuted,
+                marginTop: 4,
+                lineHeight: 1.15,
+                maxWidth: size * 0.48,
+                marginLeft: 'auto',
+                marginRight: 'auto',
+              }}
+              >
+                {label}
+              </div>
+            ) : null}
+          </div>
+        </div>
       </div>
+      {labelBelow && label ? (
+        <div style={{
+          fontSize: 9,
+          fontWeight: 800,
+          textTransform: 'uppercase',
+          letterSpacing: '0.06em',
+          color: theme.textMuted,
+          textAlign: 'center',
+          lineHeight: 1.2,
+          maxWidth: size + 8,
+        }}
+        >
+          {label}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -255,21 +313,29 @@ export function MarathonRaceHub({ userId, runRows, theme, onOpenPlan, refreshKey
 
   if (compact) {
     return (
-      <div style={{ borderRadius: 18, padding: '14px', background: `linear-gradient(135deg, ${readiness.readinessColor}16, transparent)`, border: `1px solid ${readiness.readinessColor}44` }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <div style={{ borderRadius: 18, padding: '14px', background: `linear-gradient(135deg, ${readiness.readinessColor}16, transparent)`, border: `1px solid ${readiness.readinessColor}44`, overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, minWidth: 0 }}>
           <ReadinessRing percent={readiness.readinessPercent} color={readiness.readinessColor} label={readiness.readinessLabel} theme={theme} size={96} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', color: theme.textMuted }}>{preset.emoji} {distanceLabel(savedGoal.distanceKm)}</div>
             <div style={{ fontSize: 18, fontWeight: 900, marginTop: 4 }}>{readiness.predictedFinishDisplay}</div>
             <div style={{ fontSize: 12, color: theme.textSecondary, marginTop: 4 }}>
-              {readiness.daysUntilRace != null ? `${readiness.daysUntilRace}d to race` : '—'} · hold ~{readiness.sustainableDistanceKm} km
+              {readiness.daysUntilRace != null ? `${readiness.daysUntilRace}d to race` : 'Set race date'}
+              {' · '}
+              peak long {readiness.longRunRecentKm ?? readiness.longRunBestKm}/{readiness.longRunTargetKm} km
             </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8, fontSize: 10, color: theme.textMuted }}>
+              <span>Dist {readiness.longRunScore ?? 0}</span>
+              <span>· Pace {readiness.paceScore ?? 0}</span>
+              <span>· Vol {readiness.volumeScore ?? 0}</span>
+            </div>
+            {(readiness.distanceRatio || 0) < 0.7 ? (
+              <div style={{ marginTop: 8, fontSize: 11, color: theme.textMuted, lineHeight: 1.35 }}>
+                Long run is ~{Math.round((readiness.distanceRatio || 0) * 100)}% of race distance — still building, not race-ready.
+              </div>
+            ) : null}
             <button type="button" onClick={onOpenPlan} style={{ marginTop: 10, border: 'none', background: theme.orange, color: '#fff', borderRadius: 10, padding: '8px 12px', fontWeight: 800, fontSize: 12, cursor: 'pointer' }}>Edit goal</button>
           </div>
-        </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
-          <StatChip label="Week" value={`${readiness.weeklyKmCurrent}/${readiness.weeklyKmTarget} km`} theme={theme} />
-          <StatChip label="Long run" value={`${readiness.longRunBestKm} km`} theme={theme} />
         </div>
       </div>
     );
