@@ -21,7 +21,8 @@ export function formatStravaSyncMessage(payload) {
   const hr = hrValue > 0 ? ` · avg HR ${hrValue} bpm` : '';
   const hrDays = payload.heartRateDays ? ` · HR on ${payload.heartRateDays} day(s)` : '';
   const hrRefresh = payload.heartRateUpdated ? ` · refreshed HR on ${payload.heartRateUpdated} day(s)` : '';
-  return `Synced ${payload.newActivities || 0} new activities · ${payload.newDays || payload.imported || 0} day(s) updated${windowNote}${maxSpeed}${hr}${hrDays}${hrRefresh}`;
+  const maps = payload.detailsEnriched ? ` · mapped ${payload.detailsEnriched} run(s)` : '';
+  return `Synced ${payload.newActivities || 0} new activities · ${payload.newDays || payload.imported || 0} day(s) updated${windowNote}${maxSpeed}${hr}${hrDays}${hrRefresh}${maps}`;
 }
 
 function withApiBase(apiBase, path) {

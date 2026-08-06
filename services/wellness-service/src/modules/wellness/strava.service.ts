@@ -730,7 +730,7 @@ export class StravaService {
   }
 
   async listActivityMapCards(userId: string, options: { limit?: number } = {}) {
-    const limit = Math.max(1, Math.min(30, Number(options.limit) || 12));
+    const limit = Math.max(1, Math.min(80, Number(options.limit) || 12));
     const cards: any[] = [];
 
     if (this.hasDatabase()) {
@@ -855,13 +855,17 @@ export class StravaService {
     const accessToken = await this.refreshIfNeeded(userId);
     if (!accessToken) return { enriched: 0, skipped: activityIds.length, connected: false };
 
-    const limit = Math.max(1, Math.min(20, Number(options.maxActivities) || 8));
+    const limit = Math.max(1, Math.min(25, Number(options.maxActivities) || 8));
     const uniqueIds = [...new Set(activityIds.map((id) => Number(id)).filter((id) => id > 0))];
     let enriched = 0;
     let skipped = 0;
+    let scanned = 0;
     const athleteZones = await this.fetchAthleteZones(accessToken);
 
-    for (const id of uniqueIds.slice(0, limit)) {
+    // Prefer newest unenriched IDs — do not burn the quota on already-mapped runs.
+    for (const id of uniqueIds) {
+      if (enriched >= limit) break;
+      scanned += 1;
       const existing = await this.loadActivityDetail(userId, id);
       if (
         existing
@@ -881,7 +885,23 @@ export class StravaService {
       }
     }
 
-    return { enriched, skipped, connected: true, attempted: Math.min(limit, uniqueIds.length) };
+    return { enriched, skipped, connected: true, attempted: scanned, filled: enriched };
+  }
+
+  async deleteActivityDetail(userId: string, activityId: number) {
+    const id = Number(activityId);
+    if (!Number.isFinite(id) || id <= 0) return { ok: false };
+    if (this.hasDatabase()) {
+      const pool = await this.ensureSchema();
+      await pool?.query(
+        'DELETE FROM wellness_strava_activity_details WHERE user_id = $1 AND activity_id = $2',
+        [userId, id],
+      );
+      return { ok: true };
+    }
+    const fp = this.detailPath(userId, id);
+    if (fs.existsSync(fp)) fs.unlinkSync(fp);
+    return { ok: true };
   }
 
   private defaultHrZoneBounds(maxHr = 190) {

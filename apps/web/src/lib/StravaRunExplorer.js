@@ -65,7 +65,7 @@ function DashPanel({ title, subtitle, theme, children, accent }) {
 }
 
 /** Compact map + calendar date picker (no crowded run chips). */
-export function StravaRunExplorer({ userId, theme, onOpenRun }) {
+export function StravaRunExplorer({ userId, theme, onOpenRun, refreshKey = 0 }) {
   const [mapCards, setMapCards] = useState([]);
   const [mapRunId, setMapRunId] = useState(null);
   const [mapDetail, setMapDetail] = useState(null);
@@ -94,7 +94,7 @@ export function StravaRunExplorer({ userId, theme, onOpenRun }) {
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [userId]);
+  }, [userId, refreshKey]);
 
   const usableMaps = useMemo(() => (mapCards || []).filter((card) => (
     card?.hasMap
@@ -219,13 +219,14 @@ export function StravaRunExplorer({ userId, theme, onOpenRun }) {
                 }
               }}
               style={{
-                border: `1px solid ${theme.cardBorder}`,
-                background: theme.panelBg || theme.cardBg,
+                border: `1px solid ${theme.inputBorder || theme.cardBorder}`,
+                background: theme.inputBg || theme.panelBg || theme.cardBg,
                 color: theme.textHeading,
                 borderRadius: 12,
                 padding: '8px 12px',
                 fontWeight: 700,
                 fontSize: 13,
+                colorScheme: theme.pageBgSolid?.startsWith('#0') || theme.pageBgSolid?.startsWith('#1') ? 'dark' : 'light',
               }}
             />
             <button

@@ -612,7 +612,19 @@ function WeeklyMileageChart({ runRows, theme }) {
   );
 }
 
-function RunningShoesPanel({ userId, shoes, onChange, theme, importedRuns = [], onAssignShoe, savingShoeId, assignError, forceEditPastRuns = false }) {
+function RunningShoesPanel({
+  userId,
+  shoes,
+  onChange,
+  theme,
+  importedRuns = [],
+  onAssignShoe,
+  onDeleteRun,
+  savingShoeId,
+  deletingRunId,
+  assignError,
+  forceEditPastRuns = false,
+}) {
   const [name, setName] = useState('');
   const [editPastRuns, setEditPastRuns] = useState(Boolean(forceEditPastRuns));
   const activeShoes = (shoes || []).filter((shoe) => !shoe.retired);
@@ -621,6 +633,9 @@ function RunningShoesPanel({ userId, shoes, onChange, theme, importedRuns = [], 
   const assignedCount = stravaRuns.filter((run) => run.shoeId && activeShoes.some((shoe) => shoe.id === run.shoeId)).length;
   const showAssignList = needsShoe.length > 0 || editPastRuns || forceEditPastRuns;
   const runsToShow = (needsShoe.length && !editPastRuns && !forceEditPastRuns ? needsShoe : stravaRuns).slice(0, 12);
+  const inputBg = theme.inputBg || theme.panelBg || theme.cardBg;
+  const inputBorder = theme.inputBorder || theme.cardBorder;
+  const isDark = Boolean(theme.pageBgSolid && (theme.pageBgSolid.startsWith('#0') || theme.pageBgSolid.startsWith('#1')));
 
   useEffect(() => {
     if (forceEditPastRuns) setEditPastRuns(true);
@@ -666,10 +681,11 @@ function RunningShoesPanel({ userId, shoes, onChange, theme, importedRuns = [], 
             minWidth: 0,
             padding: '10px 12px',
             borderRadius: 12,
-            border: `1px solid ${theme.cardBorder}`,
-            background: theme.cardBg,
-            color: theme.textPrimary,
+            border: `1px solid ${inputBorder}`,
+            background: inputBg,
+            color: theme.textHeading,
             fontSize: 14,
+            colorScheme: isDark ? 'dark' : 'light',
           }}
         />
         <button
@@ -703,7 +719,7 @@ function RunningShoesPanel({ userId, shoes, onChange, theme, importedRuns = [], 
                 padding: '6px 8px 6px 12px',
                 borderRadius: 999,
                 border: `1px solid ${theme.cardBorder}`,
-                background: theme.pageBgSolid || theme.cardBg,
+                background: inputBg,
                 fontSize: 13,
                 fontWeight: 700,
                 color: theme.textHeading,
@@ -734,10 +750,10 @@ function RunningShoesPanel({ userId, shoes, onChange, theme, importedRuns = [], 
       )}
 
       {stravaRuns.length ? (
-        <div style={{ display: 'grid', gap: 8, paddingTop: 4, borderTop: `1px solid ${theme.cardBorder}` }}>
+        <div style={{ display: 'grid', gap: 10, paddingTop: 4, borderTop: `1px solid ${theme.cardBorder}` }}>
           {needsShoe.length ? (
-            <div style={{ fontSize: 12, color: theme.textMuted }}>
-              {needsShoe.length} recent run{needsShoe.length === 1 ? '' : 's'} still need a shoe
+            <div style={{ fontSize: 12, color: theme.orange, fontWeight: 700 }}>
+              Tap a shoe chip on {needsShoe.length} recent run{needsShoe.length === 1 ? '' : 's'} below
             </div>
           ) : (
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -766,47 +782,85 @@ function RunningShoesPanel({ userId, shoes, onChange, theme, importedRuns = [], 
             <div style={{ fontSize: 12, color: theme.red || '#ef4444', fontWeight: 600 }}>{assignError}</div>
           ) : null}
           {showAssignList && runsToShow.length && !activeShoes.length ? (
-            <div style={{ fontSize: 12, color: theme.textMuted }}>Add a shoe above, then pick it for each run.</div>
+            <div style={{ fontSize: 12, color: theme.textMuted }}>Add a shoe above, then tap it for each run.</div>
           ) : null}
-          {showAssignList ? runsToShow.map((run) => (
-            <div
-              key={run.stravaId}
-              style={{
-                display: 'flex',
-                gap: 10,
-                alignItems: 'center',
-                justifyContent: 'space-between',
-              }}
-            >
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: theme.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {fmtDate(run.date)} · {run.distance} km
-                  {run.shoeId ? '' : ' · no shoe'}
-                </div>
-              </div>
-              <select
-                value={run.shoeId || ''}
-                disabled={!activeShoes.length || savingShoeId === run.stravaId}
-                onChange={(event) => onAssignShoe?.(run.stravaId, event.target.value)}
+          {showAssignList ? runsToShow.map((run) => {
+            const busy = savingShoeId === run.stravaId || deletingRunId === run.stravaId;
+            return (
+              <div
+                key={run.stravaId}
                 style={{
-                  width: 148,
-                  flexShrink: 0,
-                  borderRadius: 10,
+                  display: 'grid',
+                  gap: 8,
+                  padding: '12px',
+                  borderRadius: 14,
                   border: `1px solid ${theme.cardBorder}`,
-                  background: theme.inputBg || '#fff',
-                  color: theme.textPrimary,
-                  padding: '7px 8px',
-                  fontSize: 12,
-                  fontWeight: 600,
+                  background: inputBg,
                 }}
               >
-                <option value="">{activeShoes.length ? 'Shoe…' : 'Add shoe first'}</option>
-                {activeShoes.map((shoe) => (
-                  <option key={shoe.id} value={shoe.id}>{getRunningShoeLabel(shoe)}</option>
-                ))}
-              </select>
-            </div>
-          )) : null}
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center' }}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>
+                      {fmtDate(run.date)} · {run.distance} km
+                    </div>
+                    <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 2 }}>
+                      {run.shoeId
+                        ? `Shoe: ${getRunningShoeLabel(activeShoes.find((s) => s.id === run.shoeId) || { name: 'Unknown' })}`
+                        : 'No shoe yet — tap one below'}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      if (!window.confirm(`Remove this run from Cosmix?\n${fmtDate(run.date)} · ${run.distance} km`)) return;
+                      onDeleteRun?.(run.stravaId);
+                    }}
+                    style={{
+                      border: `1px solid ${theme.red || '#fb7185'}55`,
+                      background: `${theme.red || '#fb7185'}18`,
+                      color: theme.red || '#fb7185',
+                      borderRadius: 10,
+                      padding: '7px 10px',
+                      fontSize: 11,
+                      fontWeight: 800,
+                      cursor: busy ? 'default' : 'pointer',
+                      opacity: busy ? 0.6 : 1,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {deletingRunId === run.stravaId ? '…' : 'Delete'}
+                  </button>
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {activeShoes.map((shoe) => {
+                    const selected = run.shoeId === shoe.id;
+                    return (
+                      <button
+                        key={shoe.id}
+                        type="button"
+                        disabled={busy || !activeShoes.length}
+                        onClick={() => onAssignShoe?.(run.stravaId, selected ? '' : shoe.id)}
+                        style={{
+                          border: `1px solid ${selected ? theme.orange : inputBorder}`,
+                          background: selected ? `${theme.orange}28` : theme.cardBg,
+                          color: selected ? theme.orange : theme.textHeading,
+                          borderRadius: 999,
+                          padding: '7px 12px',
+                          fontSize: 12,
+                          fontWeight: 800,
+                          cursor: busy ? 'default' : 'pointer',
+                          boxShadow: selected ? `0 0 0 1px ${theme.orange}66` : 'none',
+                        }}
+                      >
+                        {getRunningShoeLabel(shoe)}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          }) : null}
         </div>
       ) : null}
     </div>
@@ -1034,7 +1088,24 @@ function CollapsibleBlock({ title, children, theme, defaultOpen = false, open: o
   );
 }
 
-function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, userId, onOpenMarathonPlan, goalRefreshKey, entries, runningShoes, onRunningShoesChange, onEntriesChange, stravaInsights, onOpenRun }) {
+function RunningTab({
+  runStats,
+  wellStats,
+  wellSummary,
+  name,
+  theme,
+  runRows,
+  userId,
+  onOpenMarathonPlan,
+  goalRefreshKey,
+  entries,
+  runningShoes,
+  onRunningShoesChange,
+  onEntriesChange,
+  stravaInsights,
+  onOpenRun,
+  mapsRefreshKey = 0,
+}) {
   const noData = !runStats || runStats.totalRuns === 0;
   const insights = useMemo(() => buildRunningInsights(runRows), [runRows]);
   const paceDelta = insights.avgPace7 && insights.avgPace30
@@ -1042,8 +1113,10 @@ function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, us
     : null;
   const importedRuns = useMemo(() => buildRunningRows(entries).filter((row) => row.stravaId), [entries]);
   const [savingShoeId, setSavingShoeId] = useState(null);
+  const [deletingRunId, setDeletingRunId] = useState(null);
   const [assignError, setAssignError] = useState('');
-  const [shoesOpen, setShoesOpen] = useState(!runningShoes.filter((s) => !s.retired).length);
+  const untaggedRuns = importedRuns.filter((run) => !run.shoeId).length;
+  const [shoesOpen, setShoesOpen] = useState(!runningShoes.filter((s) => !s.retired).length || untaggedRuns > 0);
   const [forceEditPastRuns, setForceEditPastRuns] = useState(false);
   const shoesSectionRef = useRef(null);
   const hrDashboard = useMemo(() => buildHeartRateDashboard(runRows, stravaInsights), [runRows, stravaInsights]);
@@ -1085,6 +1158,36 @@ function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, us
       setAssignError('Network error while saving shoe. Try again.');
     } finally {
       setSavingShoeId(null);
+    }
+  };
+
+  const handleDeleteRun = async (stravaId) => {
+    if (!userId || !stravaId) return;
+    if (!isWellnessApiReady()) {
+      setAssignError('Unable to reach wellness API from this page.');
+      return;
+    }
+    setAssignError('');
+    setDeletingRunId(stravaId);
+    try {
+      const response = await fetch(wellnessApiUrl(`/wellness/strava/runs/${encodeURIComponent(userId)}/${encodeURIComponent(stravaId)}`), {
+        method: 'DELETE',
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.ok) {
+        setAssignError(payload?.error || 'Could not delete that run.');
+        return;
+      }
+      if (Array.isArray(payload?.state?.entries) && typeof onEntriesChange === 'function') {
+        onEntriesChange(payload.state.entries);
+        try {
+          localStorage.setItem(`cosmix-wellness-${userId}-entries`, JSON.stringify(payload.state.entries));
+        } catch (_) { /* ignore */ }
+      }
+    } catch (_) {
+      setAssignError('Network error while deleting run.');
+    } finally {
+      setDeletingRunId(null);
     }
   };
 
@@ -1137,6 +1240,29 @@ function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, us
 
   return (
     <div style={{ display: 'grid', gap: '14px' }}>
+      {(untaggedRuns > 0 || !runningShoes.filter((s) => !s.retired).length) ? (
+        <button
+          type="button"
+          onClick={openShoeAssigner}
+          style={{
+            textAlign: 'left',
+            border: `1px solid ${theme.orange}55`,
+            borderRadius: 16,
+            padding: '12px 14px',
+            background: `linear-gradient(135deg, ${theme.orange}22, transparent)`,
+            color: theme.textHeading,
+            cursor: 'pointer',
+          }}
+        >
+          <div style={{ fontSize: 13, fontWeight: 900, color: theme.orange }}>Shoe tip</div>
+          <div style={{ fontSize: 12, color: theme.textSecondary, marginTop: 4, lineHeight: 1.4 }}>
+            {!runningShoes.filter((s) => !s.retired).length
+              ? 'Add your shoes once, then tap a shoe chip on each recent run for wear tracking.'
+              : `${untaggedRuns} recent run${untaggedRuns === 1 ? '' : 's'} still need a shoe — tap to assign.`}
+          </div>
+        </button>
+      ) : null}
+
       <MarathonRaceHub userId={userId} runRows={runRows} theme={theme} onOpenPlan={onOpenMarathonPlan} refreshKey={goalRefreshKey} compact />
 
       {!noData ? (
@@ -1157,7 +1283,7 @@ function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, us
               <MiniStat label="Longest" value={stravaInsights.longestRunKm ? `${stravaInsights.longestRunKm} km` : '--'} sub={stravaInsights.longestRun ? fmtDate(stravaInsights.longestRun.date) : ''} accent={theme.blue} theme={theme} />
               <MiniStat label="Avg HR" value={stravaInsights.avgHeartRate ? `${stravaInsights.avgHeartRate}` : '--'} sub="bpm" accent="#f43f5e" theme={theme} />
             </div>
-            <StravaRunExplorer userId={userId} theme={theme} onOpenRun={onOpenRun} />
+            <StravaRunExplorer userId={userId} theme={theme} onOpenRun={onOpenRun} refreshKey={mapsRefreshKey} />
           </div>
         </CollapsibleBlock>
       ) : (
@@ -1219,7 +1345,9 @@ function RunningTab({ runStats, wellStats, wellSummary, name, theme, runRows, us
             theme={theme}
             importedRuns={importedRuns}
             onAssignShoe={handleAssignShoe}
+            onDeleteRun={handleDeleteRun}
             savingShoeId={savingShoeId}
+            deletingRunId={deletingRunId}
             assignError={assignError}
             forceEditPastRuns={forceEditPastRuns}
           />
@@ -1393,6 +1521,7 @@ export default function RunningAnalytics() {
   const [serverEntries, setServerEntries] = useState(null);
   const [stravaSyncing, setStravaSyncing] = useState(false);
   const [stravaSyncMsg, setStravaSyncMsg] = useState('');
+  const [mapsRefreshKey, setMapsRefreshKey] = useState(0);
 
   const refreshWellnessPayload = async (uid) => {
     if (!uid || !isWellnessApiReady()) return;
@@ -1432,6 +1561,7 @@ export default function RunningAnalytics() {
         },
       });
       await refreshWellnessPayload(user.id);
+      setMapsRefreshKey((k) => k + 1);
       if (!payload) setStravaSyncMsg('Strava sync failed — try again.');
       else setStravaSyncMsg(formatStravaSyncMessage(payload));
     } finally {
@@ -1443,6 +1573,34 @@ export default function RunningAnalytics() {
     restoreUserSession(router, setUser);
     setSurfaceId(loadRunningSurfaceId());
   }, [router]);
+
+  useEffect(() => {
+    if (!user?.id || !isWellnessApiReady()) return undefined;
+    let cancelled = false;
+    const lastSync = Number(localStorage.getItem(`cosmix-strava-last-sync-${user.id}`) || 0);
+    const stale = !lastSync || (Date.now() - lastSync > 45 * 60 * 1000);
+    // Pull latest Strava runs when opening Running — force if older than 45 min so today's map appears.
+    void runStravaAutoSync({
+      userId: user.id,
+      apiBase: '',
+      force: stale,
+      onMessage: (msg) => {
+        if (!cancelled && msg) setStravaSyncMsg(msg);
+      },
+      onEntries: (nextEntries) => {
+        if (cancelled || !Array.isArray(nextEntries)) return;
+        setServerEntries(nextEntries);
+        try {
+          localStorage.setItem(`cosmix-wellness-${user.id}-entries`, JSON.stringify(nextEntries));
+        } catch (_) { /* ignore */ }
+      },
+    }).then(async (payload) => {
+      if (cancelled || !payload || payload.skippedDueToInterval) return;
+      await refreshWellnessPayload(user.id);
+      setMapsRefreshKey((k) => k + 1);
+    });
+    return () => { cancelled = true; };
+  }, [user?.id]);
 
   useEffect(() => {
     if (!router.isReady || !user?.id) return;
@@ -1579,6 +1737,25 @@ export default function RunningAnalytics() {
           <div style={{ display: 'flex', gap: 8, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             <button
               type="button"
+              onClick={handleStravaSync}
+              disabled={stravaSyncing}
+              style={{
+                border: `1px solid ${theme.cardBorder}`,
+                background: theme.cardBg,
+                color: theme.textHeading,
+                borderRadius: 12,
+                padding: '10px 14px',
+                cursor: stravaSyncing ? 'default' : 'pointer',
+                fontWeight: 800,
+                fontSize: 12,
+                whiteSpace: 'nowrap',
+                opacity: stravaSyncing ? 0.7 : 1,
+              }}
+            >
+              {stravaSyncing ? 'Syncing…' : 'Sync Strava'}
+            </button>
+            <button
+              type="button"
               onClick={() => {
                 const next = surfaceId === 'night' ? 'trail' : 'night';
                 setSurfaceId(next);
@@ -1601,6 +1778,9 @@ export default function RunningAnalytics() {
             <button type="button" onClick={() => setShowMarathonModal(true)} style={{ border: 'none', background: theme.orange, color: '#fff', borderRadius: '12px', padding: '10px 14px', cursor: 'pointer', fontWeight: 800, fontSize: '12px', whiteSpace: 'nowrap' }}>Goal</button>
           </div>
         </div>
+        {stravaSyncMsg ? (
+          <div style={{ marginTop: -8, fontSize: 12, color: theme.textSecondary }}>{stravaSyncMsg}</div>
+        ) : null}
 
         <div className="sport-tab-strip" role="tablist" aria-label="Sport analytics">
           {PRIMARY_TABS.map((tab) => {
@@ -1682,6 +1862,7 @@ export default function RunningAnalytics() {
             onOpenMarathonPlan={() => setShowMarathonModal(true)}
             goalRefreshKey={goalRefreshKey}
             stravaInsights={stravaInsights}
+            mapsRefreshKey={mapsRefreshKey}
             onOpenRun={(activityId) => router.push(`/running/${activityId}`)}
           />
         )}

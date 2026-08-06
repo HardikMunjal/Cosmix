@@ -86,6 +86,7 @@ type WellnessStoredState = {
   form: Record<string, any> | null;
   plans: WellnessPlanRecord[];
   runningShoes?: RunningShoeRecord[];
+  deletedStravaActivityIds?: number[];
   derived?: WellnessDerivedCache | null;
   updatedAt?: string;
 };
@@ -96,6 +97,7 @@ type WellnessState = {
   plan: WellnessPlan;
   plans: WellnessPlanRecord[];
   runningShoes: RunningShoeRecord[];
+  deletedStravaActivityIds?: number[];
   dailyScores: WellnessDailyScore[];
   planTransactions: WellnessPlanTransaction[];
 };
@@ -495,6 +497,7 @@ export class WellnessStorageService {
       form: null,
       plans: [],
       runningShoes: [],
+      deletedStravaActivityIds: [],
       derived: null,
       updatedAt: this.nowIso(),
     };
@@ -569,6 +572,11 @@ export class WellnessStorageService {
       form: data?.form || null,
       plans,
       runningShoes: this.normalizeRunningShoes(data?.runningShoes),
+      deletedStravaActivityIds: [...new Set(
+        (Array.isArray(data?.deletedStravaActivityIds) ? data.deletedStravaActivityIds : [])
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id) && id > 0),
+      )],
       derived: data?.derived || null,
       updatedAt: data?.updatedAt || this.nowIso(),
     };
@@ -874,6 +882,7 @@ export class WellnessStorageService {
       plan: derived.plan,
       plans: this.sortPlans(derived.store.plans),
       runningShoes: this.normalizeRunningShoes(derived.store.runningShoes),
+      deletedStravaActivityIds: derived.store.deletedStravaActivityIds || [],
       dailyScores: derived.dailyScores,
       planTransactions: derived.planTransactions,
     };
@@ -1151,6 +1160,62 @@ export class WellnessStorageService {
     const nextStore = this.normalizeStore({
       ...normalizedStore,
       entries: this.sortEntries(entries),
+      updatedAt: this.nowIso(),
+    });
+    const derived = this.deriveScoresWithCache(nextStore, scoringRules);
+    await this.persistStore(userId, derived.store);
+    return {
+      ok: true,
+      state: this.buildPublicState(derived.store, scoringRules),
+    };
+  }
+
+  async deleteStravaRun(userId: string, activityId: number): Promise<{ ok: boolean; state?: WellnessState; error?: string }> {
+    const numericId = Number(activityId);
+    if (!Number.isFinite(numericId) || numericId <= 0) {
+      return { ok: false, error: 'Invalid Strava activity id.' };
+    }
+
+    const [store, scoringRules] = await Promise.all([this.loadStore(userId), this.loadScoringRules()]);
+    const normalizedStore = this.normalizeStore(store);
+    let changed = false;
+
+    const entries = normalizedStore.entries.map((entry) => {
+      const runs = Array.isArray(entry.stravaRuns) ? entry.stravaRuns : [];
+      const ids = Array.isArray(entry.stravaActivityIds) ? entry.stravaActivityIds : [];
+      const hasRun = runs.some((run: any) => Number(run?.id || run?.stravaId || 0) === numericId)
+        || ids.some((id: any) => Number(id) === numericId);
+      if (!hasRun) return entry;
+      changed = true;
+      const nextRuns = runs.filter((run: any) => Number(run?.id || run?.stravaId || 0) !== numericId);
+      const nextIds = ids.filter((id: any) => Number(id) !== numericId);
+      const runKm = nextRuns.reduce((sum: number, run: any) => sum + Number(run.distanceKm || 0), 0);
+      const runMins = nextRuns.reduce((sum: number, run: any) => sum + Number(run.minutes || 0), 0);
+      const preferredShoe = nextRuns.find((run: any) => run.shoeId)?.shoeId || '';
+      return this.normalizeEntryRecord({
+        ...entry,
+        stravaRuns: nextRuns,
+        stravaActivityIds: nextIds,
+        runningDistanceKm: Number(runKm.toFixed(2)),
+        runningMinutes: Math.round(runMins),
+        runningShoeId: preferredShoe || entry.runningShoeId || '',
+        updatedAt: this.nowIso(),
+      }, entry.planId);
+    });
+
+    if (!changed) {
+      return { ok: false, error: 'Strava run not found in wellness history.' };
+    }
+
+    const deletedIds = [...new Set([
+      ...(normalizedStore.deletedStravaActivityIds || []),
+      numericId,
+    ])];
+
+    const nextStore = this.normalizeStore({
+      ...normalizedStore,
+      entries: this.sortEntries(entries),
+      deletedStravaActivityIds: deletedIds,
       updatedAt: this.nowIso(),
     });
     const derived = this.deriveScoresWithCache(nextStore, scoringRules);

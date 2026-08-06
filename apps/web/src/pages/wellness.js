@@ -1241,11 +1241,6 @@ export default function WellnessPage() {
   const todayScores = useMemo(() => computeEntryScores(form, scoringRules), [form, scoringRules]);
   const formHasScorableData = useMemo(() => hasScorableData(form), [form]);
 
-  const recentRunning = useMemo(
-    () => (entries.length ? entries : [form]).filter((e) => Number(e.runningDistanceKm || 0) > 0 || Number(e.runningMinutes || 0) > 0).slice(0, 5),
-    [entries, form],
-  );
-
   const recentWalking = useMemo(
     () => (entries.length ? entries : [form]).filter((e) => Number(e.walkingDistanceKm || 0) > 0 || Number(e.walkingMinutes || 0) > 0).slice(0, 5),
     [entries, form],
@@ -1805,23 +1800,22 @@ export default function WellnessPage() {
           </div>
         </div>
 
-        {/* running + walking dashboards */}
+        {/* running + walking — running deep-links to analytics */}
         <div style={s.dashSection}>
           <div style={s.dashGrid} className="dash-grid">
-            <div style={s.card}>
+            <a
+              href="/running-analytics"
+              style={{ ...s.card, textDecoration: 'none', color: 'inherit', display: 'block' }}
+            >
               <div style={s.cardTitle}>🏃 Running</div>
               <div style={s.statRow}>
                 <div style={s.statBox}><div style={s.statLabel}>Weekly km</div><div style={s.statVal}>{formatMetric(stats.weeklyRunningKm)}</div></div>
                 <div style={s.statBox}><div style={s.statLabel}>Avg pace</div><div style={s.statVal}>{stats.averagePace == null ? '--' : `${formatMetric(stats.averagePace)} min/km`}</div></div>
-                <div style={s.statBox}><div style={s.statLabel}>Workout mins</div><div style={s.statVal}>{formatMetric(stats.weeklyWorkoutMinutes)}</div></div>
               </div>
-              <div style={s.loggedTitle}>Recent runs</div>
-              {recentRunning.length ? recentRunning.map((e) => (
-                <div key={e.date} style={s.logRow}>
-                  <span>{e.date}</span><span>{formatMetric(e.runningDistanceKm)} km</span><span>{formatMetric(e.runningMinutes)} min</span>
-                </div>
-              )) : <div style={s.metaText}>No runs yet.</div>}
-            </div>
+              <div style={{ ...s.metaText, marginTop: 10, fontWeight: 700, color: '#fb923c' }}>
+                Open Running analytics for maps, shoes, pace & HR →
+              </div>
+            </a>
 
             <div style={s.card}>
               <div style={s.cardTitle}>🚶 Walking</div>

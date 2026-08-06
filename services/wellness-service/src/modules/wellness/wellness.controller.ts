@@ -189,6 +189,10 @@ export class WellnessController {
   ) {
     const existingState = await this.storageService.load(userId);
     const knownIds = this.stravaService.collectKnownActivityIds(existingState.entries || []);
+    for (const id of (existingState as any)?.deletedStravaActivityIds || []) {
+      const numeric = Number(id);
+      if (Number.isFinite(numeric) && numeric > 0) knownIds.add(numeric);
+    }
     const isFirstSync = knownIds.size === 0 || String(full || '') === '1';
     const windowDays = isFirstSync
       ? Math.max(Number(days) || 730, 365)
@@ -240,7 +244,7 @@ export class WellnessController {
         .map((activity) => Number(activity?.id))
         .filter((id) => id > 0);
       const detailResult = await this.stravaService.enrichRecentActivityDetails(userId, runIds, {
-        maxActivities: isFirstSync ? 6 : 10,
+        maxActivities: isFirstSync ? 12 : 18,
       });
       detailsEnriched = detailResult.enriched || 0;
     }
@@ -280,6 +284,18 @@ export class WellnessController {
     @Body() body: { shoeId?: string },
   ) {
     const result = await this.storageService.assignStravaRunShoe(userId, Number(activityId), String(body?.shoeId || ''));
+    return result;
+  }
+
+  @Delete('strava/runs/:userId/:activityId')
+  async deleteStravaRun(
+    @Param('userId') userId: string,
+    @Param('activityId') activityId: string,
+  ) {
+    const result = await this.storageService.deleteStravaRun(userId, Number(activityId));
+    if (result?.ok) {
+      await this.stravaService.deleteActivityDetail(userId, Number(activityId));
+    }
     return result;
   }
 

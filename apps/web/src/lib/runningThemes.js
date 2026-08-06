@@ -24,6 +24,8 @@ export const runningSurfaces = {
     yellow: '#facc15',
     chartDepth: '0 22px 50px rgba(0,0,0,0.45)',
     accentGlow: 'rgba(251, 146, 60, 0.35)',
+    inputBg: '#0f172a',
+    inputBorder: 'rgba(148, 163, 184, 0.35)',
     font: "'Segoe UI', 'Helvetica Neue', system-ui, sans-serif",
   },
   trail: {
@@ -48,6 +50,8 @@ export const runningSurfaces = {
     yellow: '#a16207',
     chartDepth: '0 20px 44px rgba(22, 101, 52, 0.12)',
     accentGlow: 'rgba(22, 101, 52, 0.2)',
+    inputBg: '#ffffff',
+    inputBorder: 'rgba(22, 101, 52, 0.25)',
     font: "'Palatino Linotype', 'Book Antiqua', Palatino, Georgia, serif",
   },
 };
