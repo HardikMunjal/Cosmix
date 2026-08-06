@@ -52,7 +52,9 @@ function getStrategyEndDate(strategy) {
 }
 
 function calcRealizedPL(strategy) {
-  return (strategy.closedLegs || []).reduce((sum, cl) => sum + (Number(cl.pnl) || 0), 0);
+  const gross = (strategy.closedLegs || []).reduce((sum, cl) => sum + (Number(cl.pnl) || 0), 0);
+  const tax = (strategy.transactions || []).length * 30;
+  return gross - tax;
 }
 
 export default function StrategyHistoryPage() {
@@ -310,8 +312,16 @@ export default function StrategyHistoryPage() {
                   {/* P/L */}
                   <div style={{ ...styles.tdCell, minWidth: '120px', width: '120px' }}>
                     {s.status === 'closed' ? (
-                      <div style={{ ...styles.plValue, color: isProfit ? theme.green : isLoss ? theme.red : theme.textMuted }}>
-                        {formatCurrency(s._pl)}
+                      <div>
+                        <div style={{ ...styles.plValue, color: isProfit ? theme.green : isLoss ? theme.red : theme.textMuted }}>
+                          {formatCurrency(s._pl)}
+                        </div>
+                        <a
+                          href={`/nifty-strategies?tab=closed&editExits=${encodeURIComponent(s.id)}`}
+                          style={{ fontSize: 11, color: theme.orange || '#fb923c', fontWeight: 700, textDecoration: 'none' }}
+                        >
+                          Fix exits →
+                        </a>
                       </div>
                     ) : (
                       <span style={styles.dimText}>—</span>

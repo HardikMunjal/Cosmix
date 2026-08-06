@@ -1204,16 +1204,47 @@ function ClosedCumulativeChart({ items = [], styles, theme: t }) {
   );
 }
 
-function ClosedStrategyPanel({ strategy, styles, theme: t }) {
+function computeClosedLegPnl(leg, exitPremium, quantity, lotSize = 65) {
+  const qty = Math.max(1, parseInt(quantity || 1, 10) || 1);
+  const entry = Number(leg.entryPremium) || 0;
+  const exit = Number(exitPremium) || 0;
+  const lot = Number(lotSize) || 65;
+  return leg.side === 'SELL'
+    ? (entry - exit) * qty * lot
+    : (exit - entry) * qty * lot;
+}
+
+function ClosedStrategyPanel({
+  strategy,
+  styles,
+  theme: t,
+  editing = false,
+  draftLegs = null,
+  onStartEdit,
+  onCancelEdit,
+  onChangeDraft,
+  onSaveEdit,
+  saving = false,
+}) {
   const summary = summarizeClosedStrategy(strategy);
+  const legs = editing && Array.isArray(draftLegs) ? draftLegs : (strategy.closedLegs || []);
+  const lotSize = Number(strategy.lotSize) || 65;
+  const previewGross = legs.reduce((sum, leg) => {
+    if (editing) {
+      return sum + computeClosedLegPnl(leg, leg.exitPremium, leg.quantity, lotSize);
+    }
+    return sum + (Number(leg.pnl) || 0);
+  }, 0);
+  const previewTax = calculateTransactionCost(strategy.transactions || []);
+  const previewNet = previewGross - previewTax;
 
   return (
     <>
-      <div style={{ ...styles.closedHero, borderColor: summary.realizedPL >= 0 ? t.greenDim : t.redDim, background: summary.realizedPL >= 0 ? `${t.green}12` : `${t.red}12` }}>
+      <div style={{ ...styles.closedHero, borderColor: (editing ? previewNet : summary.realizedPL) >= 0 ? t.greenDim : t.redDim, background: (editing ? previewNet : summary.realizedPL) >= 0 ? `${t.green}12` : `${t.red}12` }}>
         <div>
-          <div style={styles.closedHeroLabel}>Closed Strategy Net Profit</div>
-          <div style={{ ...styles.closedHeroValue, color: summary.realizedPL >= 0 ? t.green : t.red }}>
-            {summary.realizedPL >= 0 ? '+' : ''}{formatCurrency(summary.realizedPL)}
+          <div style={styles.closedHeroLabel}>{editing ? 'Preview Net Profit' : 'Closed Strategy Net Profit'}</div>
+          <div style={{ ...styles.closedHeroValue, color: (editing ? previewNet : summary.realizedPL) >= 0 ? t.green : t.red }}>
+            {(editing ? previewNet : summary.realizedPL) >= 0 ? '+' : ''}{formatCurrency(editing ? previewNet : summary.realizedPL)}
           </div>
         </div>
         <div style={styles.closedHeroStats}>
@@ -1222,6 +1253,92 @@ function ClosedStrategyPanel({ strategy, styles, theme: t }) {
           <div><span style={styles.closedHeroKey}>Transactions:</span> <strong>{summary.transactions.length}</strong></div>
         </div>
       </div>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+        <div style={{ fontSize: 12, color: t.textMuted, lineHeight: 1.4 }}>
+          {editing
+            ? 'Fix wrong exit premium or lot qty — P/L recalculates automatically.'
+            : 'Entered a wrong exit on one leg? Edit closed exits to correct net P/L.'}
+        </div>
+        {!editing ? (
+          <button type="button" onClick={onStartEdit} style={{ ...styles.secondaryButton, whiteSpace: 'nowrap' }}>
+            Edit closed exits
+          </button>
+        ) : (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button type="button" disabled={saving} onClick={onSaveEdit} style={styles.closeLegConfirm}>
+              {saving ? 'Saving…' : 'Save exits'}
+            </button>
+            <button type="button" disabled={saving} onClick={onCancelEdit} style={styles.closeLegCancel}>Cancel</button>
+          </div>
+        )}
+      </div>
+
+      {editing ? (
+        <div style={{ display: 'grid', gap: 10, marginBottom: 12 }}>
+          {legs.map((leg, index) => {
+            const pnl = computeClosedLegPnl(leg, leg.exitPremium, leg.quantity, lotSize);
+            return (
+              <div
+                key={`${leg.legId || index}-${leg.strike}`}
+                style={{
+                  display: 'grid',
+                  gap: 8,
+                  padding: 12,
+                  borderRadius: 12,
+                  border: `1px solid ${t.cardBorder}`,
+                  background: t.cardBg,
+                }}
+              >
+                <div style={{ fontSize: 13, fontWeight: 800, color: t.textHeading }}>
+                  {leg.side} {leg.quantity}L {leg.optionType} {leg.strike}
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
+                  <label style={{ display: 'grid', gap: 4, fontSize: 11, color: t.textMuted }}>
+                    Entry
+                    <input
+                      type="number"
+                      step="0.05"
+                      value={leg.entryPremium}
+                      onChange={(e) => onChangeDraft?.(index, { entryPremium: e.target.value })}
+                      style={styles.closeLegInput || styles.pastDateInput}
+                    />
+                  </label>
+                  <label style={{ display: 'grid', gap: 4, fontSize: 11, color: t.textMuted }}>
+                    Exit
+                    <input
+                      type="number"
+                      step="0.05"
+                      value={leg.exitPremium}
+                      onChange={(e) => onChangeDraft?.(index, { exitPremium: e.target.value })}
+                      style={styles.closeLegInput || styles.pastDateInput}
+                    />
+                  </label>
+                  <label style={{ display: 'grid', gap: 4, fontSize: 11, color: t.textMuted }}>
+                    Lots
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={leg.quantity}
+                      onChange={(e) => onChangeDraft?.(index, { quantity: e.target.value })}
+                      style={styles.closeLegInput || styles.pastDateInput}
+                    />
+                  </label>
+                </div>
+                <div style={{ fontSize: 12, fontWeight: 800, color: pnl >= 0 ? t.green : t.red }}>
+                  Leg P/L: {pnl >= 0 ? '+' : ''}{formatCurrency(pnl)}
+                  <span style={{ color: t.textMuted, fontWeight: 600 }}> · lot {lotSize}</span>
+                </div>
+              </div>
+            );
+          })}
+          <div style={{ fontSize: 12, color: t.textSecondary }}>
+            Preview gross {formatCurrency(previewGross)} − tax {formatCurrency(previewTax)} ={' '}
+            <strong style={{ color: previewNet >= 0 ? t.green : t.red }}>{formatCurrency(previewNet)}</strong>
+          </div>
+        </div>
+      ) : null}
 
       <div style={styles.metricsGrid} className="nifty-metrics-grid">
         <div style={styles.metricBox}><div style={styles.metricLabel}>Gross Profit</div><div style={{ ...styles.metricValue, color: summary.grossRealizedPL >= 0 ? t.green : t.red }}>{formatCurrency(summary.grossRealizedPL)}</div></div>
@@ -1566,6 +1683,7 @@ export default function NiftyStrategiesPage() {
   const [closingLegInfo, setClosingLegInfo] = useState(null);
   const [closePrice, setClosePrice] = useState('');
   const [legEditor, setLegEditor] = useState(null);
+  const [closedExitEditor, setClosedExitEditor] = useState(null); // { strategyId, drafts, saving }
   const [usePastActionDate, setUsePastActionDate] = useState({});
   const [actionDateTimeByStrategy, setActionDateTimeByStrategy] = useState({});
   const [learningModal, setLearningModal] = useState(null);
@@ -2019,6 +2137,7 @@ export default function NiftyStrategiesPage() {
     const remainingLegs = strategy.legs.filter((l) => l.id !== legId);
     const transaction = {
       type: 'CLOSE',
+      legId: leg.id,
       description: `Closed ${leg.side} ${qty}L ${leg.optionType} ${leg.strike} ${formatExpiryDisplay(resolveLegExpiry(leg, strategy))} @ ${exit.toFixed(2)} → P/L ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}`,
       amount: pnl,
       timestamp: eventTimestamp,
@@ -2046,6 +2165,76 @@ export default function NiftyStrategiesPage() {
       setClosingLegInfo(null);
       setClosePrice('');
     } catch (e) { alert(e.message); }
+  };
+
+  const startClosedExitEdit = (strategy) => {
+    const drafts = (strategy.closedLegs || []).map((leg) => ({
+      ...leg,
+      entryPremium: Number(leg.entryPremium) || 0,
+      exitPremium: Number(leg.exitPremium) || 0,
+      quantity: Math.max(1, parseInt(leg.quantity || 1, 10) || 1),
+    }));
+    if (!drafts.length) {
+      alert('No closed legs to edit on this strategy.');
+      return;
+    }
+    setClosedExitEditor({ strategyId: strategy.id, drafts, saving: false });
+  };
+
+  const saveClosedExitEdit = async () => {
+    if (!closedExitEditor?.strategyId) return;
+    const strategy = savedStrategies.find((s) => s.id === closedExitEditor.strategyId);
+    if (!strategy) return;
+    const lotSize = Number(strategy.lotSize) || 65;
+    const nextClosedLegs = (closedExitEditor.drafts || []).map((leg) => {
+      const quantity = Math.max(1, parseInt(leg.quantity || 1, 10) || 1);
+      const entryPremium = Number(leg.entryPremium) || 0;
+      const exitPremium = Number(leg.exitPremium) || 0;
+      const pnl = computeClosedLegPnl(leg, exitPremium, quantity, lotSize);
+      return {
+        ...leg,
+        quantity,
+        entryPremium,
+        exitPremium,
+        pnl,
+      };
+    });
+
+    const nonCloseTx = (strategy.transactions || []).filter((tx) => tx.type !== 'CLOSE');
+    const existingCloseTx = (strategy.transactions || []).filter((tx) => tx.type === 'CLOSE');
+    const nextCloseTx = nextClosedLegs.map((leg, index) => {
+      const prev = existingCloseTx.find((tx) => Number(tx.legId) === Number(leg.legId))
+        || existingCloseTx[index]
+        || null;
+      return {
+        type: 'CLOSE',
+        legId: leg.legId || null,
+        description: `Closed ${leg.side} ${leg.quantity}L ${leg.optionType} ${leg.strike} ${formatExpiryDisplay(leg.expiry)} @ ${Number(leg.exitPremium).toFixed(2)} → P/L ${leg.pnl >= 0 ? '+' : ''}${Number(leg.pnl).toFixed(2)}`,
+        amount: Number(leg.pnl) || 0,
+        timestamp: prev?.timestamp || leg.closedAt || new Date().toISOString(),
+      };
+    });
+
+    setClosedExitEditor((current) => (current ? { ...current, saving: true } : current));
+    try {
+      const response = await fetch('/api/options-strategies', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...strategy,
+          closedLegs: nextClosedLegs,
+          transactions: [...nonCloseTx, ...nextCloseTx],
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Failed to save closed exits');
+      const enriched = await enrichStrategies(data.strategies || []);
+      setSavedStrategies(enriched);
+      setClosedExitEditor(null);
+    } catch (e) {
+      alert(e.message);
+      setClosedExitEditor((current) => (current ? { ...current, saving: false } : current));
+    }
   };
 
   const requestLegClose = (strategy, leg, exitPrice) => {
@@ -2235,6 +2424,30 @@ export default function NiftyStrategiesPage() {
   const latestPerformancePoint = strategyPerformanceSeries[strategyPerformanceSeries.length - 1] || null;
 
   const highlightedId = router.query?.saved ? String(router.query.saved) : '';
+  const openedEditExitsRef = useRef('');
+
+  useEffect(() => {
+    if (!router.isReady || !savedStrategies.length) return;
+    const tab = String(router.query?.tab || '');
+    if (tab === 'closed' || tab === 'active' || tab === 'watching' || tab === 'all') {
+      setPortfolioTab(tab);
+    }
+    const editId = router.query?.editExits ? String(router.query.editExits) : '';
+    if (!editId || openedEditExitsRef.current === editId) return;
+    const strategy = savedStrategies.find((s) => String(s.id) === editId && s.status === 'closed');
+    if (!strategy) return;
+    openedEditExitsRef.current = editId;
+    const drafts = (strategy.closedLegs || []).map((leg) => ({
+      ...leg,
+      entryPremium: Number(leg.entryPremium) || 0,
+      exitPremium: Number(leg.exitPremium) || 0,
+      quantity: Math.max(1, parseInt(leg.quantity || 1, 10) || 1),
+    }));
+    if (drafts.length) {
+      setClosedExitEditor({ strategyId: strategy.id, drafts, saving: false });
+      setPortfolioTab('closed');
+    }
+  }, [router.isReady, router.query?.tab, router.query?.editExits, savedStrategies]);
 
   const learningItems = useMemo(
     () => savedStrategies
@@ -3137,7 +3350,26 @@ export default function NiftyStrategiesPage() {
               </summary>
 
               <div style={styles.strategyBody} className="nifty-strategy-body">
-                {isClosed && <ClosedStrategyPanel strategy={strategy} styles={styles} theme={theme} />}
+                {isClosed && (
+                  <ClosedStrategyPanel
+                    strategy={strategy}
+                    styles={styles}
+                    theme={theme}
+                    editing={closedExitEditor?.strategyId === strategy.id}
+                    draftLegs={closedExitEditor?.strategyId === strategy.id ? closedExitEditor.drafts : null}
+                    saving={Boolean(closedExitEditor?.saving && closedExitEditor?.strategyId === strategy.id)}
+                    onStartEdit={() => startClosedExitEdit(strategy)}
+                    onCancelEdit={() => setClosedExitEditor(null)}
+                    onChangeDraft={(index, patch) => {
+                      setClosedExitEditor((current) => {
+                        if (!current || current.strategyId !== strategy.id) return current;
+                        const drafts = current.drafts.map((leg, i) => (i === index ? { ...leg, ...patch } : leg));
+                        return { ...current, drafts };
+                      });
+                    }}
+                    onSaveEdit={saveClosedExitEdit}
+                  />
+                )}
 
                 {!isClosed && (
                   <>
@@ -3350,9 +3582,12 @@ export default function NiftyStrategiesPage() {
                     <button onClick={() => openLearningModal(strategy.id, getActionTimestamp(strategy.id))} style={styles.closeStratBtn}>Close Strategy</button>
                   )}
                   {isClosed && (
-                    <button onClick={() => updateStrategyStatus(strategy.id, 'watching')} style={styles.secondaryButton}>Move to Watchlist</button>
+                    <>
+                      <button onClick={() => updateStrategyStatus(strategy.id, 'watching')} style={styles.secondaryButton}>Move to Watchlist</button>
+                      <button onClick={() => startClosedExitEdit(strategy)} style={styles.primaryButton}>Edit closed exits</button>
+                    </>
                   )}
-                  <button onClick={() => openEmbeddedBuilder(String(strategy.id))} style={styles.primaryButton}>Edit</button>
+                  <button onClick={() => openEmbeddedBuilder(String(strategy.id))} style={styles.secondaryButton}>{isClosed ? 'Rebuild' : 'Edit'}</button>
                   <button onClick={() => deleteSavedStrategy(strategy.id)} style={styles.deleteButton}>Delete</button>
                 </div>
               </div>
