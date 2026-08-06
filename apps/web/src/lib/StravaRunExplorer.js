@@ -17,30 +17,11 @@ function fmtPace(minPerKm) {
   return `${mins}:${String(secs).padStart(2, '0')} /km`;
 }
 
-function ZonePercentBars({ zones = [], theme, colors = [] }) {
-  if (!zones?.length) {
-    return <div style={{ fontSize: 12, color: theme.textMuted }}>No zone data for this run</div>;
-  }
-  return (
-    <div style={{ display: 'grid', gap: 8 }}>
-      {zones.map((zone, i) => (
-        <div key={zone.zone || zone.label || i} style={{ display: 'grid', gridTemplateColumns: '120px 1fr 48px', gap: 8, alignItems: 'center' }}>
-          <span style={{ fontSize: 11, color: theme.textMuted, fontWeight: 700 }}>{zone.label || `Z${zone.zone}`}</span>
-          <div style={{ height: 9, borderRadius: 999, background: theme.cardBorder, overflow: 'hidden' }}>
-            <div style={{
-              width: `${Math.min(100, Number(zone.percent || 0))}%`,
-              height: '100%',
-              background: colors[i % colors.length] || theme.orange,
-            }}
-            />
-          </div>
-          <span style={{ fontSize: 12, fontWeight: 800, color: theme.textHeading, textAlign: 'right' }}>
-            {zone.percent != null ? `${zone.percent}%` : (zone.count ?? '--')}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
+function fmtSplitClock(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  const mins = Math.floor(total / 60);
+  const secs = total % 60;
+  return `${mins}:${String(secs).padStart(2, '0')}`;
 }
 
 function DashPanel({ title, subtitle, theme, children, accent }) {
@@ -156,8 +137,7 @@ export function StravaRunExplorer({ userId, theme, onOpenRun, refreshKey = 0 }) 
     ? mapDetail.polyline
     : (mapDetail?.streams?.latlng || activeCard?.polyline || []);
   const playStreams = mapDetail?.streams || {};
-  const paceZones = mapDetail?.paceZones || mapDetail?.summary?.paceZones || [];
-  const hrZones = mapDetail?.heartrateZones || mapDetail?.summary?.heartrateZones || [];
+  const mapSplits = Array.isArray(mapDetail?.splits) ? mapDetail.splits : [];
 
   if (!usableMaps.length && !mapRunId) {
     return (
@@ -181,7 +161,7 @@ export function StravaRunExplorer({ userId, theme, onOpenRun, refreshKey = 0 }) 
     <div style={{ display: 'grid', gap: 14 }}>
       <DashPanel
         title="Route playback"
-        subtitle="Pick a date · compact map · zones for that run only"
+        subtitle="Pick a date · compact map · km splits for that run"
         theme={theme}
         accent="#fc5200"
       >
@@ -303,18 +283,57 @@ export function StravaRunExplorer({ userId, theme, onOpenRun, refreshKey = 0 }) 
         />
       </DashPanel>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }} className="run-dash-charts-2">
-        <DashPanel title="Pace zones" subtitle="selected run" theme={theme} accent="#38bdf8">
-          <ZonePercentBars zones={paceZones} theme={theme} colors={['#94a3b8', '#38bdf8', '#22c55e', '#f59e0b', '#ef4444']} />
-        </DashPanel>
-        <DashPanel title="HR zones" subtitle="selected run" theme={theme} accent="#f43f5e">
-          {hrZones.length ? (
-            <ZonePercentBars zones={hrZones} theme={theme} colors={['#94a3b8', '#38bdf8', '#22c55e', '#f59e0b', '#ef4444', '#a855f7']} />
-          ) : (
-            <div style={{ fontSize: 12, color: theme.textMuted }}>No HR zones on this run.</div>
-          )}
-        </DashPanel>
-      </div>
+      <DashPanel title="Km splits" subtitle="pace · time · HR" theme={theme} accent={theme.cyan || '#38bdf8'}>
+        {mapLoading ? (
+          <div style={{ fontSize: 12, color: theme.textMuted }}>Loading splits…</div>
+        ) : mapSplits.length ? (
+          <div style={{ display: 'grid', gap: 0, maxHeight: 220, overflowY: 'auto' }}>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: '36px 1fr 1fr 1fr',
+              gap: 8,
+              padding: '4px 2px 8px',
+              fontSize: 10,
+              fontWeight: 800,
+              textTransform: 'uppercase',
+              letterSpacing: '0.08em',
+              color: theme.textMuted,
+              position: 'sticky',
+              top: 0,
+              background: theme.cardBg,
+            }}
+            >
+              <span>Km</span>
+              <span>Pace</span>
+              <span>Time</span>
+              <span>HR</span>
+            </div>
+            {mapSplits.map((split) => (
+              <div
+                key={split.km}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '36px 1fr 1fr 1fr',
+                  gap: 8,
+                  padding: '8px 2px',
+                  borderTop: `1px solid ${theme.cardBorder}`,
+                  fontSize: 13,
+                  alignItems: 'center',
+                }}
+              >
+                <span style={{ fontWeight: 800, color: theme.orange }}>{split.km}</span>
+                <span style={{ fontWeight: 700, color: theme.cyan || '#38bdf8' }}>{fmtPace(split.paceMinPerKm)}</span>
+                <span style={{ fontWeight: 700, color: theme.textHeading }}>{fmtSplitClock(split.seconds)}</span>
+                <span style={{ fontWeight: 700, color: '#f43f5e' }}>{split.avgHeartrate ? `${split.avgHeartrate}` : '--'}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: theme.textMuted }}>
+            Splits appear after GPS streams are imported for this run.
+          </div>
+        )}
+      </DashPanel>
     </div>
   );
 }

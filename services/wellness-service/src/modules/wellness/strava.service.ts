@@ -452,6 +452,39 @@ export class StravaService {
     return splits;
   }
 
+  /** Fastest full-km split from GPS streams (distance ≥ 0.95 km). */
+  private pickBestSplit(splits: any[] = []) {
+    const full = (splits || []).filter((split) => {
+      const distanceKm = Number(split?.distanceKm || 0);
+      const pace = Number(split?.paceMinPerKm || 0);
+      return distanceKm >= 0.95 && pace > 1.5 && pace < 20;
+    });
+    if (!full.length) return null;
+    const best = [...full].sort((a, b) => Number(a.paceMinPerKm) - Number(b.paceMinPerKm))[0];
+    return {
+      bestSplitPaceMinPerKm: Number(best.paceMinPerKm),
+      bestSplitKm: Number(best.km) || null,
+      bestSplitSeconds: Number(best.seconds) || null,
+      bestSplitDistanceKm: Number(best.distanceKm) || null,
+    };
+  }
+
+  private readVo2Max(activity: any): number | null {
+    const candidates = [
+      activity?.vo2_max,
+      activity?.vo2max,
+      activity?.estimated_vo2_max,
+      activity?.estimated_vo2,
+      activity?.fitness_score,
+      activity?.athlete?.vo2_max,
+    ];
+    for (const candidate of candidates) {
+      const value = Number(candidate);
+      if (Number.isFinite(value) && value >= 20 && value <= 95) return round(value, 1);
+    }
+    return null;
+  }
+
   private buildStreamPayload(raw: Record<string, any[]> | null) {
     if (!raw) return null;
     const time = this.downsampleSeries(raw.time || [], 2400).map((v) => Number(v) || 0);
@@ -495,21 +528,35 @@ export class StravaService {
   }
 
   async loadActivityDetail(userId: string, activityId: number): Promise<any | null> {
+    let payload: any | null = null;
     if (this.hasDatabase()) {
       const pool = await this.ensureSchema();
       const result = await pool?.query(
         'SELECT payload FROM wellness_strava_activity_details WHERE user_id = $1 AND activity_id = $2 LIMIT 1',
         [userId, activityId],
       );
-      return result?.rows?.[0]?.payload || null;
+      payload = result?.rows?.[0]?.payload || null;
+    } else {
+      const fp = this.detailPath(userId, activityId);
+      if (!fs.existsSync(fp)) return null;
+      try {
+        payload = JSON.parse(fs.readFileSync(fp, 'utf-8'));
+      } catch {
+        return null;
+      }
     }
-    const fp = this.detailPath(userId, activityId);
-    if (!fs.existsSync(fp)) return null;
-    try {
-      return JSON.parse(fs.readFileSync(fp, 'utf-8'));
-    } catch {
-      return null;
+    if (!payload) return null;
+    const summary = payload.summary || {};
+    if (!summary.bestSplitPaceMinPerKm) {
+      const bestSplit = this.pickBestSplit(payload.splits || []);
+      if (bestSplit) {
+        payload = {
+          ...payload,
+          summary: { ...summary, ...bestSplit },
+        };
+      }
     }
+    return payload;
   }
 
   private async fetchAndBuildActivityDetail(accessToken: string, activityId: number, athleteZones?: any) {
@@ -567,14 +614,20 @@ export class StravaService {
       streams?.time || [],
     );
 
-    const summary = this.summarizeRun({
-      ...(detail || {}),
-      id: activityId,
-      heartrateZones,
-      paceZones,
-      zoneSource,
-      paceZoneSource,
-    });
+    const bestSplit = this.pickBestSplit(splits);
+    const vo2Max = this.readVo2Max(detail);
+    const summary = {
+      ...this.summarizeRun({
+        ...(detail || {}),
+        id: activityId,
+        heartrateZones,
+        paceZones,
+        zoneSource,
+        paceZoneSource,
+      }),
+      ...(bestSplit || {}),
+      vo2Max,
+    };
 
     return {
       ok: true,
@@ -703,8 +756,18 @@ export class StravaService {
         const summary = payload.summary || {};
         const date = String(summary.date || '').slice(0, 10);
         if (date && date < cutoff) continue;
+        const bestSplit = summary.bestSplitPaceMinPerKm
+          ? {
+              bestSplitPaceMinPerKm: Number(summary.bestSplitPaceMinPerKm),
+              bestSplitKm: Number(summary.bestSplitKm || 0) || null,
+              bestSplitSeconds: Number(summary.bestSplitSeconds || 0) || null,
+              bestSplitDistanceKm: Number(summary.bestSplitDistanceKm || 0) || null,
+            }
+          : this.pickBestSplit(payload.splits || []);
         summaries.push({
           ...summary,
+          ...(bestSplit || {}),
+          vo2Max: Number(summary.vo2Max || 0) || null,
           id: Number(row.activity_id),
           stravaId: Number(row.activity_id),
           heartrateZones: payload.heartrateZones || summary.heartrateZones || [],
@@ -1214,6 +1277,11 @@ export class StravaService {
       zoneSource: activity.zoneSource || null,
       paceZoneSource: activity.paceZoneSource || null,
       sufferScore: activity.sufferScore || activity.suffer_score || null,
+      bestSplitPaceMinPerKm: Number(activity.bestSplitPaceMinPerKm || 0) || null,
+      bestSplitKm: Number(activity.bestSplitKm || 0) || null,
+      bestSplitSeconds: Number(activity.bestSplitSeconds || 0) || null,
+      bestSplitDistanceKm: Number(activity.bestSplitDistanceKm || 0) || null,
+      vo2Max: Number(activity.vo2Max || activity.vo2_max || 0) || null,
     };
   }
 
@@ -1367,6 +1435,11 @@ export class StravaService {
         paceZones: Array.isArray(run.paceZones) ? run.paceZones : [],
         zoneSource: run.zoneSource || null,
         paceZoneSource: run.paceZoneSource || null,
+        bestSplitPaceMinPerKm: Number(run.bestSplitPaceMinPerKm || 0) || null,
+        bestSplitKm: Number(run.bestSplitKm || 0) || null,
+        bestSplitSeconds: Number(run.bestSplitSeconds || 0) || null,
+        bestSplitDistanceKm: Number(run.bestSplitDistanceKm || 0) || null,
+        vo2Max: Number(run.vo2Max || 0) || null,
       }))
       .filter((run) => run.distanceKm > 0 && run.minutes > 0)
       .sort((a, b) => String(b.date).localeCompare(String(a.date)));
@@ -1407,7 +1480,8 @@ export class StravaService {
       const id = Number(run?.stravaId || run?.id || 0);
       const needsZones = !(Array.isArray(run?.heartrateZones) && run.heartrateZones.length)
         || !(Array.isArray(run?.paceZones) && run.paceZones.length);
-      if (id && needsZones && candidates.length < maxLookups) candidates.push(id);
+      const needsBestSplit = !Number(run?.bestSplitPaceMinPerKm || 0);
+      if (id && (needsZones || needsBestSplit) && candidates.length < maxLookups) candidates.push(id);
     }
     const detailsById = await this.loadActivityDetailsByIds(userId, candidates);
 
@@ -1415,6 +1489,14 @@ export class StravaService {
       const id = Number(run?.stravaId || run?.id || 0);
       const detail = id ? detailsById.get(id) : null;
       if (!detail) return run;
+      const bestSplit = detail.summary?.bestSplitPaceMinPerKm
+        ? {
+            bestSplitPaceMinPerKm: detail.summary.bestSplitPaceMinPerKm,
+            bestSplitKm: detail.summary.bestSplitKm,
+            bestSplitSeconds: detail.summary.bestSplitSeconds,
+            bestSplitDistanceKm: detail.summary.bestSplitDistanceKm,
+          }
+        : this.pickBestSplit(detail.splits || []);
       return {
         ...run,
         heartrateZones: (Array.isArray(run.heartrateZones) && run.heartrateZones.length)
@@ -1427,6 +1509,11 @@ export class StravaService {
         paceZoneSource: run.paceZoneSource || detail.paceZoneSource || null,
         avgHeartrate: run.avgHeartrate || detail.summary?.avgHeartrate || null,
         maxHeartrate: run.maxHeartrate || detail.summary?.maxHeartrate || null,
+        bestSplitPaceMinPerKm: run.bestSplitPaceMinPerKm || bestSplit?.bestSplitPaceMinPerKm || null,
+        bestSplitKm: run.bestSplitKm || bestSplit?.bestSplitKm || null,
+        bestSplitSeconds: run.bestSplitSeconds || bestSplit?.bestSplitSeconds || null,
+        bestSplitDistanceKm: run.bestSplitDistanceKm || bestSplit?.bestSplitDistanceKm || null,
+        vo2Max: run.vo2Max || detail.summary?.vo2Max || null,
       };
     });
   }
@@ -1446,6 +1533,8 @@ export class StravaService {
         elevationGainM: 0,
         avgHeartRate: null,
         maxHeartRate: null,
+        bestSplitPaceMinPerKm: null,
+        bestSplitRun: null,
         recentRuns: [],
         fastestRuns: [],
         paceByMinuteBuckets: [],
@@ -1466,6 +1555,9 @@ export class StravaService {
     const maxSpeedKmh = sanitizedMaxes.length ? round(Math.max(...sanitizedMaxes), 2) : null;
     const bestPaceRun = [...runs].sort((a, b) => (a.paceMinPerKm || 999) - (b.paceMinPerKm || 999))[0];
     const longestRun = [...runs].sort((a, b) => b.distanceKm - a.distanceKm)[0];
+    const bestSplitRun = [...runs]
+      .filter((run) => Number(run.bestSplitPaceMinPerKm || 0) > 0)
+      .sort((a, b) => Number(a.bestSplitPaceMinPerKm) - Number(b.bestSplitPaceMinPerKm))[0] || null;
     const elevationGainM = round(runs.reduce((sum, run) => sum + (run.elevationGainM || 0), 0), 1);
     const hrRuns = runs.filter((run) => Number(run.avgHeartrate || 0) > 0);
     const avgHeartRate = hrRuns.length
@@ -1582,6 +1674,8 @@ export class StravaService {
       elevationGainM,
       avgHeartRate,
       maxHeartRate,
+      bestSplitPaceMinPerKm: bestSplitRun?.bestSplitPaceMinPerKm || null,
+      bestSplitRun,
       recentRuns: runs.slice(0, 12),
       fastestRuns,
       paceByMinuteBuckets,

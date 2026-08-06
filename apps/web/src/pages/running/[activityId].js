@@ -228,6 +228,17 @@ export default function RunDetailPage() {
               <StatPill label="Avg HR" value={summary.avgHeartrate ? `${summary.avgHeartrate} bpm` : '--'} theme={theme} accent="#f43f5e" />
               <StatPill label="Max HR" value={summary.maxHeartrate ? `${summary.maxHeartrate} bpm` : '--'} theme={theme} accent="#fb7185" />
               <StatPill label="Elevation" value={summary.elevationGainM != null ? `↑${summary.elevationGainM} m` : '--'} theme={theme} accent={theme.purple} />
+              {summary.vo2Max ? (
+                <StatPill label="VO2 max" value={`${summary.vo2Max}`} theme={theme} accent={theme.green} />
+              ) : null}
+              {summary.bestSplitPaceMinPerKm ? (
+                <StatPill
+                  label="Fastest split"
+                  value={`${fmtPace(summary.bestSplitPaceMinPerKm)} /km`}
+                  theme={theme}
+                  accent={theme.cyan}
+                />
+              ) : null}
             </div>
 
             {needsEnrich ? (
@@ -346,8 +357,8 @@ export default function RunDetailPage() {
                   >
                     <span>Km</span>
                     <span>Pace</span>
+                    <span>Time</span>
                     <span>Avg HR</span>
-                    <span>Speed</span>
                   </div>
                   {splits.map((split) => (
                     <div
@@ -360,12 +371,17 @@ export default function RunDetailPage() {
                         borderTop: `1px solid ${theme.cardBorder}`,
                         fontSize: 13,
                         alignItems: 'center',
+                        background: summary?.bestSplitKm === split.km && summary?.bestSplitPaceMinPerKm === split.paceMinPerKm
+                          ? `${theme.cyan}14`
+                          : 'transparent',
                       }}
                     >
                       <span style={{ fontWeight: 800, color: theme.orange }}>{split.km}</span>
                       <span style={{ fontWeight: 700, color: theme.cyan }}>{fmtPace(split.paceMinPerKm)}</span>
+                      <span style={{ fontWeight: 700, color: theme.textHeading }}>
+                        {`${Math.floor((Number(split.seconds) || 0) / 60)}:${String(Math.round((Number(split.seconds) || 0) % 60)).padStart(2, '0')}`}
+                      </span>
                       <span style={{ fontWeight: 700, color: '#f43f5e' }}>{split.avgHeartrate ? `${split.avgHeartrate}` : '--'}</span>
-                      <span style={{ color: theme.textSecondary }}>{split.speedKmh ? `${split.speedKmh}` : '--'}</span>
                     </div>
                   ))}
                 </div>

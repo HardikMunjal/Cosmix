@@ -20,6 +20,8 @@ import {
 } from '../lib/runningShoes';
 import { DepthMetric, GlowTrend, DepthBars, DepthHBars, ShoeMixChart } from '../lib/RunningModernCharts';
 import { loadRunningSurfaceId, saveRunningSurfaceId, mergeRunningSurface } from '../lib/runningThemes';
+import { buildMarathonReadiness, loadMarathonGoal } from '../lib/marathonReadiness';
+import { buildTrainingTip } from '../lib/trainingTip';
 import Link from 'next/link';
 import { StravaRunExplorer } from '../lib/StravaRunExplorer';
 
@@ -753,7 +755,7 @@ function RunningShoesPanel({
         <div style={{ display: 'grid', gap: 10, paddingTop: 4, borderTop: `1px solid ${theme.cardBorder}` }}>
           {needsShoe.length ? (
             <div style={{ fontSize: 12, color: theme.orange, fontWeight: 700 }}>
-              Tap a shoe chip on {needsShoe.length} recent run{needsShoe.length === 1 ? '' : 's'} below
+              {needsShoe.length} recent run{needsShoe.length === 1 ? '' : 's'} need a shoe — pick from the dropdown
             </div>
           ) : (
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -782,7 +784,7 @@ function RunningShoesPanel({
             <div style={{ fontSize: 12, color: theme.red || '#ef4444', fontWeight: 600 }}>{assignError}</div>
           ) : null}
           {showAssignList && runsToShow.length && !activeShoes.length ? (
-            <div style={{ fontSize: 12, color: theme.textMuted }}>Add a shoe above, then tap it for each run.</div>
+            <div style={{ fontSize: 12, color: theme.textMuted }}>Add a shoe above, then pick it for each run.</div>
           ) : null}
           {showAssignList ? runsToShow.map((run) => {
             const busy = savingShoeId === run.stravaId || deletingRunId === run.stravaId;
@@ -806,7 +808,7 @@ function RunningShoesPanel({
                     <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 2 }}>
                       {run.shoeId
                         ? `Shoe: ${getRunningShoeLabel(activeShoes.find((s) => s.id === run.shoeId) || { name: 'Unknown' })}`
-                        : 'No shoe yet — tap one below'}
+                        : 'No shoe yet — choose one below'}
                     </div>
                   </div>
                   <button
@@ -833,30 +835,38 @@ function RunningShoesPanel({
                   </button>
                 </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {activeShoes.map((shoe) => {
-                    const selected = run.shoeId === shoe.id;
-                    return (
-                      <button
-                        key={shoe.id}
-                        type="button"
-                        disabled={busy || !activeShoes.length}
-                        onClick={() => onAssignShoe?.(run.stravaId, selected ? '' : shoe.id)}
-                        style={{
-                          border: `1px solid ${selected ? theme.orange : inputBorder}`,
-                          background: selected ? `${theme.orange}28` : theme.cardBg,
-                          color: selected ? theme.orange : theme.textHeading,
-                          borderRadius: 999,
-                          padding: '7px 12px',
-                          fontSize: 12,
-                          fontWeight: 800,
-                          cursor: busy ? 'default' : 'pointer',
-                          boxShadow: selected ? `0 0 0 1px ${theme.orange}66` : 'none',
-                        }}
-                      >
-                        {getRunningShoeLabel(shoe)}
-                      </button>
-                    );
-                  })}
+                  {activeShoes.length ? (
+                    <select
+                      value={run.shoeId || ''}
+                      disabled={busy}
+                      aria-label={`Shoe for ${fmtDate(run.date)}`}
+                      onChange={(e) => onAssignShoe?.(run.stravaId, e.target.value)}
+                      style={{
+                        flex: 1,
+                        minWidth: 140,
+                        padding: '10px 12px',
+                        borderRadius: 12,
+                        border: `1px solid ${inputBorder}`,
+                        background: inputBg,
+                        color: theme.textHeading,
+                        fontSize: 13,
+                        fontWeight: 700,
+                        colorScheme: isDark ? 'dark' : 'light',
+                        cursor: busy ? 'default' : 'pointer',
+                      }}
+                    >
+                      <option value="" style={{ background: inputBg, color: theme.textHeading }}>No shoe</option>
+                      {activeShoes.map((shoe) => (
+                        <option
+                          key={shoe.id}
+                          value={shoe.id}
+                          style={{ background: inputBg, color: theme.textHeading }}
+                        >
+                          {getRunningShoeLabel(shoe)}
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
                 </div>
               </div>
             );
@@ -1121,6 +1131,22 @@ function RunningTab({
   const shoesSectionRef = useRef(null);
   const hrDashboard = useMemo(() => buildHeartRateDashboard(runRows, stravaInsights), [runRows, stravaInsights]);
 
+  const trainingTip = useMemo(() => {
+    const goal = userId ? loadMarathonGoal(userId) : null;
+    const goalDistanceKm = Number(goal?.distanceKm) || 21.0975;
+    const readiness = buildMarathonReadiness({
+      runs: runRows,
+      goalDistanceKm,
+      raceDate: goal?.raceDate || null,
+    });
+    return buildTrainingTip({
+      runRows,
+      goalDistanceKm,
+      longRunTargetKm: readiness?.longRunTargetKm,
+      readiness,
+    });
+  }, [runRows, userId, goalRefreshKey]);
+
   const openShoeAssigner = () => {
     setShoesOpen(true);
     setForceEditPastRuns(true);
@@ -1240,27 +1266,27 @@ function RunningTab({
 
   return (
     <div style={{ display: 'grid', gap: '14px' }}>
-      {(untaggedRuns > 0 || !runningShoes.filter((s) => !s.retired).length) ? (
-        <button
-          type="button"
-          onClick={openShoeAssigner}
+      {trainingTip ? (
+        <div
           style={{
             textAlign: 'left',
-            border: `1px solid ${theme.orange}55`,
+            border: `1px solid ${theme.cyan || theme.blue}44`,
             borderRadius: 16,
             padding: '12px 14px',
-            background: `linear-gradient(135deg, ${theme.orange}22, transparent)`,
+            background: `linear-gradient(135deg, ${theme.cyan || theme.blue}18, transparent)`,
             color: theme.textHeading,
-            cursor: 'pointer',
           }}
         >
-          <div style={{ fontSize: 13, fontWeight: 900, color: theme.orange }}>Shoe tip</div>
-          <div style={{ fontSize: 12, color: theme.textSecondary, marginTop: 4, lineHeight: 1.4 }}>
-            {!runningShoes.filter((s) => !s.retired).length
-              ? 'Add your shoes once, then tap a shoe chip on each recent run for wear tracking.'
-              : `${untaggedRuns} recent run${untaggedRuns === 1 ? '' : 's'} still need a shoe — tap to assign.`}
+          <div style={{ fontSize: 13, fontWeight: 900, color: theme.cyan || theme.blue }}>{trainingTip.title}</div>
+          <div style={{ fontSize: 12, color: theme.textSecondary, marginTop: 4, lineHeight: 1.45 }}>
+            {trainingTip.tip}
           </div>
-        </button>
+          {trainingTip.action ? (
+            <div style={{ marginTop: 8, fontSize: 11, fontWeight: 800, color: theme.orange, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+              Next · {trainingTip.action}
+            </div>
+          ) : null}
+        </div>
       ) : null}
 
       <MarathonRaceHub userId={userId} runRows={runRows} theme={theme} onOpenPlan={onOpenMarathonPlan} refreshKey={goalRefreshKey} compact />
@@ -1281,7 +1307,13 @@ function RunningTab({
               <MiniStat label="Synced runs" value={`${stravaInsights.runCount || 0}`} sub={`${stravaInsights.totalDistanceKm || 0} km`} accent="#fc5200" theme={theme} />
               <MiniStat label="Best pace" value={stravaInsights.bestPaceMinPerKm ? fmtPace(stravaInsights.bestPaceMinPerKm) : '--'} sub="season" accent={theme.cyan} theme={theme} />
               <MiniStat label="Longest" value={stravaInsights.longestRunKm ? `${stravaInsights.longestRunKm} km` : '--'} sub={stravaInsights.longestRun ? fmtDate(stravaInsights.longestRun.date) : ''} accent={theme.blue} theme={theme} />
-              <MiniStat label="Avg HR" value={stravaInsights.avgHeartRate ? `${stravaInsights.avgHeartRate}` : '--'} sub="bpm" accent="#f43f5e" theme={theme} />
+              <MiniStat
+                label="Fastest split"
+                value={stravaInsights.bestSplitPaceMinPerKm ? fmtPace(stravaInsights.bestSplitPaceMinPerKm) : '--'}
+                sub={stravaInsights.bestSplitRun?.bestSplitKm ? `Km ${stravaInsights.bestSplitRun.bestSplitKm}` : '1 km best'}
+                accent={theme.green}
+                theme={theme}
+              />
             </div>
             <StravaRunExplorer userId={userId} theme={theme} onOpenRun={onOpenRun} refreshKey={mapsRefreshKey} />
           </div>
@@ -1358,6 +1390,16 @@ function RunningTab({
         <div className="sport-3col" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: '10px', marginTop: 4 }}>
           <RecordCard label="Fastest Speed" value={runStats.fastestSpeedRun ? `${runStats.fastestSpeedRun.speed} km/h` : null} detail1={runStats.fastestSpeedRun ? `${runStats.fastestSpeedRun.distance} km in ${runStats.fastestSpeedRun.time}` : null} detail2={runStats.fastestSpeedRun ? fmtDate(runStats.fastestSpeedRun.date) : null} accent={theme.green} theme={theme} />
           <RecordCard label="Longest Run" value={runStats.longestDistanceRun ? `${runStats.longestDistanceRun.distance} km` : null} detail1={runStats.longestDistanceRun ? `${runStats.longestDistanceRun.time} · ${runStats.longestDistanceRun.speed} km/h` : null} detail2={runStats.longestDistanceRun ? fmtDate(runStats.longestDistanceRun.date) : null} accent={theme.blue} theme={theme} />
+          <RecordCard
+            label="Fastest Split"
+            value={stravaInsights?.bestSplitPaceMinPerKm ? fmtPace(stravaInsights.bestSplitPaceMinPerKm) : null}
+            detail1={stravaInsights?.bestSplitRun?.bestSplitKm
+              ? `Km ${stravaInsights.bestSplitRun.bestSplitKm}${stravaInsights.bestSplitRun.bestSplitSeconds ? ` · ${Math.floor(stravaInsights.bestSplitRun.bestSplitSeconds / 60)}:${String(Math.round(stravaInsights.bestSplitRun.bestSplitSeconds % 60)).padStart(2, '0')}` : ''}`
+              : 'Best 1 km from GPS'}
+            detail2={stravaInsights?.bestSplitRun?.date ? fmtDate(stravaInsights.bestSplitRun.date) : null}
+            accent={theme.cyan}
+            theme={theme}
+          />
           <RecordCard label="Total Distance" value={`${runStats.totalDistance} km`} detail1={`${runStats.totalRuns} runs`} accent={theme.orange} theme={theme} />
           {wellSummary ? <RecordCard label={`${name}'s streak`} value={`${wellSummary.runningStreak} days`} detail1={`Best ${wellSummary.longestRunningStreak} days`} accent={theme.emerald} theme={theme} /> : null}
         </div>

@@ -168,18 +168,96 @@ function displayPace(value) {
   if (value == null) return '--';
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) return '--';
-  return `${numeric.toFixed(2)} min/km`;
+  const mins = Math.floor(numeric);
+  const secs = Math.round((numeric - mins) * 60);
+  return `${mins}:${String(secs).padStart(2, '0')}/km`;
 }
 
 function displayLongestRunMeta(longestRun) {
   if (!longestRun?.date) return '--';
-  const minutes = Number(longestRun.runningMinutes || 0);
+  const minutes = Number(longestRun.runningMinutes || longestRun.minutes || 0);
   const minutesText = Number.isFinite(minutes) && minutes > 0 ? `${minutes.toFixed(0)} min` : '--';
   const date = new Date(longestRun.date);
   const dateText = Number.isNaN(date.getTime())
     ? String(longestRun.date)
     : date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
   return `${minutesText} • ${dateText}`;
+}
+
+function displayBestPaceMeta(bestPaceRun) {
+  if (!bestPaceRun) return '2 km+ best';
+  const dist = Number(bestPaceRun.distanceKm || 0);
+  const date = bestPaceRun.date
+    ? new Date(bestPaceRun.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
+    : '';
+  const parts = [];
+  if (dist > 0) parts.push(`${dist.toFixed(1)} km`);
+  if (date && !Number.isNaN(new Date(bestPaceRun.date).getTime())) parts.push(date);
+  return parts.join(' · ') || '2 km+ best';
+}
+
+function displayFastestSplitMeta(bestSplitRun) {
+  if (!bestSplitRun) return '1 km GPS';
+  const km = bestSplitRun.bestSplitKm != null ? `Km ${bestSplitRun.bestSplitKm}` : '1 km';
+  const date = bestSplitRun.date
+    ? new Date(bestSplitRun.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
+    : '';
+  return date && !Number.isNaN(new Date(bestSplitRun.date).getTime()) ? `${km} · ${date}` : km;
+}
+
+function computeRunningVolumeRecords(entries = []) {
+  const runs = (Array.isArray(entries) ? entries : [])
+    .map((entry) => ({
+      date: String(entry.date || '').slice(0, 10),
+      distanceKm: Number(entry.runningDistanceKm || 0),
+      minutes: Number(entry.runningMinutes || 0),
+    }))
+    .filter((run) => run.distanceKm > 0 && run.date);
+
+  const weekMap = {};
+  const monthMap = {};
+  for (const run of runs) {
+    const d = new Date(`${run.date}T12:00:00`);
+    if (Number.isNaN(d.getTime())) continue;
+    const monday = new Date(d);
+    monday.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    const weekKey = monday.toISOString().slice(0, 10);
+    weekMap[weekKey] = (weekMap[weekKey] || 0) + run.distanceKm;
+    const monthKey = run.date.slice(0, 7);
+    monthMap[monthKey] = (monthMap[monthKey] || 0) + run.distanceKm;
+  }
+
+  const bestWeekEntry = Object.entries(weekMap).sort((a, b) => b[1] - a[1])[0] || null;
+  const bestMonthEntry = Object.entries(monthMap).sort((a, b) => b[1] - a[1])[0] || null;
+
+  const buckets = { atLeast5: 0, atLeast10: 0, atLeast15: 0, atLeast20: 0 };
+  for (const run of runs) {
+    if (run.distanceKm >= 5) buckets.atLeast5 += 1;
+    if (run.distanceKm >= 10) buckets.atLeast10 += 1;
+    if (run.distanceKm >= 15) buckets.atLeast15 += 1;
+    if (run.distanceKm >= 20) buckets.atLeast20 += 1;
+  }
+
+  const bestPaceRun = runs
+    .filter((run) => run.distanceKm >= 2 && run.minutes > 0)
+    .map((run) => ({ ...run, pace: run.minutes / run.distanceKm }))
+    .sort((a, b) => a.pace - b.pace)[0] || null;
+
+  const longestRun = [...runs].sort((a, b) => b.distanceKm - a.distanceKm)[0] || null;
+
+  return {
+    bestWeeklyKm: bestWeekEntry ? Number(bestWeekEntry[1].toFixed(1)) : null,
+    bestWeeklyLabel: bestWeekEntry ? bestWeekEntry[0].slice(5) : null,
+    bestMonthlyKm: bestMonthEntry ? Number(bestMonthEntry[1].toFixed(1)) : null,
+    bestMonthlyLabel: bestMonthEntry ? bestMonthEntry[0] : null,
+    buckets,
+    bestPaceRun: bestPaceRun
+      ? { distanceKm: bestPaceRun.distanceKm, minutes: bestPaceRun.minutes, date: bestPaceRun.date, pace: Number(bestPaceRun.pace.toFixed(2)) }
+      : null,
+    longestRun: longestRun
+      ? { distanceKm: longestRun.distanceKm, runningMinutes: longestRun.minutes, date: longestRun.date }
+      : null,
+  };
 }
 
 function getTimeGreeting() {
@@ -382,6 +460,7 @@ function PersonalCockpitPanel({
   wellnessLoading = false,
   wellnessReady = true,
   onOpenWellness,
+  onOpenRunning,
 }) {
   const bgUrl = getAvatarBackgroundUrl(user);
   const fallbackInitial = String(user?.username || user?.name || 'U').slice(0, 1).toUpperCase();
@@ -404,7 +483,21 @@ function PersonalCockpitPanel({
   );
 
   return (
-    <section className="dashboard-cockpit" aria-label="Profile overview">
+    <section
+      className="dashboard-cockpit"
+      aria-label="Profile overview"
+      role={onOpenRunning ? 'link' : undefined}
+      tabIndex={onOpenRunning ? 0 : undefined}
+      onClick={() => onOpenRunning?.()}
+      onKeyDown={(event) => {
+        if (!onOpenRunning) return;
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onOpenRunning();
+        }
+      }}
+      style={{ cursor: onOpenRunning ? 'pointer' : undefined }}
+    >
       <div className="dashboard-cockpit-bg" aria-hidden="true">
         {bgUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -1038,6 +1131,7 @@ export default function Dashboard() {
   const [threadsReady, setThreadsReady] = useState(false);
   const [selectedThreadId, setSelectedThreadId] = useState('');
   const [stravaSyncMsg, setStravaSyncMsg] = useState('');
+  const [stravaInsights, setStravaInsights] = useState(null);
   const [activeTab, setActiveTab] = useState('home');
   const [wellnessLoading, setWellnessLoading] = useState(false);
   const [wellnessReady, setWellnessReady] = useState(false);
@@ -1137,7 +1231,10 @@ export default function Dashboard() {
     if (!uid) return;
     setWellnessLoading(true);
     try {
-      const response = await fetch(`${API_BASE}/wellness/data/${encodeURIComponent(uid)}`);
+      const [response, insightsResponse] = await Promise.all([
+        fetch(`${API_BASE}/wellness/data/${encodeURIComponent(uid)}`),
+        fetch(`${API_BASE}/wellness/strava/insights/${encodeURIComponent(uid)}?days=180`).catch(() => null),
+      ]);
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         setWellnessData({ entries: [], dailyScores: [], plans: [], plan: null });
@@ -1149,6 +1246,10 @@ export default function Dashboard() {
         plans: Array.isArray(data.plans) ? data.plans : [],
         plan: data.plan || null,
       });
+      if (insightsResponse?.ok) {
+        const insights = await insightsResponse.json().catch(() => null);
+        if (insights) setStravaInsights(insights);
+      }
     } catch (_) {
       setWellnessData({ entries: [], dailyScores: [], plans: [], plan: null });
     } finally {
@@ -1609,15 +1710,22 @@ export default function Dashboard() {
     const activePlan = wellnessData.plan || (wellnessData.plans || []).find((plan) => plan?.status === 'active') || null;
     const currentWellnessScore = Number(latestCumulative.toFixed(1));
     const totalRunningKm = entries.reduce((sum, entry) => sum + Number(entry.runningDistanceKm || 0), 0);
+    const volumeRecords = computeRunningVolumeRecords(entries);
 
     return {
       trendPoints,
       currentWellnessScore,
       maxWellnessScore: Number((maxScoreFromDaily || 0).toFixed(1)),
-      fastestRunPace,
-      longestRun,
+      fastestRunPace: volumeRecords.bestPaceRun?.pace ?? fastestRunPace,
+      bestPaceRun: volumeRecords.bestPaceRun,
+      longestRun: volumeRecords.longestRun || longestRun,
       longestRunningStreak,
       totalRunningKm: Number(totalRunningKm.toFixed(1)),
+      bestWeeklyKm: volumeRecords.bestWeeklyKm,
+      bestWeeklyLabel: volumeRecords.bestWeeklyLabel,
+      bestMonthlyKm: volumeRecords.bestMonthlyKm,
+      bestMonthlyLabel: volumeRecords.bestMonthlyLabel,
+      distanceBuckets: volumeRecords.buckets,
       plannedGoals: activePlan ? 1 : 0,
       completedGoals: 0,
     };
@@ -1627,23 +1735,41 @@ export default function Dashboard() {
     currentWellnessScore: wellnessSummary.currentWellnessScore,
     maxWellnessScore: wellnessSummary.maxWellnessScore,
     fastestRunPace: wellnessSummary.fastestRunPace,
+    bestPaceRun: wellnessSummary.bestPaceRun,
     longestRun: wellnessSummary.longestRun,
     longestRunningStreak: wellnessSummary.longestRunningStreak,
     totalRunningKm: wellnessSummary.totalRunningKm,
+    bestWeeklyKm: wellnessSummary.bestWeeklyKm,
+    bestWeeklyLabel: wellnessSummary.bestWeeklyLabel,
+    bestMonthlyKm: wellnessSummary.bestMonthlyKm,
+    bestMonthlyLabel: wellnessSummary.bestMonthlyLabel,
+    distanceBuckets: wellnessSummary.distanceBuckets,
+    bestSplitPaceMinPerKm: stravaInsights?.bestSplitPaceMinPerKm || null,
+    bestSplitRun: stravaInsights?.bestSplitRun || null,
     plannedGoals: wellnessSummary.plannedGoals,
     completedGoals: wellnessSummary.completedGoals,
-  }), [wellnessSummary]);
+  }), [wellnessSummary, stravaInsights]);
 
-  const primaryStats = useMemo(() => ([
-    { label: 'Wellness score', value: displayStatNumber(profileInsights.currentWellnessScore, { hideZero: false }), accent: theme.blue },
-    { label: 'Max Wellness score', value: displayStatNumber(profileInsights.maxWellnessScore, { hideZero: false }), accent: theme.cyan },
-    { label: 'Lifetime km', value: displayDistance(profileInsights.totalRunningKm), accent: theme.green },
-    { label: 'Fastest pace', value: displayPace(profileInsights.fastestRunPace), accent: theme.emerald },
-    { label: 'Longest run', value: displayDistance(profileInsights.longestRun?.distanceKm), accent: theme.textHeading, meta: displayLongestRunMeta(profileInsights.longestRun) },
-    { label: 'Longest running streak', value: `${displayStatNumber(profileInsights.longestRunningStreak)}${displayStatNumber(profileInsights.longestRunningStreak) === '--' ? '' : 'd'}`, accent: theme.orange },
-    { label: 'Planned goals', value: displayStatNumber(profileInsights.plannedGoals), accent: theme.orange },
-    { label: 'Completed goals', value: displayStatNumber(profileInsights.completedGoals), accent: theme.green },
-  ]), [profileInsights, theme]);
+  const primaryStats = useMemo(() => {
+    const buckets = profileInsights.distanceBuckets || {};
+    return [
+      { label: 'Wellness', value: displayStatNumber(profileInsights.currentWellnessScore, { hideZero: false }), accent: theme.blue },
+      { label: 'Best pace', value: displayPace(profileInsights.fastestRunPace), accent: theme.emerald, meta: displayBestPaceMeta(profileInsights.bestPaceRun) },
+      { label: 'Longest run', value: displayDistance(profileInsights.longestRun?.distanceKm), accent: theme.textHeading, meta: displayLongestRunMeta(profileInsights.longestRun) },
+      { label: 'Fastest split', value: displayPace(profileInsights.bestSplitPaceMinPerKm), accent: theme.cyan, meta: displayFastestSplitMeta(profileInsights.bestSplitRun) },
+      { label: 'Best week', value: displayDistance(profileInsights.bestWeeklyKm), accent: theme.orange, meta: profileInsights.bestWeeklyLabel ? `wk ${profileInsights.bestWeeklyLabel}` : 'peak week' },
+      { label: 'Best month', value: displayDistance(profileInsights.bestMonthlyKm), accent: theme.green, meta: profileInsights.bestMonthlyLabel || 'peak month' },
+      {
+        label: '5·10·15·20',
+        value: `${buckets.atLeast5 || 0}·${buckets.atLeast10 || 0}·${buckets.atLeast15 || 0}·${buckets.atLeast20 || 0}`,
+        accent: theme.purple || '#a78bfa',
+        meta: 'runs ≥ km',
+      },
+      { label: 'Lifetime km', value: displayDistance(profileInsights.totalRunningKm), accent: theme.green },
+      { label: 'Run streak', value: `${displayStatNumber(profileInsights.longestRunningStreak)}${displayStatNumber(profileInsights.longestRunningStreak) === '--' ? '' : 'd'}`, accent: theme.orange },
+      { label: 'Max wellness', value: displayStatNumber(profileInsights.maxWellnessScore, { hideZero: false }), accent: theme.cyan },
+    ];
+  }, [profileInsights, theme]);
   const marketCards = useMemo(() => (strategySummary.profitWindows.map((item) => ({
     ...item,
     value: formatCurrency(item.value),
@@ -2250,8 +2376,8 @@ export default function Dashboard() {
           inset: 0;
           width: 100%;
           height: 100%;
-          object-fit: contain;
-          object-position: center center;
+          object-fit: cover;
+          object-position: center 18%;
           filter: saturate(1.12) contrast(1.02);
         }
         .dashboard-cockpit-fallback {
@@ -2400,10 +2526,10 @@ export default function Dashboard() {
         .dashboard-stat-tile {
           --stat-accent: #38bdf8;
           position: relative;
-          width: 96px;
-          max-width: 96px;
-          padding: 6px 8px 7px;
-          border-radius: 10px;
+          width: 84px;
+          max-width: 84px;
+          padding: 5px 6px 6px;
+          border-radius: 9px;
           border: 1px solid rgba(255,255,255,0.24);
           border-left: 2px solid var(--stat-accent);
           background: linear-gradient(145deg, rgba(15,23,42,0.78), rgba(30,41,59,0.68));
@@ -2414,13 +2540,13 @@ export default function Dashboard() {
           transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
         }
         .dashboard-stat-tile-label {
-          font-size: 8px;
+          font-size: 7px;
           font-weight: 800;
-          letter-spacing: 0.04em;
+          letter-spacing: 0.03em;
           text-transform: uppercase;
           color: #e2e8f0;
           text-shadow: none;
-          line-height: 1.25;
+          line-height: 1.2;
           white-space: normal;
           overflow: hidden;
           display: -webkit-box;
@@ -2428,8 +2554,8 @@ export default function Dashboard() {
           -webkit-box-orient: vertical;
         }
         .dashboard-stat-tile-value {
-          margin-top: 3px;
-          font-size: 14px;
+          margin-top: 2px;
+          font-size: 12px;
           font-weight: 900;
           line-height: 1.1;
           color: var(--stat-accent);
@@ -2439,10 +2565,10 @@ export default function Dashboard() {
         }
         .dashboard-stat-tile-meta {
           margin-top: 2px;
-          font-size: 8px;
+          font-size: 7px;
           font-weight: 600;
           color: #cbd5e1;
-          line-height: 1.25;
+          line-height: 1.2;
           text-shadow: none;
           white-space: normal;
           overflow: hidden;
@@ -2460,30 +2586,30 @@ export default function Dashboard() {
         @media (min-width: 900px) {
           .dashboard-cockpit-rail,
           .dashboard-stat-tile {
-            width: 104px;
-            max-width: 104px;
+            width: 92px;
+            max-width: 92px;
           }
           .dashboard-cockpit {
-            min-height: 500px;
+            min-height: 520px;
           }
           .dashboard-cockpit-content {
-            min-height: 500px;
+            min-height: 520px;
           }
           .dashboard-cockpit-rails {
-            min-height: 330px;
+            min-height: 360px;
           }
           .dashboard-cockpit-rail {
-            max-height: 330px;
+            max-height: 360px;
           }
           .dashboard-cockpit-topline {
-            padding-left: 112px;
-            padding-right: 112px;
+            padding-left: 100px;
+            padding-right: 100px;
           }
           .dashboard-stat-tile-label {
-            font-size: 8px;
+            font-size: 7px;
           }
           .dashboard-stat-tile-value {
-            font-size: 15px;
+            font-size: 13px;
           }
         }
         .dashboard-wellness-chart-shell {
@@ -2682,8 +2808,8 @@ export default function Dashboard() {
           .dashboard-cockpit-topline-text { font-size: 12px !important; padding: 6px 10px !important; }
           .dashboard-cockpit-rails { min-height: 280px !important; gap: 4px !important; }
           .dashboard-cockpit-rail { width: 88px !important; max-height: 280px !important; gap: 4px !important; }
-          .dashboard-stat-tile { width: 88px !important; max-width: 88px !important; padding: 5px 7px 6px !important; }
-          .dashboard-stat-tile-value { font-size: 13px !important; }
+          .dashboard-stat-tile { width: 78px !important; max-width: 78px !important; padding: 4px 5px 5px !important; }
+          .dashboard-stat-tile-value { font-size: 11px !important; }
           .dashboard-top-grid { gap: 12px !important; }
           .dashboard-wellness-chart-hint { text-align: center !important; }
         }
@@ -2765,6 +2891,7 @@ export default function Dashboard() {
             wellnessLoading={wellnessLoading}
             wellnessReady={wellnessReady}
             onOpenWellness={() => router.push('/wellness')}
+            onOpenRunning={() => router.push('/running-analytics')}
           />
         </section>
 
