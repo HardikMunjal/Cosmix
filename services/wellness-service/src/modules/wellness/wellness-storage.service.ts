@@ -567,13 +567,14 @@ export class WellnessStorageService {
       .filter(Boolean) as WellnessPlanRecord[]);
     const activePlan = plans.find((plan) => plan.status === 'active') || null;
     const entries = this.sortEntries((data?.entries || []).map((entry) => this.normalizeEntryRecord(entry, activePlan?.id || null)));
+    const rawDeletedIds = data?.deletedStravaActivityIds;
     return {
       entries,
       form: data?.form || null,
       plans,
       runningShoes: this.normalizeRunningShoes(data?.runningShoes),
       deletedStravaActivityIds: [...new Set(
-        (Array.isArray(data?.deletedStravaActivityIds) ? data.deletedStravaActivityIds : [])
+        (Array.isArray(rawDeletedIds) ? rawDeletedIds : [])
           .map((id) => Number(id))
           .filter((id) => Number.isFinite(id) && id > 0),
       )],
