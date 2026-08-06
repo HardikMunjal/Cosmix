@@ -1757,6 +1757,50 @@ export default function RunningAnalytics() {
     .run-dash-charts-2 { grid-template-columns: 1fr !important; }
     .run-dash-mini-grid { grid-template-columns: 1fr 1fr !important; }
         }
+        .run-page-header {
+          display: grid;
+          gap: 14px;
+          padding: 16px;
+          border-radius: 20px;
+        }
+        .run-page-header-top {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 12px;
+        }
+        .run-page-header-copy {
+          flex: 1;
+          min-width: 0;
+        }
+        .run-page-header-actions {
+          display: flex;
+          gap: 8px;
+          flex-shrink: 0;
+          flex-wrap: nowrap;
+          align-items: center;
+        }
+        .run-header-btn {
+          appearance: none;
+          border-radius: 11px;
+          padding: 9px 12px;
+          cursor: pointer;
+          font-weight: 800;
+          font-size: 12px;
+          line-height: 1;
+          white-space: nowrap;
+          min-height: 36px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .run-header-btn-label-long { display: inline; }
+        .run-header-btn-label-short { display: none; }
+        .run-page-sync-msg {
+          font-size: 12px;
+          line-height: 1.35;
+          padding: 0 2px;
+        }
         @media (max-width: 560px) {
           .running-analytics-page { padding: 12px 12px 0 !important; }
           .sport-4col { grid-template-columns: 1fr !important; }
@@ -1765,63 +1809,105 @@ export default function RunningAnalytics() {
           .sport-tab-strip { flex-wrap: nowrap !important; }
           .sport-tab-btn { flex: 0 0 auto; }
           .marathon-modal-backdrop { align-items: flex-end !important; }
+          .run-page-header { padding: 14px !important; gap: 12px !important; }
+          .run-page-header-top {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 12px;
+          }
+          .run-page-header-actions {
+            width: 100%;
+            display: grid;
+            grid-template-columns: 1.2fr 1fr 0.7fr;
+            gap: 8px;
+          }
+          .run-header-btn {
+            width: 100%;
+            padding: 10px 8px;
+            font-size: 11px;
+          }
+          .run-header-btn-label-long { display: none; }
+          .run-header-btn-label-short { display: inline; }
         }
       `}</style>
 
-      <div style={{ maxWidth: '1200px', margin: '0 auto', display: 'grid', gap: '20px' }}>
+      <div style={{ maxWidth: '1200px', margin: '0 auto', display: 'grid', gap: '16px' }}>
 
-        <div className={`run-page-header surface-${surfaceId}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', padding: '16px', borderRadius: '20px', background: surfaceId === 'night' ? `linear-gradient(135deg, ${theme.orange}22, ${theme.cyan}12, ${theme.cardBg})` : `linear-gradient(145deg, #ffffffee, ${theme.orange}12, ${theme.cardBg})`, border: `1px solid ${theme.cardBorder}`, boxShadow: theme.chartDepth, fontFamily: theme.font }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted }}>{surfaceId === 'night' ? 'Night track' : 'Trail light'}</div>
-            <h1 style={{ margin: '4px 0 0', fontSize: 'clamp(22px,4.5vw,30px)', fontWeight: 900, color: theme.textHeading, lineHeight: 1.1 }}>{surfaceId === 'night' ? 'Race cockpit' : 'Trail board'}</h1>
-            <p style={{ margin: '6px 0 0', fontSize: '12px', color: theme.textSecondary }}>{runStats?.totalRuns || 0} runs · <Link href="/running-maps" style={{ color: theme.orange, fontWeight: 800, textDecoration: 'none' }}>map archive</Link></p>
-          </div>
-          <div style={{ display: 'flex', gap: 8, flexShrink: 0, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-            <button
-              type="button"
-              onClick={handleStravaSync}
-              disabled={stravaSyncing}
-              style={{
-                border: `1px solid ${theme.cardBorder}`,
-                background: theme.cardBg,
-                color: theme.textHeading,
-                borderRadius: 12,
-                padding: '10px 14px',
-                cursor: stravaSyncing ? 'default' : 'pointer',
-                fontWeight: 800,
-                fontSize: 12,
-                whiteSpace: 'nowrap',
-                opacity: stravaSyncing ? 0.7 : 1,
-              }}
-            >
-              {stravaSyncing ? 'Syncing…' : 'Sync Strava'}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                const next = surfaceId === 'night' ? 'trail' : 'night';
-                setSurfaceId(next);
-                saveRunningSurfaceId(next);
-              }}
-              style={{
-                border: `1px solid ${theme.cardBorder}`,
-                background: theme.cardBg,
-                color: theme.textHeading,
-                borderRadius: 12,
-                padding: '10px 14px',
-                cursor: 'pointer',
-                fontWeight: 800,
-                fontSize: 12,
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {surfaceId === 'night' ? '☀ Trail light' : '☾ Night track'}
-            </button>
-            <button type="button" onClick={() => setShowMarathonModal(true)} style={{ border: 'none', background: theme.orange, color: '#fff', borderRadius: '12px', padding: '10px 14px', cursor: 'pointer', fontWeight: 800, fontSize: '12px', whiteSpace: 'nowrap' }}>Goal</button>
+        <div
+          className={`run-page-header surface-${surfaceId}`}
+          style={{
+            background: surfaceId === 'night'
+              ? `linear-gradient(135deg, ${theme.orange}22, ${theme.cyan}12, ${theme.cardBg})`
+              : `linear-gradient(145deg, #ffffffee, ${theme.orange}12, ${theme.cardBg})`,
+            border: `1px solid ${theme.cardBorder}`,
+            boxShadow: theme.chartDepth,
+            fontFamily: theme.font,
+          }}
+        >
+          <div className="run-page-header-top">
+            <div className="run-page-header-copy">
+              <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted }}>
+                {surfaceId === 'night' ? 'Night track' : 'Trail light'}
+              </div>
+              <h1 style={{ margin: '6px 0 0', fontSize: 'clamp(24px,5vw,30px)', fontWeight: 900, color: theme.textHeading, lineHeight: 1.1 }}>
+                {surfaceId === 'night' ? 'Race cockpit' : 'Trail board'}
+              </h1>
+              <p style={{ margin: '8px 0 0', fontSize: 12, color: theme.textSecondary, display: 'flex', flexWrap: 'wrap', gap: '6px 10px', alignItems: 'center' }}>
+                <span>{runStats?.totalRuns || 0} runs</span>
+                <span style={{ color: theme.textMuted }}>·</span>
+                <Link href="/running-maps" style={{ color: theme.orange, fontWeight: 800, textDecoration: 'none' }}>
+                  Map archive
+                </Link>
+              </p>
+            </div>
+            <div className="run-page-header-actions">
+              <button
+                type="button"
+                className="run-header-btn"
+                onClick={handleStravaSync}
+                disabled={stravaSyncing}
+                style={{
+                  border: `1px solid ${theme.cardBorder}`,
+                  background: theme.cardBg,
+                  color: theme.textHeading,
+                  opacity: stravaSyncing ? 0.7 : 1,
+                  cursor: stravaSyncing ? 'default' : 'pointer',
+                }}
+              >
+                <span className="run-header-btn-label-long">{stravaSyncing ? 'Syncing…' : 'Sync Strava'}</span>
+                <span className="run-header-btn-label-short">{stravaSyncing ? '…' : 'Sync'}</span>
+              </button>
+              <button
+                type="button"
+                className="run-header-btn"
+                aria-label={surfaceId === 'night' ? 'Switch to trail light' : 'Switch to night track'}
+                onClick={() => {
+                  const next = surfaceId === 'night' ? 'trail' : 'night';
+                  setSurfaceId(next);
+                  saveRunningSurfaceId(next);
+                }}
+                style={{
+                  border: `1px solid ${theme.cardBorder}`,
+                  background: theme.cardBg,
+                  color: theme.textHeading,
+                }}
+              >
+                <span className="run-header-btn-label-long">{surfaceId === 'night' ? '☀ Trail light' : '☾ Night track'}</span>
+                <span className="run-header-btn-label-short">{surfaceId === 'night' ? '☀ Trail' : '☾ Night'}</span>
+              </button>
+              <button
+                type="button"
+                className="run-header-btn"
+                onClick={() => setShowMarathonModal(true)}
+                style={{ border: 'none', background: theme.orange, color: '#fff' }}
+              >
+                Goal
+              </button>
+            </div>
           </div>
         </div>
         {stravaSyncMsg ? (
-          <div style={{ marginTop: -8, fontSize: 12, color: theme.textSecondary }}>{stravaSyncMsg}</div>
+          <div className="run-page-sync-msg" style={{ color: theme.textSecondary }}>{stravaSyncMsg}</div>
         ) : null}
 
         <div className="sport-tab-strip" role="tablist" aria-label="Sport analytics">
