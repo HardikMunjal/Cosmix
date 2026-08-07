@@ -54,19 +54,19 @@ export const COSMIX_LOADER_CSS = `
     inset: -6%;
     border-radius: 999px;
     border: 1.5px solid transparent;
-    border-top-color: color-mix(in srgb, var(--cosmix-loader-a, #22c55e) 85%, white);
-    border-right-color: color-mix(in srgb, var(--cosmix-loader-b, #06b6d4) 80%, white);
+    border-top-color: #6ee7b7;
+    border-right-color: #7dd3fc;
     box-shadow:
-      0 0 18px color-mix(in srgb, var(--cosmix-loader-b, #06b6d4) 35%, transparent),
-      inset 0 0 12px color-mix(in srgb, var(--cosmix-loader-a, #22c55e) 18%, transparent);
+      0 0 18px rgba(56, 189, 248, 0.35),
+      inset 0 0 12px rgba(52, 211, 153, 0.18);
     animation: cosmix-loader-spin 2.4s linear infinite;
     transform: rotateX(68deg);
   }
   .cosmix-loader-ring-b {
     inset: 8%;
-    border-top-color: color-mix(in srgb, var(--cosmix-loader-c, #f59e0b) 80%, white);
+    border-top-color: #fbbf24;
     border-right-color: transparent;
-    border-bottom-color: color-mix(in srgb, var(--cosmix-loader-d, #3b82f6) 75%, white);
+    border-bottom-color: #a78bfa;
     animation: cosmix-loader-spin-reverse 3.1s linear infinite;
     transform: rotateX(62deg) rotateZ(25deg);
   }
@@ -76,11 +76,8 @@ export const COSMIX_LOADER_CSS = `
     border-radius: 999px;
     background:
       radial-gradient(circle at 32% 28%, rgba(255,255,255,0.95) 0%, rgba(255,255,255,0.35) 18%, transparent 42%),
-      radial-gradient(circle at 70% 78%, color-mix(in srgb, var(--cosmix-loader-b, #06b6d4) 55%, transparent), transparent 46%),
-      linear-gradient(145deg,
-        color-mix(in srgb, var(--cosmix-loader-a, #22c55e) 88%, white) 0%,
-        color-mix(in srgb, var(--cosmix-loader-b, #06b6d4) 90%, white) 48%,
-        color-mix(in srgb, var(--cosmix-loader-d, #3b82f6) 82%, #0f172a) 100%);
+      radial-gradient(circle at 70% 78%, rgba(56,189,248,0.45), transparent 46%),
+      linear-gradient(145deg, #34d399 0%, #38bdf8 48%, #6366f1 100%);
     box-shadow:
       0 22px 36px rgba(15, 23, 42, 0.28),
       0 0 0 1px rgba(255,255,255,0.35) inset,
@@ -104,8 +101,8 @@ export const COSMIX_LOADER_CSS = `
     inset: 0;
     display: grid;
     place-items: center;
-    color: rgba(248, 250, 252, 0.95);
-    font-size: clamp(11px, 18%, 16px);
+    color: #f8fafc;
+    font-size: 14px;
     font-weight: 900;
     letter-spacing: 0.14em;
     text-shadow: 0 2px 10px rgba(15, 23, 42, 0.45);
@@ -114,10 +111,20 @@ export const COSMIX_LOADER_CSS = `
     position: absolute;
     inset: 22%;
     border-radius: 999px;
-    background: radial-gradient(circle, color-mix(in srgb, var(--cosmix-loader-b, #06b6d4) 50%, transparent), transparent 70%);
+    background: radial-gradient(circle, rgba(56,189,248,0.5), transparent 70%);
     filter: blur(10px);
     transform: translateZ(-8px);
     animation: cosmix-loader-glow 2.2s ease-in-out infinite;
+  }
+  .cosmix-loader-title {
+    background: linear-gradient(105deg, #0891b2 0%, #2563eb 35%, #7c3aed 65%, #db2777 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+  }
+  .cosmix-loader-sub {
+    color: #475569;
   }
   .cosmix-loader-sat {
     position: absolute;
@@ -263,12 +270,8 @@ export function CosmixLoader({
       boxShadow: isCompact ? undefined : '0 18px 40px rgba(15,23,42,0.08)',
     };
 
-  const headingColor = isFull || isOverlay || !theme?.textHeading
-    ? '#0f172a'
-    : theme.textHeading;
-  const mutedColor = isFull || isOverlay || !theme?.textMuted
-    ? 'rgba(51,65,85,0.78)'
-    : theme.textMuted;
+  const headingColor = '#0f172a';
+  const mutedColor = '#475569';
 
   return (
     <div style={shellStyle} role="status" aria-live="polite" aria-busy="true">
@@ -303,17 +306,20 @@ export function CosmixLoader({
       }}>
         <CosmixOrb size={orbSize} theme={theme} showLabel={isFull || isOverlay} />
         <div style={{ display: 'grid', gap: '4px' }}>
-          <div style={{
-            fontSize: isCompact ? '11px' : '13px',
-            fontWeight: 800,
-            letterSpacing: isCompact ? '0.04em' : '0.14em',
-            textTransform: isCompact ? 'none' : 'uppercase',
-            color: headingColor,
-          }}>
+          <div
+            className="cosmix-loader-title"
+            style={{
+              fontSize: isCompact ? '12px' : '14px',
+              fontWeight: 800,
+              letterSpacing: isCompact ? '0.04em' : '0.14em',
+              textTransform: isCompact ? 'none' : 'uppercase',
+              color: headingColor,
+            }}
+          >
             {title}
           </div>
           {sublabel && !isCompact ? (
-            <div style={{ fontSize: '13px', color: mutedColor, lineHeight: 1.45, fontWeight: 600 }}>
+            <div className="cosmix-loader-sub" style={{ fontSize: '13px', color: mutedColor, lineHeight: 1.45, fontWeight: 600 }}>
               {sublabel}
             </div>
           ) : null}

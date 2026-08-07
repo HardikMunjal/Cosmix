@@ -14,16 +14,19 @@ function RouteLoader({ active }) {
           inset: 0,
           pointerEvents: 'none',
           opacity: active ? 1 : 0,
+          visibility: active ? 'visible' : 'hidden',
           transition: 'opacity 180ms ease',
           zIndex: 9999,
         }}
         aria-hidden={!active}
       >
-        <CosmixLoader
-          variant="overlay"
-          label="Loading workspace"
-          sublabel="Pulling your next cockpit into view..."
-        />
+        {active ? (
+          <CosmixLoader
+            variant="overlay"
+            label="Loading workspace"
+            sublabel="Pulling your next cockpit into view..."
+          />
+        ) : null}
       </div>
       <div
         style={{
