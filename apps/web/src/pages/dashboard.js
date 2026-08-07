@@ -196,13 +196,83 @@ function displayBestPaceMeta(bestPaceRun) {
   return parts.join(' · ') || '2 km+ best';
 }
 
-function displayFastestSplitMeta(bestSplitRun) {
+function formatShortRunDate(raw) {
+  if (!raw) return '';
+  const value = String(raw).slice(0, 10);
+  const date = new Date(/^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T12:00:00` : raw);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+}
+
+function resolveRunDate(run) {
+  if (!run || typeof run !== 'object') return '';
+  return formatShortRunDate(
+    run.date || run.startDate || run.start_date_local || run.start_date || run.activityDate || null,
+  );
+}
+
+function displayFastestSplitMeta(bestSplitRun, approx = false) {
+  const date = resolveRunDate(bestSplitRun);
+  if (approx) {
+    return date ? `peak speed · ${date}` : 'peak speed';
+  }
   if (!bestSplitRun) return '1 km GPS';
   const km = bestSplitRun.bestSplitKm != null ? `Km ${bestSplitRun.bestSplitKm}` : '1 km';
-  const date = bestSplitRun.date
-    ? new Date(bestSplitRun.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
-    : '';
-  return date && !Number.isNaN(new Date(bestSplitRun.date).getTime()) ? `${km} · ${date}` : km;
+  return date ? `${km} · ${date}` : km;
+}
+
+function resolveBestSplitFromInsights(insights) {
+  if (!insights) return { pace: null, run: null, approx: false };
+  if (Number(insights.bestSplitPaceMinPerKm || 0) > 0) {
+    const run = insights.bestSplitRun || null;
+    const enriched = run && !resolveRunDate(run)
+      ? {
+          ...run,
+          date: run.date
+            || insights.bestPaceRun?.date
+            || insights.recentRuns?.find((item) => Number(item?.bestSplitPaceMinPerKm || 0) === Number(insights.bestSplitPaceMinPerKm))?.date
+            || null,
+        }
+      : run;
+    return {
+      pace: Number(insights.bestSplitPaceMinPerKm),
+      run: enriched,
+      approx: false,
+    };
+  }
+  const pools = [
+    ...(Array.isArray(insights.recentRuns) ? insights.recentRuns : []),
+    ...(Array.isArray(insights.fastestRuns) ? insights.fastestRuns : []),
+  ];
+  const withSplit = pools
+    .filter((run) => Number(run?.bestSplitPaceMinPerKm || 0) > 0)
+    .sort((a, b) => Number(a.bestSplitPaceMinPerKm) - Number(b.bestSplitPaceMinPerKm));
+  if (withSplit[0]) {
+    return {
+      pace: Number(withSplit[0].bestSplitPaceMinPerKm),
+      run: withSplit[0],
+      approx: false,
+    };
+  }
+  const maxSpeed = Number(insights.maxSpeedKmh || 0);
+  if (maxSpeed >= 8) {
+    const speedRun = pools
+      .filter((run) => Number(run?.maxSpeedKmh || 0) > 0)
+      .sort((a, b) => Number(b.maxSpeedKmh || 0) - Number(a.maxSpeedKmh || 0))[0] || null;
+    return {
+      pace: Number((60 / maxSpeed).toFixed(2)),
+      run: {
+        bestSplitKm: null,
+        date: speedRun?.date
+          || insights.bestPaceRun?.date
+          || insights.longestRun?.date
+          || insights.recentRuns?.[0]?.date
+          || null,
+      },
+      approx: true,
+    };
+  }
+  return { pace: null, run: null, approx: false };
 }
 
 function computeRunningVolumeRecords(entries = []) {
@@ -267,13 +337,6 @@ function getTimeGreeting() {
   return 'Good evening';
 }
 
-const DASHBOARD_TABS = [
-  { id: 'home', label: 'Home', icon: '🏠', accent: '#38bdf8', glow: 'rgba(56,189,248,0.24)' },
-  { id: 'threads', label: 'Threads', icon: '🧵', accent: '#22d3ee', glow: 'rgba(34,211,238,0.26)' },
-  { id: 'posts', label: 'Fitstagram', icon: '📷', accent: '#f472b6', glow: 'rgba(244,114,182,0.26)' },
-  { id: 'buddies', label: 'Buddies', icon: '👥', accent: '#a78bfa', glow: 'rgba(167,139,250,0.26)' },
-];
-
 function NotificationsModal({
   open,
   onClose,
@@ -330,7 +393,7 @@ function NotificationsModal({
   );
 }
 
-function DashboardHero({ user, theme, notificationCount, activeTab, onTabChange, onOpenNotifications, onOpenSettings }) {
+function DashboardHero({ user, theme, notificationCount, onOpenNotifications, onOpenSettings }) {
   const greeting = getTimeGreeting();
   const displayName = user?.name || user?.username || 'there';
 
@@ -377,33 +440,6 @@ function DashboardHero({ user, theme, notificationCount, activeTab, onTabChange,
             </button>
           </div>
         </header>
-
-        <div className="dashboard-tab-row" role="tablist" aria-label="Dashboard sections">
-          {DASHBOARD_TABS.map((tab) => {
-            const isActive = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                role="tab"
-                aria-selected={isActive}
-                className={`dashboard-tab-btn dashboard-tab-btn--${tab.id}${isActive ? ' is-active' : ''}`}
-                onClick={() => onTabChange(tab.id)}
-                style={isActive ? {
-                  borderColor: `${tab.accent}88`,
-                  background: `linear-gradient(135deg, ${tab.glow}, rgba(15,23,42,0.2))`,
-                  boxShadow: `0 10px 24px ${tab.glow}, inset 0 1px 0 rgba(255,255,255,0.08)`,
-                  color: '#fff',
-                } : {
-                  '--tab-accent': tab.accent,
-                }}
-              >
-                <span className="dashboard-tab-icon" aria-hidden="true">{tab.icon}</span>
-                <span className="dashboard-tab-label">{tab.label}</span>
-              </button>
-            );
-          })}
-        </div>
       </div>
     </section>
   );
@@ -434,13 +470,24 @@ function MetricList({ items, theme, compact = false }) {
   );
 }
 
-function MetricGrid({ items, theme }) {
+function MetricGrid({ items, theme, tone = 'auto' }) {
+  const dark = tone === 'dark';
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', columnGap: '16px', rowGap: '6px' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', columnGap: '10px', rowGap: '8px' }}>
       {items.map((item) => (
-        <div key={item.label} style={{ display: 'grid', gap: '2px' }}>
-          <div style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '0.08em', color: theme.textMuted, fontWeight: 700 }}>{item.label}</div>
-          <div style={{ fontSize: '13px', fontWeight: 800, color: item.accent || theme.textHeading, lineHeight: 1.05 }}>{item.value}</div>
+        <div
+          key={item.label}
+          style={{
+            display: 'grid',
+            gap: '3px',
+            padding: '8px 10px',
+            borderRadius: '12px',
+            background: dark ? 'rgba(2,6,23,0.7)' : 'transparent',
+            border: dark ? '1px solid rgba(148,163,184,0.14)' : 'none',
+          }}
+        >
+          <div style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '0.08em', color: dark ? '#94a3b8' : theme.textMuted, fontWeight: 700 }}>{item.label}</div>
+          <div style={{ fontSize: '13px', fontWeight: 800, color: item.accent || (dark ? '#f8fafc' : theme.textHeading), lineHeight: 1.05 }}>{item.value}</div>
         </div>
       ))}
     </div>
@@ -450,6 +497,166 @@ function MetricGrid({ items, theme }) {
 function getAvatarBackgroundUrl(user) {
   const avatar = resolveAvatarPresentation(user?.avatar || '');
   return avatar.displaySrc || avatar.src || '';
+}
+
+function useBubbleMotion(targetRef) {
+  const pointerRef = useRef({ x: 0.5, y: 0.5, active: false });
+  const scrollRef = useRef(0);
+  const [pose, setPose] = useState({ x: 0.5, y: 0.5, active: false, scroll: 0, t: 0 });
+  const reduceMotion = typeof window !== 'undefined'
+    && window.matchMedia
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  useEffect(() => {
+    if (reduceMotion) return undefined;
+    let frame = 0;
+    const tick = (now) => {
+      frame = window.requestAnimationFrame(tick);
+      const next = {
+        x: pointerRef.current.x,
+        y: pointerRef.current.y,
+        active: pointerRef.current.active,
+        scroll: scrollRef.current,
+        t: now * 0.001,
+      };
+      setPose((prev) => (
+        Math.abs(prev.x - next.x) < 0.002
+        && Math.abs(prev.y - next.y) < 0.002
+        && prev.active === next.active
+        && Math.abs(prev.scroll - next.scroll) < 0.5
+        && Math.abs(prev.t - next.t) < 0.04
+          ? prev
+          : next
+      ));
+    };
+    frame = window.requestAnimationFrame(tick);
+
+    const onScroll = () => {
+      scrollRef.current = window.scrollY || document.documentElement.scrollTop || 0;
+    };
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener('scroll', onScroll);
+    };
+  }, [reduceMotion]);
+
+  const syncPointer = (clientX, clientY, active) => {
+    const node = targetRef?.current;
+    if (!node) return;
+    const rect = node.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    pointerRef.current = {
+      x: Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)),
+      y: Math.min(1, Math.max(0, (clientY - rect.top) / rect.height)),
+      active,
+    };
+  };
+
+  const pointerHandlers = {
+    onPointerMove: (event) => syncPointer(event.clientX, event.clientY, true),
+    onPointerEnter: (event) => syncPointer(event.clientX, event.clientY, true),
+    onPointerLeave: () => {
+      pointerRef.current = { x: 0.5, y: 0.5, active: false };
+    },
+    onTouchStart: (event) => {
+      const touch = event.touches?.[0];
+      if (touch) syncPointer(touch.clientX, touch.clientY, true);
+    },
+    onTouchMove: (event) => {
+      const touch = event.touches?.[0];
+      if (touch) syncPointer(touch.clientX, touch.clientY, true);
+    },
+    onTouchEnd: () => {
+      pointerRef.current = { ...pointerRef.current, active: false };
+    },
+  };
+
+  return { pose, reduceMotion, pointerHandlers };
+}
+
+function QuoteBubble({ quote }) {
+  const wrapRef = useRef(null);
+  const { pose, pointerHandlers } = useBubbleMotion(wrapRef);
+  const dx = pose.x - 0.5;
+  const dy = pose.y - 0.5;
+  const floatY = Math.sin((pose.scroll * 0.016) + (pose.t * 1.2)) * 4;
+  const floatX = Math.cos((pose.scroll * 0.012) + (pose.t * 0.9)) * 2;
+  const rotateY = (dx * -14 * (pose.active ? 1 : 0.4)) + Math.sin(pose.scroll * 0.01) * 2;
+  const rotateX = (dy * 12 * (pose.active ? 1 : 0.4)) + 3 + (floatY * 0.3);
+  const translateZ = 10 + (pose.active ? 14 : 4);
+  const scale = pose.active ? 1.03 : 1.01;
+
+  return (
+    <div
+      ref={wrapRef}
+      className="dashboard-cockpit-topline"
+      onClick={(event) => event.stopPropagation()}
+      role="presentation"
+      {...pointerHandlers}
+    >
+      <p
+        className="dashboard-cockpit-quote dashboard-cockpit-quote--bubble"
+        style={{
+          transform: `translate3d(${floatX.toFixed(2)}px, ${floatY.toFixed(2)}px, ${translateZ.toFixed(1)}px) rotateX(${rotateX.toFixed(2)}deg) rotateY(${rotateY.toFixed(2)}deg) scale(${scale.toFixed(3)})`,
+        }}
+      >
+        <span className="dashboard-cockpit-quote-text">{quote}</span>
+      </p>
+    </div>
+  );
+}
+
+function MetricBubbleGrid({ items = [] }) {
+  const wrapRef = useRef(null);
+  const { pose, pointerHandlers } = useBubbleMotion(wrapRef);
+  const rows = Math.max(1, Math.ceil(items.length / 2));
+
+  return (
+    <div
+      ref={wrapRef}
+      className="dashboard-cockpit-metrics dashboard-cockpit-metrics--bubbles"
+      onClick={(event) => event.stopPropagation()}
+      role="presentation"
+      {...pointerHandlers}
+    >
+      {items.map((item, index) => {
+        const col = index % 2;
+        const row = Math.floor(index / 2);
+        const cx = (col + 0.5) / 2;
+        const cy = (row + 0.5) / rows;
+        const dx = pose.x - cx;
+        const dy = pose.y - cy;
+        const dist = Math.min(1, Math.hypot(dx, dy) * 1.35);
+        const influence = pose.active ? (1 - dist) : 0.28;
+        const floatY = Math.sin((pose.scroll * 0.018) + (pose.t * 1.4) + index * 0.9) * 5;
+        const floatX = Math.cos((pose.scroll * 0.014) + (pose.t * 1.1) + index * 0.7) * 2.5;
+        const scrollTilt = Math.sin((pose.scroll * 0.012) + index) * 3;
+        const rotateY = (dx * -18 * (pose.active ? 1 : 0.35)) + scrollTilt;
+        const rotateX = (dy * 16 * (pose.active ? 1 : 0.35)) + 4 + (floatY * 0.35);
+        const translateZ = 8 + (influence * 26) + (Math.sin(pose.t + index) * 2);
+        const scale = 1 + (influence * 0.045);
+
+        return (
+          <article
+            key={item.label}
+            className="dashboard-metric-cell dashboard-metric-cell--bubble"
+            title={[item.label, item.value, item.meta].filter(Boolean).join(' · ')}
+            style={{
+              '--stat-accent': item.accent || '#7dd3fc',
+              transform: `translate3d(${floatX.toFixed(2)}px, ${floatY.toFixed(2)}px, ${translateZ.toFixed(1)}px) rotateX(${rotateX.toFixed(2)}deg) rotateY(${rotateY.toFixed(2)}deg) scale(${scale.toFixed(3)})`,
+            }}
+          >
+            <div className="dashboard-metric-cell-label">{item.label}</div>
+            <div className="dashboard-metric-cell-value">{item.value}</div>
+            {item.meta ? <div className="dashboard-metric-cell-meta">{item.meta}</div> : null}
+          </article>
+        );
+      })}
+    </div>
+  );
 }
 
 function PersonalCockpitPanel({
@@ -464,23 +671,10 @@ function PersonalCockpitPanel({
 }) {
   const bgUrl = getAvatarBackgroundUrl(user);
   const fallbackInitial = String(user?.username || user?.name || 'U').slice(0, 1).toUpperCase();
-  const midpoint = Math.ceil(stats.length / 2);
-  const leftStats = stats.slice(0, midpoint);
-  const rightStats = stats.slice(midpoint);
   const showWellnessLoader = wellnessLoading && !wellnessReady;
-
-  const renderStatTile = (item) => (
-    <article
-      key={item.label}
-      className="dashboard-stat-tile"
-      title={[item.label, item.value, item.meta].filter(Boolean).join(' · ')}
-      style={{ '--stat-accent': item.accent || theme.textHeading }}
-    >
-      <div className="dashboard-stat-tile-label">{item.label}</div>
-      <div className="dashboard-stat-tile-value">{item.value}</div>
-      {item.meta ? <div className="dashboard-stat-tile-meta">{item.meta}</div> : null}
-    </article>
-  );
+  const quote = user?.quote || 'Building better decisions, one signal at a time.';
+  const scoreStat = stats.find((item) => item.label === 'Score');
+  const metricStats = stats.filter((item) => item.label !== 'Score' && item.label !== 'Peak score');
 
   return (
     <section
@@ -506,55 +700,218 @@ function PersonalCockpitPanel({
           <div className="dashboard-cockpit-fallback" data-initial={fallbackInitial} />
         )}
         <div className="dashboard-cockpit-scrim" />
-        <div className="dashboard-cockpit-grid" />
       </div>
 
-      <div className="dashboard-cockpit-content">
-        <div className="dashboard-cockpit-topline">
-          <p className="dashboard-cockpit-topline-text">
-            {user?.quote || 'Building better decisions, one signal at a time.'}
-          </p>
-        </div>
+        <div className="dashboard-cockpit-content">
+          <QuoteBubble quote={quote} />
 
-        <div className="dashboard-cockpit-rails">
-          <div className="dashboard-cockpit-rail dashboard-cockpit-rail--left" aria-label="Left stats">
-            {leftStats.map(renderStatTile)}
+          <button
+            type="button"
+            className="dashboard-cockpit-mid"
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenWellness?.();
+            }}
+            aria-label="Open wellness dashboard"
+          >
+            <div className="dashboard-cockpit-scorecard">
+              <div className="dashboard-cockpit-scorecard-label">Wellness</div>
+              <div className="dashboard-cockpit-scorecard-value">{scoreStat?.value ?? '--'}</div>
+              <div className="dashboard-cockpit-scorecard-meta">{scoreStat?.meta || 'live score'}</div>
+            </div>
+            <div className="dashboard-cockpit-trend dashboard-cockpit-trend--mid">
+              <SectionLoadingShell loading={showWellnessLoader} label="Loading…" theme={theme} height={78}>
+                <FitWidthTrendChart
+                  points={trendPoints}
+                  theme={theme}
+                  emptyLabel="Add wellness entries"
+                  color="#38bdf8"
+                  height={70}
+                  gradientId="wellness-line-fill-cockpit"
+                  ariaLabel="Wellness score trend"
+                  compact
+                />
+              </SectionLoadingShell>
+            </div>
+          </button>
+
+          <div className="dashboard-cockpit-dock" onClick={(event) => event.stopPropagation()} role="presentation">
+            <MetricBubbleGrid items={metricStats} />
           </div>
-
-          <div className="dashboard-cockpit-center" aria-hidden="true" />
-
-          <div className="dashboard-cockpit-rail dashboard-cockpit-rail--right" aria-label="Right stats">
-            {rightStats.map(renderStatTile)}
-          </div>
         </div>
-
-        <div className="dashboard-cockpit-chart-panel" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()} role="presentation">
-          <div className="dashboard-cockpit-chart-head">
-            <div className="dashboard-cockpit-chart-title">Wellness trend</div>
-            {onOpenWellness ? (
-              <button type="button" className="dashboard-wellness-open" onClick={onOpenWellness}>Open →</button>
-            ) : null}
-          </div>
-          <SectionLoadingShell loading={showWellnessLoader} label="Loading wellness trend..." theme={theme} height={148}>
-            <ScrollableTrendChart
-              points={trendPoints}
-              theme={theme}
-              emptyLabel="Add wellness entries to see your trend"
-              color={theme.blue}
-              height={128}
-              gradientId="wellness-line-fill"
-              ariaLabel="Wellness score trend"
-            />
-          </SectionLoadingShell>
-        </div>
-      </div>
     </section>
   );
 }
 
-function ClubModuleLink({ module, variant, onNavigate }) {
-  const [hovered, setHovered] = useState(false);
+function buildSmoothTrendPath(coords) {
+  if (!coords.length) return '';
+  if (coords.length === 1) return `M ${coords[0].x} ${coords[0].y}`;
+  if (coords.length === 2) return `M ${coords[0].x} ${coords[0].y} L ${coords[1].x} ${coords[1].y}`;
 
+  let path = `M ${coords[0].x} ${coords[0].y}`;
+  for (let index = 0; index < coords.length - 1; index += 1) {
+    const p0 = coords[index === 0 ? 0 : index - 1];
+    const p1 = coords[index];
+    const p2 = coords[index + 1];
+    const p3 = coords[index + 2] || p2;
+    const cp1x = p1.x + ((p2.x - p0.x) / 6);
+    const cp1y = p1.y + ((p2.y - p0.y) / 6);
+    const cp2x = p2.x - ((p3.x - p1.x) / 6);
+    const cp2y = p2.y - ((p3.y - p1.y) / 6);
+    path += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`;
+  }
+  return path;
+}
+
+/** Compact trend that always fits container width — no horizontal scroll. */
+function FitWidthTrendChart({
+  points = [],
+  theme,
+  height = 68,
+  emptyLabel = 'No trend yet',
+  color,
+  gradientId = 'fit-trend-fill',
+  ariaLabel = 'Trend',
+  compact = false,
+  compactTitle = 'Trend',
+  deltaFormatter = null,
+}) {
+  const wrapRef = useRef(null);
+  const [width, setWidth] = useState(280);
+
+  useLayoutEffect(() => {
+    const node = wrapRef.current;
+    if (!node || typeof ResizeObserver === 'undefined') return undefined;
+    const sync = () => setWidth(Math.max(160, Math.floor(node.clientWidth)));
+    sync();
+    const observer = new ResizeObserver(sync);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  const displayPoints = compact && points.length > 18 ? points.slice(-18) : points;
+
+  if (!displayPoints.length) {
+    return (
+      <div ref={wrapRef} className="dashboard-fit-trend dashboard-fit-trend--empty" style={{ minHeight: height }}>
+        {emptyLabel}
+      </div>
+    );
+  }
+
+  const pad = compact
+    ? { left: 4, right: 8, top: 8, bottom: 14 }
+    : { left: 4, right: 4, top: 8, bottom: 14 };
+  const values = displayPoints.map((point) => Number(point.value || 0));
+  const rawMin = Math.min(...values);
+  const rawMax = Math.max(...values);
+  const rawRange = (rawMax - rawMin) || 1;
+  const yPad = Math.max(rawRange * 0.22, 0.8);
+  const min = rawMin - yPad;
+  const max = rawMax + yPad;
+  const range = max - min || 1;
+  const plotWidth = Math.max(1, width - pad.left - pad.right);
+  const plotHeight = height - pad.top - pad.bottom;
+  const spacing = displayPoints.length > 1 ? plotWidth / (displayPoints.length - 1) : plotWidth;
+  const xFor = (index) => pad.left + (index * spacing);
+  const yFor = (value) => pad.top + plotHeight - (((value - min) / range) * plotHeight);
+  const clampY = (value) => Math.min(pad.top + plotHeight, Math.max(pad.top, yFor(value)));
+  const lastIndex = displayPoints.length - 1;
+  const stroke = color || theme.blue || '#38bdf8';
+  const coords = values.map((value, index) => ({ x: xFor(index), y: clampY(value) }));
+  const linePath = buildSmoothTrendPath(coords);
+  const areaPath = `${linePath} L ${coords[lastIndex].x} ${pad.top + plotHeight} L ${coords[0].x} ${pad.top + plotHeight} Z`;
+  const strokeGrad = `${gradientId}-stroke`;
+  const glowId = `${gradientId}-glow`;
+  const first = Number(values[0]);
+  const last = Number(values[lastIndex]);
+  const delta = last - first;
+  const deltaLabel = typeof deltaFormatter === 'function'
+    ? deltaFormatter(delta)
+    : `${delta >= 0 ? '+' : ''}${delta.toFixed(1)}`;
+  const rising = delta >= 0;
+  const labelEvery = Math.max(1, Math.ceil(displayPoints.length / 5));
+
+  if (compact) {
+    return (
+      <div ref={wrapRef} className="dashboard-fit-trend dashboard-fit-trend--compact" role="img" aria-label={ariaLabel}>
+        <div className="dashboard-fit-trend-meta">
+          <span className="dashboard-fit-trend-meta-title">{compactTitle}</span>
+          <span className={`dashboard-fit-trend-delta ${rising ? 'is-up' : 'is-down'}`}>{deltaLabel}</span>
+        </div>
+        <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: 'block', width: '100%', height }}>
+          <defs>
+            <linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0%" stopColor="#7dd3fc" stopOpacity="0.38" />
+              <stop offset="70%" stopColor="#38bdf8" stopOpacity="0.08" />
+              <stop offset="100%" stopColor="#0ea5e9" stopOpacity="0" />
+            </linearGradient>
+            <linearGradient id={strokeGrad} x1="0" x2="1" y1="0" y2="0">
+              <stop offset="0%" stopColor="#67e8f9" />
+              <stop offset="100%" stopColor="#38bdf8" />
+            </linearGradient>
+            <filter id={glowId} x="-40%" y="-40%" width="180%" height="180%">
+              <feGaussianBlur stdDeviation="2.2" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+          <line x1={pad.left} y1={pad.top + plotHeight * 0.33} x2={width - pad.right} y2={pad.top + plotHeight * 0.33} stroke="rgba(255,255,255,0.12)" strokeWidth="1" />
+          <line x1={pad.left} y1={pad.top + plotHeight * 0.66} x2={width - pad.right} y2={pad.top + plotHeight * 0.66} stroke="rgba(255,255,255,0.1)" strokeWidth="1" />
+          <path d={areaPath} fill={`url(#${gradientId})`} />
+          <path
+            d={linePath}
+            fill="none"
+            stroke={`url(#${strokeGrad})`}
+            strokeWidth="2.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            filter={`url(#${glowId})`}
+          />
+          <circle cx={coords[lastIndex].x} cy={coords[lastIndex].y} r="5.5" fill="rgba(56,189,248,0.28)" />
+          <circle cx={coords[lastIndex].x} cy={coords[lastIndex].y} r="3" fill="#fff" stroke={stroke} strokeWidth="1.8" />
+          <text x={pad.left} y={height - 3} textAnchor="start" fill="rgba(248,250,252,0.78)" fontSize="8" fontWeight="700">
+            {displayPoints[0].label}
+          </text>
+          <text x={width - pad.right} y={height - 3} textAnchor="end" fill="rgba(248,250,252,0.78)" fontSize="8" fontWeight="700">
+            {displayPoints[lastIndex].label}
+          </text>
+        </svg>
+      </div>
+    );
+  }
+
+  const polyline = coords.map((point) => `${point.x},${point.y}`).join(' ');
+
+  return (
+    <div ref={wrapRef} className="dashboard-fit-trend" role="img" aria-label={ariaLabel}>
+      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: 'block', width: '100%', height }}>
+        <defs>
+          <linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="#67e8f9" stopOpacity="0.35" />
+            <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.02" />
+          </linearGradient>
+        </defs>
+        <polygon fill={`url(#${gradientId})`} points={`${coords[0].x},${pad.top + plotHeight} ${polyline} ${coords[lastIndex].x},${pad.top + plotHeight}`} />
+        <polyline fill="none" stroke={stroke} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" points={polyline} />
+        <circle cx={coords[lastIndex].x} cy={coords[lastIndex].y} r="3" fill="#fff" stroke={stroke} strokeWidth="1.5" />
+        {displayPoints.map((point, index) => {
+          if (index !== 0 && index !== lastIndex && index % labelEvery !== 0) return null;
+          return (
+            <text key={`lbl-${point.label}-${index}`} x={xFor(index)} y={height - 2} textAnchor="middle" fill="rgba(226,232,240,0.72)" fontSize="8">
+              {point.label}
+            </text>
+          );
+        })}
+      </svg>
+      <div className="dashboard-fit-trend-latest">{last.toFixed(1)}</div>
+    </div>
+  );
+}
+
+function ClubModuleLink({ module, variant, onNavigate }) {
   return (
     <button
       type="button"
@@ -563,24 +920,7 @@ function ClubModuleLink({ module, variant, onNavigate }) {
         event.stopPropagation();
         onNavigate(module.path);
       }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      onFocus={() => setHovered(true)}
-      onBlur={() => setHovered(false)}
-      style={{
-        fontSize: '10px',
-        fontWeight: 700,
-        padding: '6px 8px',
-        borderRadius: '999px',
-        textAlign: 'center',
-        cursor: 'pointer',
-        border: `1px solid ${hovered ? module.accent : 'transparent'}`,
-        background: hovered ? module.accent : 'rgba(255,255,255,0.12)',
-        color: '#fff',
-        transition: 'background 0.18s ease, border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease',
-        transform: hovered ? 'translateY(-1px)' : 'none',
-        boxShadow: hovered ? `0 8px 18px ${module.accent}55` : 'none',
-      }}
+      style={{ '--module-accent': module.accent || '#38bdf8' }}
     >
       {module.title}
     </button>
@@ -877,7 +1217,7 @@ function ScrollableTrendChart({
                 <rect x={pad.left} y={pad.top} width={plotWidth} height={plotHeight} />
               </clipPath>
             </defs>
-            <rect x={pad.left} y={pad.top} width={plotWidth} height={plotHeight} rx="10" fill="rgba(255,255,255,0.55)" stroke="rgba(148,163,184,0.22)" />
+            <rect x={pad.left} y={pad.top} width={plotWidth} height={plotHeight} rx="10" fill="rgba(2,6,23,0.55)" stroke="rgba(148,163,184,0.2)" />
             <line x1={pad.left} y1={zeroY} x2={width - pad.right} y2={zeroY} stroke={theme.graphGridLine} strokeDasharray="4 4" />
             {points.map((point, index) => {
               if (index !== 0 && index !== lastIndex && index % labelEvery !== 0) return null;
@@ -1182,7 +1522,7 @@ export default function Dashboard() {
   useEffect(() => {
     if (!router.isReady) return;
     const tabParam = String(router.query.tab || 'home').toLowerCase();
-    if (['home', 'threads', 'posts', 'buddies'].includes(tabParam)) {
+    if (['home', 'threads', 'posts'].includes(tabParam)) {
       setActiveTab(tabParam);
     } else {
       setActiveTab('home');
@@ -1640,15 +1980,12 @@ export default function Dashboard() {
     if (activeTab === 'threads') {
       loadThreadsBootstrap();
     }
-    if (activeTab === 'buddies') {
-      loadBuddyTrendRows();
-    }
     if (activeTab === 'posts') {
       loadFeedPosts();
       loadServerNotifications();
     }
     return undefined;
-  }, [user, activeTab, loadWellnessData, loadThreadsBootstrap, loadBuddyTrendRows, loadFeedPosts, loadServerNotifications]);
+  }, [user, activeTab, loadWellnessData, loadThreadsBootstrap, loadFeedPosts, loadServerNotifications]);
 
   useEffect(() => {
     if (!user || activeTab !== 'posts') return undefined;
@@ -1731,6 +2068,8 @@ export default function Dashboard() {
     };
   }, [wellnessData]);
 
+  const bestSplit = useMemo(() => resolveBestSplitFromInsights(stravaInsights), [stravaInsights]);
+
   const profileInsights = useMemo(() => ({
     currentWellnessScore: wellnessSummary.currentWellnessScore,
     maxWellnessScore: wellnessSummary.maxWellnessScore,
@@ -1744,37 +2083,59 @@ export default function Dashboard() {
     bestMonthlyKm: wellnessSummary.bestMonthlyKm,
     bestMonthlyLabel: wellnessSummary.bestMonthlyLabel,
     distanceBuckets: wellnessSummary.distanceBuckets,
-    bestSplitPaceMinPerKm: stravaInsights?.bestSplitPaceMinPerKm || null,
-    bestSplitRun: stravaInsights?.bestSplitRun || null,
+    bestSplitPaceMinPerKm: bestSplit.pace,
+    bestSplitRun: bestSplit.run,
+    bestSplitApprox: bestSplit.approx,
     plannedGoals: wellnessSummary.plannedGoals,
     completedGoals: wellnessSummary.completedGoals,
-  }), [wellnessSummary, stravaInsights]);
+  }), [wellnessSummary, bestSplit]);
 
   const primaryStats = useMemo(() => {
     const buckets = profileInsights.distanceBuckets || {};
     return [
-      { label: 'Wellness', value: displayStatNumber(profileInsights.currentWellnessScore, { hideZero: false }), accent: theme.blue },
-      { label: 'Best pace', value: displayPace(profileInsights.fastestRunPace), accent: theme.emerald, meta: displayBestPaceMeta(profileInsights.bestPaceRun) },
-      { label: 'Longest run', value: displayDistance(profileInsights.longestRun?.distanceKm), accent: theme.textHeading, meta: displayLongestRunMeta(profileInsights.longestRun) },
-      { label: 'Fastest split', value: displayPace(profileInsights.bestSplitPaceMinPerKm), accent: theme.cyan, meta: displayFastestSplitMeta(profileInsights.bestSplitRun) },
-      { label: 'Best week', value: displayDistance(profileInsights.bestWeeklyKm), accent: theme.orange, meta: profileInsights.bestWeeklyLabel ? `wk ${profileInsights.bestWeeklyLabel}` : 'peak week' },
-      { label: 'Best month', value: displayDistance(profileInsights.bestMonthlyKm), accent: theme.green, meta: profileInsights.bestMonthlyLabel || 'peak month' },
+      { label: 'Peak pace', value: displayPace(profileInsights.fastestRunPace), accent: '#34d399', meta: displayBestPaceMeta(profileInsights.bestPaceRun) },
+      { label: 'Longest run', value: displayDistance(profileInsights.longestRun?.distanceKm), accent: '#fbbf24', meta: displayLongestRunMeta(profileInsights.longestRun) },
       {
-        label: '5·10·15·20',
-        value: `${buckets.atLeast5 || 0}·${buckets.atLeast10 || 0}·${buckets.atLeast15 || 0}·${buckets.atLeast20 || 0}`,
-        accent: theme.purple || '#a78bfa',
-        meta: 'runs ≥ km',
+        label: 'Best split (1KM)',
+        value: displayPace(profileInsights.bestSplitPaceMinPerKm),
+        accent: '#38bdf8',
+        meta: displayFastestSplitMeta(
+          profileInsights.bestSplitRun?.date
+            ? profileInsights.bestSplitRun
+            : {
+                ...(profileInsights.bestSplitRun || {}),
+                date: profileInsights.bestPaceRun?.date || profileInsights.longestRun?.date || null,
+              },
+          profileInsights.bestSplitApprox,
+        ),
       },
-      { label: 'Lifetime km', value: displayDistance(profileInsights.totalRunningKm), accent: theme.green },
-      { label: 'Run streak', value: `${displayStatNumber(profileInsights.longestRunningStreak)}${displayStatNumber(profileInsights.longestRunningStreak) === '--' ? '' : 'd'}`, accent: theme.orange },
-      { label: 'Max wellness', value: displayStatNumber(profileInsights.maxWellnessScore, { hideZero: false }), accent: theme.cyan },
+      { label: 'Total km', value: displayDistance(profileInsights.totalRunningKm), accent: '#4ade80', meta: `${displayStatNumber(profileInsights.longestRunningStreak)}${displayStatNumber(profileInsights.longestRunningStreak) === '--' ? '' : 'd'} streak` },
+      { label: 'Score', value: displayStatNumber(profileInsights.currentWellnessScore, { hideZero: false }), accent: '#60a5fa', meta: `peak ${displayStatNumber(profileInsights.maxWellnessScore, { hideZero: false })}` },
+      { label: 'Top week', value: displayDistance(profileInsights.bestWeeklyKm), accent: '#fb923c', meta: profileInsights.bestWeeklyLabel ? `week of ${profileInsights.bestWeeklyLabel}` : 'best 7 days' },
+      { label: 'Top month', value: displayDistance(profileInsights.bestMonthlyKm), accent: '#2dd4bf', meta: profileInsights.bestMonthlyLabel || 'best calendar month' },
+      {
+        label: 'Distance mix',
+        value: `${buckets.atLeast5 || 0} / ${buckets.atLeast10 || 0} / ${buckets.atLeast15 || 0} / ${buckets.atLeast20 || 0}`,
+        accent: '#a78bfa',
+        meta: '5k · 10k · 15k · 20k+',
+      },
+      { label: 'Run streak', value: `${displayStatNumber(profileInsights.longestRunningStreak)}${displayStatNumber(profileInsights.longestRunningStreak) === '--' ? '' : ' days'}`, accent: '#f472b6', meta: 'longest consecutive' },
     ];
-  }, [profileInsights, theme]);
+  }, [profileInsights]);
   const marketCards = useMemo(() => (strategySummary.profitWindows.map((item) => ({
     ...item,
     value: formatCurrency(item.value),
     accent: item.value >= 0 ? theme.green : theme.red,
   }))), [strategySummary.profitWindows, theme]);
+
+  const marketTrendPoints = useMemo(() => {
+    const points = Array.isArray(strategySummary.profitTrend) ? strategySummary.profitTrend : [];
+    return points.slice(-24).map((point) => ({
+      label: point.label || String(point.date || '').slice(5) || '',
+      value: Number(point.value ?? point.cumulative ?? 0),
+      date: point.date,
+    }));
+  }, [strategySummary.profitTrend]);
 
   const comparisonTrendRows = useMemo(() => {
     const selfSeries = buildCumulativeSeries(wellnessData.dailyScores || []).slice(-14);
@@ -1972,15 +2333,31 @@ export default function Dashboard() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', padding: '24px', background: theme.pageBg, color: theme.textPrimary, fontFamily: theme.font }} className="dashboard-page">
+    <div
+      style={{
+        minHeight: '100vh',
+        padding: '24px 24px 96px',
+        background: '#020617',
+        color: theme.textPrimary,
+        fontFamily: theme.font,
+      }}
+      className="dashboard-page"
+    >
       <div className="dashboard-backdrop" aria-hidden="true" />
       <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Caveat:wght@500;600;700&display=swap');
         * { box-sizing: border-box; }
-        html, body, #__next { min-height: 100%; margin: 0; }
+        html, body, #__next { min-height: 100%; margin: 0; background: #020617; }
         .dashboard-page {
           position: relative;
           overflow-x: hidden;
+          background: #020617 !important;
+        }
+        .dashboard-shell {
+          position: relative;
+          z-index: 1;
           perspective: 1200px;
+          gap: 14px !important;
         }
         .dashboard-backdrop {
           position: fixed;
@@ -1988,24 +2365,21 @@ export default function Dashboard() {
           pointer-events: none;
           z-index: 0;
           background:
-            radial-gradient(ellipse 70% 45% at 12% -8%, rgba(56,189,248,0.16), transparent 55%),
-            radial-gradient(ellipse 55% 40% at 88% 8%, rgba(249,115,22,0.14), transparent 52%),
-            radial-gradient(ellipse 50% 35% at 50% 100%, rgba(34,197,94,0.1), transparent 55%);
+            radial-gradient(ellipse 70% 45% at 12% -8%, rgba(56,189,248,0.12), transparent 55%),
+            radial-gradient(ellipse 55% 40% at 88% 8%, rgba(249,115,22,0.1), transparent 52%),
+            radial-gradient(ellipse 50% 35% at 50% 100%, rgba(34,197,94,0.08), transparent 55%),
+            #020617;
         }
         .dashboard-backdrop::after {
           content: '';
           position: absolute;
           inset: 0;
-          opacity: 0.28;
+          opacity: 0.2;
           background-image:
-            linear-gradient(rgba(148,163,184,0.05) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(148,163,184,0.05) 1px, transparent 1px);
+            linear-gradient(rgba(148,163,184,0.04) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(148,163,184,0.04) 1px, transparent 1px);
           background-size: 44px 44px;
           mask-image: radial-gradient(ellipse 75% 65% at 50% 20%, black, transparent);
-        }
-        .dashboard-shell {
-          position: relative;
-          z-index: 1;
         }
         .dashboard-panel {
           position: relative;
@@ -2357,14 +2731,191 @@ export default function Dashboard() {
           font-weight: 900;
           border: 2px solid rgba(15,23,42,0.9);
         }
+        .dashboard-home-stage {
+          display: grid;
+          gap: 0;
+          border-radius: 28px;
+          border: 1px solid rgba(148,163,184,0.16);
+          background: #020617;
+          box-shadow: 0 28px 64px rgba(0,0,0,0.45);
+          overflow: hidden;
+        }
+        .dashboard-home-stage .dashboard-cockpit {
+          border: 0;
+          border-radius: 0;
+          box-shadow: none;
+          min-height: min(52vh, 440px);
+        }
+        .dashboard-home-body {
+          display: grid;
+          gap: 12px;
+          padding: 14px 12px 16px;
+          background: #020617;
+          border-top: 1px solid rgba(148,163,184,0.12);
+        }
+        .dashboard-home-clubs {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+        }
+        .dashboard-home-club {
+          width: 100%;
+          margin: 0;
+          padding: 14px;
+          border-radius: 18px;
+          border: 1px solid rgba(148,163,184,0.16);
+          background: linear-gradient(160deg, #111827 0%, #0f172a 55%, #020617 100%);
+          box-shadow: 0 14px 32px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.06);
+          cursor: pointer;
+          text-align: left;
+          font: inherit;
+          color: inherit;
+          display: grid;
+          gap: 10px;
+          min-width: 0;
+          transition: border-color 0.18s ease, transform 0.18s ease;
+        }
+        .dashboard-home-club:hover {
+          border-color: rgba(56,189,248,0.35);
+          transform: translateY(-1px);
+        }
+        .dashboard-home-club-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+        }
+        .dashboard-home-club-kicker {
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+          color: #38bdf8;
+        }
+        .dashboard-home-club-kicker.is-nifty { color: #4ade80; }
+        .dashboard-home-club-go {
+          font-size: 11px;
+          font-weight: 800;
+          color: #94a3b8;
+          white-space: nowrap;
+        }
+        .dashboard-home-club-title {
+          font-size: 16px;
+          font-weight: 900;
+          color: #f8fafc;
+          line-height: 1.15;
+        }
+        .dashboard-home-club-links {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 7px;
+        }
+        .dashboard-home-club .dashboard-club-module-link {
+          appearance: none;
+          width: 100%;
+          font: inherit;
+          border-radius: 12px;
+          padding: 9px 10px;
+          font-size: 10px;
+          font-weight: 800;
+          color: #e2e8f0;
+          background: rgba(2,6,23,0.85);
+          border: 1px solid rgba(148,163,184,0.18);
+          box-shadow: none;
+          text-align: left;
+          cursor: pointer;
+          transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
+        }
+        .dashboard-home-club .dashboard-club-module-link:hover,
+        .dashboard-home-club .dashboard-club-module-link:focus-visible {
+          background: var(--module-accent, #38bdf8);
+          border-color: var(--module-accent, #38bdf8);
+          color: #fff;
+          transform: translateY(-1px);
+          box-shadow: 0 10px 22px rgba(0,0,0,0.35);
+          filter: brightness(1.05);
+        }
+        .dashboard-home-market {
+          border-radius: 18px;
+          border: 1px solid rgba(148,163,184,0.16);
+          background: linear-gradient(160deg, #111827 0%, #0f172a 55%, #020617 100%);
+          box-shadow: 0 14px 32px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.06);
+          padding: 14px;
+          display: grid;
+          gap: 12px;
+          cursor: pointer;
+          min-width: 0;
+        }
+        .dashboard-home-market:hover {
+          border-color: rgba(74,222,128,0.3);
+        }
+        .dashboard-home-market-head {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 10px;
+        }
+        .dashboard-home-market-kicker {
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+          color: #4ade80;
+        }
+        .dashboard-home-market-title {
+          margin-top: 3px;
+          font-size: 17px;
+          font-weight: 900;
+          color: #f8fafc;
+          line-height: 1.15;
+        }
+        .dashboard-home-market-net {
+          text-align: right;
+        }
+        .dashboard-home-market-net-label {
+          font-size: 9px;
+          font-weight: 700;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          color: #94a3b8;
+        }
+        .dashboard-home-market-net-value {
+          font-size: 18px;
+          font-weight: 900;
+          line-height: 1.1;
+        }
+        .dashboard-home-market-chart {
+          border-radius: 14px;
+          border: 1px solid rgba(148,163,184,0.14);
+          background: #020617;
+          padding: 10px 10px 6px;
+          min-width: 0;
+        }
+        .dashboard-home-market-chart .dashboard-fit-trend-meta-title {
+          color: #94a3b8 !important;
+          text-shadow: none !important;
+        }
+        .dashboard-home-market-chart .dashboard-fit-trend-delta.is-up {
+          color: #bbf7d0 !important;
+          background: rgba(34,197,94,0.18) !important;
+          border-color: rgba(74,222,128,0.35) !important;
+        }
+        .dashboard-home-market-chart .dashboard-fit-trend-delta.is-down {
+          color: #fecaca !important;
+          background: rgba(239,68,68,0.18) !important;
+          border-color: rgba(248,113,113,0.35) !important;
+        }
+        .dashboard-home-market-metrics {
+          padding-top: 2px;
+        }
         .dashboard-cockpit {
           position: relative;
           overflow: hidden;
           border-radius: 24px;
-          min-height: 460px;
+          min-height: min(78vh, 640px);
+          height: auto;
           border: 1px solid rgba(148,163,184,0.16);
           box-shadow: 0 24px 56px rgba(0,0,0,0.38);
-          transform-style: preserve-3d;
         }
         .dashboard-cockpit-bg {
           position: absolute;
@@ -2377,16 +2928,19 @@ export default function Dashboard() {
           width: 100%;
           height: 100%;
           object-fit: cover;
-          object-position: center 18%;
-          filter: saturate(1.12) contrast(1.02);
+          object-position: center 28%;
+          filter: saturate(1.05) contrast(1.02) brightness(0.92);
+          transform: scale(1.04);
+          transform-origin: center 30%;
+          opacity: 1;
         }
         .dashboard-cockpit-fallback {
           position: absolute;
           inset: 0;
           background:
-            radial-gradient(circle at 30% 20%, rgba(56,189,248,0.35), transparent 45%),
-            radial-gradient(circle at 80% 30%, rgba(249,115,22,0.28), transparent 42%),
-            linear-gradient(160deg, #0f172a 0%, #1e293b 55%, #0b1220 100%);
+            radial-gradient(circle at 30% 20%, rgba(56,189,248,0.28), transparent 45%),
+            radial-gradient(circle at 80% 30%, rgba(249,115,22,0.2), transparent 42%),
+            linear-gradient(160deg, #334155 0%, #475569 55%, #1e293b 100%);
         }
         .dashboard-cockpit-fallback::after {
           content: attr(data-initial);
@@ -2403,213 +2957,412 @@ export default function Dashboard() {
           position: absolute;
           inset: 0;
           background:
-            linear-gradient(180deg, rgba(2,6,23,0.1) 0%, rgba(2,6,23,0.02) 48%, rgba(2,6,23,0.2) 100%),
-            linear-gradient(105deg, rgba(2,6,23,0.12) 0%, transparent 58%, rgba(2,6,23,0.08) 100%);
-        }
-        .dashboard-cockpit-grid {
-          position: absolute;
-          inset: 0;
-          opacity: 0.05;
-          background-image:
-            linear-gradient(rgba(148,163,184,0.08) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(148,163,184,0.08) 1px, transparent 1px);
-          background-size: 36px 36px;
-          mask-image: linear-gradient(180deg, black 10%, transparent 90%);
+            linear-gradient(180deg, rgba(15,23,42,0.35) 0%, rgba(15,23,42,0.12) 24%, transparent 48%, rgba(15,23,42,0.35) 72%, rgba(2,6,23,0.78) 100%);
         }
         .dashboard-cockpit-content {
           position: relative;
           z-index: 1;
           display: flex;
           flex-direction: column;
-          min-height: 460px;
-          padding: 10px 8px 12px;
-        }
-        .dashboard-cockpit-chart-panel {
-          margin-top: 8px;
-          padding: 10px 12px 8px;
-          border-radius: 16px;
-          border: 1px solid rgba(255,255,255,0.42);
-          background: linear-gradient(180deg, rgba(255,255,255,0.34), rgba(255,255,255,0.18));
-          backdrop-filter: blur(6px);
-          -webkit-backdrop-filter: blur(6px);
-          box-shadow: inset 0 1px 0 rgba(255,255,255,0.55);
-        }
-        .dashboard-cockpit-chart-panel .dashboard-wellness-chart-scroll {
-          border: 1px solid rgba(148,163,184,0.22);
-          background: rgba(255,255,255,0.38);
-        }
-        .dashboard-cockpit-chart-panel .dashboard-wellness-trend-key {
-          color: #64748b;
-        }
-        .dashboard-cockpit-chart-panel .dashboard-wellness-latest {
-          color: #0f172a;
-        }
-        .dashboard-cockpit-chart-panel .dashboard-wellness-chart-hint {
-          color: #64748b;
-        }
-        .dashboard-cockpit-chart-head {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 10px;
-          margin-bottom: 6px;
-        }
-        .dashboard-cockpit-chart-title {
-          font-size: 11px;
-          text-transform: uppercase;
-          letter-spacing: 0.12em;
-          color: #64748b;
-          font-weight: 800;
+          height: 100%;
+          min-height: 0;
+          padding: 12px 12px 10px;
+          transform-style: preserve-3d;
         }
         .dashboard-cockpit-topline {
           position: relative;
           z-index: 2;
           flex-shrink: 0;
           text-align: center;
-          padding: 4px 92px 8px;
-          pointer-events: none;
+          padding: 4px 10px 8px;
+          pointer-events: auto;
+          perspective: 900px;
+          transform-style: preserve-3d;
+          touch-action: pan-y;
         }
-        .dashboard-cockpit-topline-text {
-          display: inline-block;
-          margin: 0;
-          max-width: 100%;
-          padding: 7px 12px;
-          border-radius: 12px;
-          font-size: clamp(12px, 3.2vw, 16px);
-          font-weight: 800;
-          line-height: 1.35;
+        .dashboard-cockpit-quote {
+          margin: 0 auto;
+          max-width: 34ch;
+          font-family: 'Caveat', 'Segoe Print', 'Comic Sans MS', cursive;
+          font-size: clamp(26px, 6.2vw, 38px);
+          font-weight: 600;
+          line-height: 1.15;
           letter-spacing: 0.01em;
-          color: #fef3c7;
-          background: rgba(15,23,42,0.62);
-          border: 1px solid rgba(251,191,36,0.35);
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+          color: #e2e8f0;
+        }
+        .dashboard-cockpit-quote-text {
+          display: inline;
+          background: linear-gradient(105deg, #67e8f9 0%, #38bdf8 28%, #a78bfa 58%, #f472b6 82%, #34d399 100%);
+          -webkit-background-clip: text;
+          background-clip: text;
+          -webkit-text-fill-color: transparent;
+          color: transparent;
+          filter: drop-shadow(0 2px 8px rgba(2,6,23,0.55));
+        }
+        .dashboard-cockpit-quote--bubble {
+          position: relative;
+          isolation: isolate;
+          max-width: min(36ch, 100%);
+          padding: 12px 16px 14px;
+          border-radius: 22px;
+          border: 1px solid rgba(148,163,184,0.32);
+          background:
+            radial-gradient(120% 90% at 18% 0%, rgba(255,255,255,0.14), transparent 42%),
+            linear-gradient(155deg,
+              rgba(15,23,42,0.82) 0%,
+              rgba(15,23,42,0.62) 55%,
+              rgba(2,6,23,0.78) 100%);
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
+          box-shadow:
+            0 14px 28px rgba(0,0,0,0.32),
+            inset 0 1px 0 rgba(255,255,255,0.16),
+            inset 0 -1px 0 rgba(0,0,0,0.28);
+          color: inherit;
+          -webkit-text-fill-color: unset;
+          text-shadow: none;
+          transform-style: preserve-3d;
+          transform-origin: center center;
+          will-change: transform;
+          transition: box-shadow 0.2s ease;
+        }
+        .dashboard-cockpit-quote--bubble::before {
+          content: '';
+          position: absolute;
+          inset: 0;
+          border-radius: inherit;
+          pointer-events: none;
+          background:
+            radial-gradient(80% 55% at 20% 10%, rgba(255,255,255,0.2), transparent 50%),
+            linear-gradient(180deg, rgba(255,255,255,0.08) 0%, transparent 52%);
+        }
+        .dashboard-cockpit-face {
+          display: none;
+        }
+        .dashboard-cockpit-mid {
+          appearance: none;
+          width: 100%;
+          margin: 8px 0 0;
+          font: inherit;
+          color: inherit;
+          text-align: left;
+          cursor: pointer;
+          position: relative;
+          z-index: 2;
+          flex: 0 0 auto;
+          min-height: 0;
+          display: grid;
+          grid-template-columns: minmax(110px, 0.75fr) minmax(0, 1.45fr);
+          gap: 0;
+          align-items: stretch;
+          padding: 12px 12px 10px;
+          border-radius: 18px;
+          border: 1px solid rgba(148,163,184,0.28);
+          background:
+            linear-gradient(155deg,
+              rgba(15,23,42,0.78) 0%,
+              rgba(15,23,42,0.62) 55%,
+              rgba(2,6,23,0.72) 100%);
           backdrop-filter: blur(8px);
           -webkit-backdrop-filter: blur(8px);
-          box-shadow: 0 4px 16px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.1);
-          text-shadow: 0 1px 2px rgba(0,0,0,0.85);
+          box-shadow:
+            0 12px 26px rgba(0,0,0,0.28),
+            inset 0 1px 0 rgba(255,255,255,0.12),
+            inset 0 -1px 0 rgba(0,0,0,0.25);
+          overflow: hidden;
+          isolation: isolate;
         }
-        .dashboard-cockpit-rails {
-          display: grid;
-          grid-template-columns: auto minmax(0, 1fr) auto;
-          align-items: stretch;
-          gap: 6px;
-          flex: 1;
-          min-height: 300px;
+        .dashboard-cockpit-mid::before {
+          content: '';
+          position: absolute;
+          inset: 0;
+          border-radius: inherit;
+          pointer-events: none;
+          background: linear-gradient(180deg, rgba(255,255,255,0.06) 0%, transparent 50%);
+          z-index: 0;
         }
-        .dashboard-cockpit-rail {
+        .dashboard-cockpit-mid > * {
+          position: relative;
+          z-index: 1;
+        }
+        .dashboard-cockpit-mid:hover {
+          border-color: rgba(125,211,252,0.45);
+        }
+        .dashboard-cockpit-scorecard {
+          padding: 2px 12px 2px 2px;
+          border: 0;
+          border-right: 1px solid rgba(148,163,184,0.2);
+          border-radius: 0;
+          background: transparent;
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
+          box-shadow: none;
+          transform: none;
+          text-align: left;
           display: flex;
           flex-direction: column;
           justify-content: center;
-          gap: 5px;
-          width: 96px;
-          max-height: 300px;
-          overflow-y: auto;
-          overflow-x: hidden;
-          scrollbar-width: none;
-          -ms-overflow-style: none;
-        }
-        .dashboard-cockpit-rail::-webkit-scrollbar {
-          display: none;
-        }
-        .dashboard-cockpit-rail--left {
-          align-items: flex-start;
-        }
-        .dashboard-cockpit-rail--right {
-          align-items: flex-end;
-        }
-        .dashboard-cockpit-rail--right .dashboard-stat-tile {
-          border-left: 1px solid rgba(255,255,255,0.2);
-          border-right: 2px solid var(--stat-accent);
-        }
-        .dashboard-cockpit-center {
           min-width: 0;
         }
-        .dashboard-stat-tile {
-          --stat-accent: #38bdf8;
-          position: relative;
-          width: 84px;
-          max-width: 84px;
-          padding: 5px 6px 6px;
-          border-radius: 9px;
-          border: 1px solid rgba(255,255,255,0.24);
-          border-left: 2px solid var(--stat-accent);
-          background: linear-gradient(145deg, rgba(15,23,42,0.78), rgba(30,41,59,0.68));
-          backdrop-filter: blur(8px);
-          -webkit-backdrop-filter: blur(8px);
-          box-shadow: 0 4px 12px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.12);
-          flex-shrink: 0;
-          transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
-        }
-        .dashboard-stat-tile-label {
-          font-size: 7px;
+        .dashboard-cockpit-scorecard-label {
+          font-size: 10px;
           font-weight: 800;
-          letter-spacing: 0.03em;
+          letter-spacing: 0.08em;
           text-transform: uppercase;
           color: #e2e8f0;
-          text-shadow: none;
-          line-height: 1.2;
-          white-space: normal;
-          overflow: hidden;
-          display: -webkit-box;
-          -webkit-line-clamp: 2;
-          -webkit-box-orient: vertical;
+          text-shadow: 0 1px 3px rgba(0,0,0,0.45);
         }
-        .dashboard-stat-tile-value {
+        .dashboard-cockpit-scorecard-value {
           margin-top: 2px;
-          font-size: 12px;
+          font-size: clamp(34px, 9vw, 44px);
+          font-weight: 900;
+          line-height: 0.95;
+          color: #7dd3fc;
+          text-shadow: 0 2px 10px rgba(0,0,0,0.35);
+        }
+        .dashboard-cockpit-scorecard-meta {
+          margin-top: 4px;
+          font-size: 11px;
+          font-weight: 700;
+          color: #94a3b8;
+          text-shadow: 0 1px 3px rgba(0,0,0,0.4);
+        }
+        .dashboard-cockpit-dock {
+          position: relative;
+          z-index: 2;
+          display: grid;
+          gap: 8px;
+          margin-top: auto;
+          padding-top: 10px;
+          transform-style: preserve-3d;
+          perspective: 1100px;
+        }
+        .dashboard-cockpit-metrics {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 9px;
+          width: 100%;
+          margin: 0;
+          transform-style: preserve-3d;
+          touch-action: pan-y;
+        }
+        .dashboard-cockpit-metrics--bubbles {
+          perspective: 1100px;
+        }
+        .dashboard-metric-cell {
+          --stat-accent: #38bdf8;
+          position: relative;
+          overflow: hidden;
+          isolation: isolate;
+          min-width: 0;
+          padding: 10px 11px;
+          border-radius: 18px;
+          border: 1px solid rgba(148,163,184,0.28);
+          background:
+            radial-gradient(120% 90% at 18% 0%, rgba(255,255,255,0.16), transparent 42%),
+            linear-gradient(155deg,
+              rgba(15,23,42,0.82) 0%,
+              rgba(15,23,42,0.62) 55%,
+              rgba(2,6,23,0.78) 100%);
+          backdrop-filter: blur(8px);
+          -webkit-backdrop-filter: blur(8px);
+          box-shadow:
+            0 14px 28px rgba(0,0,0,0.32),
+            inset 0 1px 0 rgba(255,255,255,0.16),
+            inset 0 -1px 0 rgba(0,0,0,0.28);
+          text-align: left;
+          transform-style: preserve-3d;
+          transform-origin: center center;
+          will-change: transform;
+          transition: box-shadow 0.2s ease;
+        }
+        .dashboard-metric-cell--bubble {
+          border-radius: 22px;
+        }
+        .dashboard-metric-cell::before {
+          content: '';
+          position: absolute;
+          inset: 0;
+          border-radius: inherit;
+          pointer-events: none;
+          background:
+            radial-gradient(80% 55% at 20% 10%, rgba(255,255,255,0.22), transparent 50%),
+            linear-gradient(180deg, rgba(255,255,255,0.08) 0%, transparent 52%);
+        }
+        .dashboard-metric-cell::after {
+          content: '';
+          position: absolute;
+          right: 10%;
+          bottom: 12%;
+          width: 42%;
+          height: 34%;
+          border-radius: 50%;
+          pointer-events: none;
+          background: radial-gradient(circle, rgba(125,211,252,0.14), transparent 70%);
+          filter: blur(2px);
+        }
+        .dashboard-metric-cell > * {
+          position: relative;
+          z-index: 1;
+        }
+        .dashboard-metric-cell:nth-child(even) {
+          transform: none;
+        }
+        @media (hover: hover) and (pointer: fine) {
+          .dashboard-metric-cell:hover {
+            box-shadow:
+              0 18px 34px rgba(0,0,0,0.38),
+              inset 0 1px 0 rgba(255,255,255,0.2),
+              inset 0 -1px 0 rgba(0,0,0,0.25);
+          }
+        }
+        .dashboard-metric-cell-label {
+          font-size: 9px;
+          font-weight: 800;
+          letter-spacing: 0.05em;
+          text-transform: uppercase;
+          color: #e2e8f0;
+          text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+          line-height: 1.15;
+        }
+        .dashboard-metric-cell-value {
+          margin-top: 3px;
+          font-size: clamp(15px, 3.6vw, 18px);
           font-weight: 900;
           line-height: 1.1;
           color: var(--stat-accent);
-          text-shadow: none;
-          white-space: normal;
+          filter: drop-shadow(0 1px 2px rgba(0,0,0,0.35));
           word-break: break-word;
         }
-        .dashboard-stat-tile-meta {
-          margin-top: 2px;
-          font-size: 7px;
-          font-weight: 600;
-          color: #cbd5e1;
-          line-height: 1.2;
-          text-shadow: none;
-          white-space: normal;
-          overflow: hidden;
+        .dashboard-metric-cell-meta {
+          margin-top: 3px;
+          font-size: 10px;
+          font-weight: 700;
+          color: #94a3b8;
+          text-shadow: 0 1px 2px rgba(0,0,0,0.4);
+          line-height: 1.25;
           display: -webkit-box;
-          -webkit-line-clamp: 2;
+          -webkit-line-clamp: 1;
           -webkit-box-orient: vertical;
+          overflow: hidden;
         }
-        @media (hover: hover) and (pointer: fine) {
-          .dashboard-stat-tile:hover {
-            transform: translateY(-1px);
-            border-color: rgba(255,255,255,0.28);
-            box-shadow: 0 6px 14px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.14);
-          }
+        .dashboard-cockpit-trend {
+          appearance: none;
+          width: 100%;
+          margin: 0;
+          font: inherit;
+          color: inherit;
+          text-align: left;
+          cursor: inherit;
+          padding: 2px 2px 0 10px;
+          border: 0;
+          border-radius: 0;
+          background: transparent;
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
+          box-shadow: none;
+          min-width: 0;
+        }
+        .dashboard-cockpit-trend--mid {
+          transform: none;
+          align-self: stretch;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          min-height: 100%;
+        }
+        .dashboard-cockpit-trend--mid:hover,
+        .dashboard-cockpit-trend--mid:active {
+          border-color: transparent;
+          box-shadow: none;
+          transform: none;
+        }
+        .dashboard-fit-trend {
+          position: relative;
+          width: 100%;
+        }
+        .dashboard-fit-trend--empty {
+          display: grid;
+          place-items: center;
+          color: rgba(248,250,252,0.85);
+          font-size: 11px;
+          font-weight: 600;
+        }
+        .dashboard-fit-trend--compact {
+          display: grid;
+          gap: 0;
+        }
+        .dashboard-fit-trend-meta {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          margin-bottom: 0;
+        }
+        .dashboard-fit-trend-meta-title {
+          font-size: 9px;
+          font-weight: 800;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+          color: #94a3b8;
+          text-shadow: none;
+        }
+        .dashboard-fit-trend-delta {
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 0.02em;
+          padding: 2px 6px;
+          border-radius: 999px;
+          line-height: 1.2;
+        }
+        .dashboard-fit-trend-delta.is-up {
+          color: #d1fae5;
+          background: rgba(16,185,129,0.28);
+          border: 1px solid rgba(52,211,153,0.35);
+        }
+        .dashboard-fit-trend-delta.is-down {
+          color: #fecaca;
+          background: rgba(239,68,68,0.28);
+          border: 1px solid rgba(248,113,113,0.35);
+        }
+        .dashboard-fit-trend-latest {
+          position: absolute;
+          top: 0;
+          right: 2px;
+          font-size: 10px;
+          font-weight: 800;
+          color: #e0f2fe;
+          text-shadow: 0 1px 4px rgba(0,0,0,0.45);
+        }
+        .cosmix-mobile-nav--always {
+          display: block !important;
+          position: fixed !important;
+          left: 0 !important;
+          right: 0 !important;
+          bottom: 0 !important;
+          z-index: 1200 !important;
         }
         @media (min-width: 900px) {
-          .dashboard-cockpit-rail,
-          .dashboard-stat-tile {
-            width: 92px;
-            max-width: 92px;
-          }
           .dashboard-cockpit {
-            min-height: 520px;
+            height: auto;
+            min-height: min(70vh, 600px);
           }
-          .dashboard-cockpit-content {
-            min-height: 520px;
+          .dashboard-cockpit-quote {
+            font-size: 40px;
+            max-width: 36ch;
           }
-          .dashboard-cockpit-rails {
-            min-height: 360px;
+          .dashboard-cockpit-metrics {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
           }
-          .dashboard-cockpit-rail {
-            max-height: 360px;
+          .dashboard-metric-cell {
+            padding: 10px 12px;
           }
-          .dashboard-cockpit-topline {
-            padding-left: 100px;
-            padding-right: 100px;
-          }
-          .dashboard-stat-tile-label {
-            font-size: 7px;
-          }
-          .dashboard-stat-tile-value {
-            font-size: 13px;
+          .dashboard-metric-cell-value {
+            font-size: 17px;
           }
         }
         .dashboard-wellness-chart-shell {
@@ -2642,7 +3395,7 @@ export default function Dashboard() {
         .dashboard-wellness-latest {
           font-size: 12px;
           font-weight: 800;
-          color: #0f172a;
+          color: #e2e8f0;
         }
         .dashboard-wellness-chart-scroll {
           overflow-x: auto;
@@ -2653,8 +3406,8 @@ export default function Dashboard() {
           scrollbar-width: none;
           -ms-overflow-style: none;
           border-radius: 14px;
-          border: 1px solid rgba(148,163,184,0.22);
-          background: rgba(255,255,255,0.42);
+          border: 1px solid rgba(148,163,184,0.16);
+          background: rgba(2,6,23,0.72);
           cursor: grab;
           max-width: 100%;
         }
@@ -2674,15 +3427,15 @@ export default function Dashboard() {
         }
         .dashboard-wellness-chart-hint {
           font-size: 10px;
-          color: #64748b;
+          color: #94a3b8;
           text-align: right;
           padding-right: 2px;
         }
         .dashboard-wellness-open {
           appearance: none;
-          border: 1px solid rgba(148,163,184,0.28);
-          background: rgba(255,255,255,0.72);
-          color: #334155;
+          border: 1px solid rgba(148,163,184,0.22);
+          background: rgba(15,23,42,0.95);
+          color: #e2e8f0;
           border-radius: 999px;
           padding: 7px 12px;
           font-size: 11px;
@@ -2691,10 +3444,10 @@ export default function Dashboard() {
         }
         .dashboard-market-panel {
           border-radius: 24px;
-          border: 1px solid rgba(148,163,184,0.22);
-          background: rgba(255,255,255,0.68);
+          border: 1px solid rgba(148,163,184,0.16);
+          background: #0f172a;
           padding: 14px;
-          box-shadow: 0 16px 40px rgba(15,23,42,0.08);
+          box-shadow: 0 16px 40px rgba(0,0,0,0.28);
           display: grid;
           gap: 12px;
           cursor: pointer;
@@ -2702,10 +3455,8 @@ export default function Dashboard() {
         .dashboard-market-chart-panel {
           padding: 10px 12px 8px;
           border-radius: 16px;
-          border: 1px solid rgba(148,163,184,0.2);
-          background: linear-gradient(180deg, rgba(255,255,255,0.72), rgba(255,255,255,0.48));
-          backdrop-filter: blur(6px);
-          -webkit-backdrop-filter: blur(6px);
+          border: 1px solid rgba(148,163,184,0.14);
+          background: #020617;
         }
         .dashboard-market-chart-head {
           display: flex;
@@ -2719,7 +3470,7 @@ export default function Dashboard() {
           font-size: 11px;
           text-transform: uppercase;
           letter-spacing: 0.12em;
-          color: #64748b;
+          color: #94a3b8;
           font-weight: 800;
         }
         .dashboard-market-net {
@@ -2732,7 +3483,7 @@ export default function Dashboard() {
           font-size: 9px;
           text-transform: uppercase;
           letter-spacing: 0.08em;
-          color: #64748b;
+          color: #94a3b8;
           font-weight: 700;
         }
         .dashboard-market-net strong {
@@ -2741,8 +3492,12 @@ export default function Dashboard() {
         }
         @media (max-width: 1024px) {
           .dashboard-top-grid, .dashboard-market-grid, .dashboard-lower-grid { grid-template-columns: 1fr !important; }
+          .dashboard-home-clubs { grid-template-columns: 1fr !important; }
         }
         @media (max-width: 720px) {
+          .dashboard-home-stage { border-radius: 22px !important; }
+          .dashboard-home-body { padding: 10px !important; gap: 10px !important; }
+          .dashboard-home-stage .dashboard-cockpit { min-height: min(48vh, 420px) !important; }
           .dashboard-page { padding: 12px 12px 88px !important; }
           .dashboard-buddies-stack { gap: 12px !important; }
           .dashboard-buddy-grid { grid-template-columns: 1fr !important; gap: 12px !important; }
@@ -2788,28 +3543,18 @@ export default function Dashboard() {
             width: 44px !important;
             height: 44px !important;
           }
-          .dashboard-tab-row {
-            position: sticky;
-            top: 0;
-            z-index: 40;
-          }
-          .dashboard-tab-btn {
-            min-width: 0 !important;
-            width: 100% !important;
-            padding: 9px 4px !important;
-            font-size: 10px !important;
-          }
-          .dashboard-tab-icon { font-size: 16px !important; }
           .dashboard-module-grid, .dashboard-scorecard-grid, .dashboard-market-modules { grid-template-columns: 1fr !important; }
           .dashboard-club-grid { grid-template-columns: 1fr !important; }
-          .dashboard-cockpit { min-height: 340px !important; border-radius: 20px !important; }
-          .dashboard-cockpit-content { min-height: 340px !important; padding: 8px 6px !important; }
-          .dashboard-cockpit-topline { padding: 2px 84px 6px !important; }
-          .dashboard-cockpit-topline-text { font-size: 12px !important; padding: 6px 10px !important; }
-          .dashboard-cockpit-rails { min-height: 280px !important; gap: 4px !important; }
-          .dashboard-cockpit-rail { width: 88px !important; max-height: 280px !important; gap: 4px !important; }
-          .dashboard-stat-tile { width: 78px !important; max-width: 78px !important; padding: 4px 5px 5px !important; }
-          .dashboard-stat-tile-value { font-size: 11px !important; }
+          .dashboard-cockpit { height: auto !important; min-height: min(52vh, 440px) !important; border-radius: 20px !important; }
+          .dashboard-home-stage .dashboard-cockpit { min-height: min(48vh, 420px) !important; border-radius: 0 !important; }
+          .dashboard-cockpit-content { padding: 12px 10px 10px !important; }
+          .dashboard-cockpit-quote { font-size: 28px !important; }
+          .dashboard-cockpit-face { display: none !important; }
+          .dashboard-cockpit-mid { min-height: 0 !important; width: 100% !important; margin: 8px 0 0 !important; }
+          .dashboard-cockpit-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 9px !important; width: 100% !important; margin: 0 !important; }
+          .dashboard-metric-cell { padding: 10px 11px !important; }
+          .dashboard-metric-cell-value { font-size: 16px !important; }
+          .dashboard-metric-cell-meta { display: -webkit-box !important; }
           .dashboard-top-grid { gap: 12px !important; }
           .dashboard-wellness-chart-hint { text-align: center !important; }
         }
@@ -2856,18 +3601,11 @@ export default function Dashboard() {
         }
       `}</style>
 
-      <div className="dashboard-shell" style={{ maxWidth: '1320px', margin: '0 auto', display: 'grid', gap: '18px' }}>
+      <div className="dashboard-shell" style={{ maxWidth: '1320px', margin: '0 auto', display: 'grid', gap: '14px' }}>
         <DashboardHero
           user={user}
           theme={theme}
           notificationCount={notificationCount}
-          activeTab={activeTab}
-          onTabChange={(tabId) => {
-            setActiveTab(tabId);
-            if (router.isReady) {
-              router.push({ pathname: '/dashboard', query: { ...router.query, tab: tabId } }, undefined, { shallow: true });
-            }
-          }}
           onOpenNotifications={() => setShowNotifications(true)}
           onOpenSettings={() => { setShowNotifications(false); router.push('/settings'); }}
         />
@@ -2882,7 +3620,7 @@ export default function Dashboard() {
           onOpenFitstagram={openFitstagram}
         />
 
-        <section style={{ display: activeTab === 'home' ? 'grid' : 'none' }} className="dashboard-top-grid dashboard-top-grid--lead">
+        <section style={{ display: activeTab === 'home' ? 'grid' : 'none' }} className="dashboard-home-stage">
           <PersonalCockpitPanel
             user={user}
             theme={theme}
@@ -2893,67 +3631,104 @@ export default function Dashboard() {
             onOpenWellness={() => router.push('/wellness')}
             onOpenRunning={() => router.push('/running-analytics')}
           />
-        </section>
 
-        <section style={{ display: activeTab === 'home' ? 'grid' : 'none', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '16px' }} className="dashboard-top-grid">
-          <div
-            style={{ borderRadius: '24px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '14px', display: 'grid', gap: '10px', boxShadow: `0 18px 40px ${theme.shadow}` }}
-            className="dashboard-panel dashboard-glass"
-            role="button"
-            tabIndex={0}
-            onClick={() => router.push('/wellness')}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') router.push('/wellness');
-            }}
-          >
-            <div style={{ fontSize: '11px', letterSpacing: '0.12em', textTransform: 'uppercase', color: theme.textMuted, fontWeight: 800 }}>Wellness Club</div>
-            <div style={{ position: 'relative' }}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src="https://images.unsplash.com/photo-1517836357463-d25dfeac3438?auto=format&fit=crop&w=1200&q=80"
-                alt="Live fitness training"
-                style={{ width: '100%', height: '160px', borderRadius: '16px', objectFit: 'cover', border: `1px solid ${theme.cardBorder}` }}
-              />
-              <div style={{ position: 'absolute', left: '16px', bottom: '16px', right: '16px', display: 'grid', gap: '8px', padding: '10px', borderRadius: '18px', background: 'rgba(15,23,42,0.72)' }}>
-                <div style={{ fontSize: '11px', fontWeight: 800, color: '#fff', letterSpacing: '0.08em' }}>Wellness modules</div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px' }}>
-                  {wellnessClubModules.map((item) => (
+          <div className="dashboard-home-body">
+            <div className="dashboard-home-clubs">
+              <div
+                className="dashboard-home-club"
+                role="button"
+                tabIndex={0}
+                onClick={() => router.push('/wellness')}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') router.push('/wellness');
+                }}
+                aria-label="Open wellness club"
+              >
+                <div className="dashboard-home-club-head">
+                  <div className="dashboard-home-club-kicker">Wellness</div>
+                  <div className="dashboard-home-club-go">Open →</div>
+                </div>
+                <div className="dashboard-home-club-title">Training & recovery</div>
+                <div className="dashboard-home-club-links">
+                  {wellnessClubModules.slice(0, 4).map((item) => (
                     <ClubModuleLink key={item.title} module={item} variant="wellness" onNavigate={(path) => router.push(path)} />
                   ))}
                 </div>
               </div>
-            </div>
-            <div style={{ fontSize: '13px', color: theme.textSecondary, lineHeight: 1.45 }}>Live wellness program shortcuts, quick access to workouts, recovery plans, and coach guidance.</div>
-          </div>
 
-          <div
-            style={{ borderRadius: '24px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '14px', display: 'grid', gap: '10px', boxShadow: `0 18px 40px ${theme.shadow}` }}
-            className="dashboard-panel dashboard-glass"
-            role="button"
-            tabIndex={0}
-            onClick={() => router.push('/nifty-strategies')}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') router.push('/nifty-strategies');
-            }}
-          >
-            <div style={{ fontSize: '11px', letterSpacing: '0.12em', textTransform: 'uppercase', color: theme.textMuted, fontWeight: 800 }}>Nifty Club</div>
-            <div style={{ position: 'relative' }}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src="https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?auto=format&fit=crop&w=1200&q=80"
-                alt="Stock market dashboard"
-                style={{ width: '100%', height: '160px', borderRadius: '16px', objectFit: 'cover', border: `1px solid ${theme.cardBorder}` }}
-              />
-              <div style={{ position: 'absolute', left: '16px', bottom: '16px', right: '16px', display: 'grid', gap: '8px', padding: '10px', borderRadius: '18px', background: 'rgba(15,23,42,0.72)' }}>
-                <div style={{ fontSize: '11px', fontWeight: 800, color: '#fff', letterSpacing: '0.08em' }}>Nifty modules</div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px' }}>
-                  {niftyClubModules.map((item) => (
+              <div
+                className="dashboard-home-club"
+                role="button"
+                tabIndex={0}
+                onClick={() => router.push('/nifty-strategies')}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') router.push('/nifty-strategies');
+                }}
+                aria-label="Open nifty club"
+              >
+                <div className="dashboard-home-club-head">
+                  <div className="dashboard-home-club-kicker is-nifty">Nifty</div>
+                  <div className="dashboard-home-club-go">Open →</div>
+                </div>
+                <div className="dashboard-home-club-title">Strategies & markets</div>
+                <div className="dashboard-home-club-links">
+                  {niftyClubModules.slice(0, 4).map((item) => (
                     <ClubModuleLink key={item.title} module={item} variant="nifty" onNavigate={(path) => router.push(path)} />
                   ))}
                 </div>
               </div>
             </div>
-            <div style={{ fontSize: '13px', color: theme.textSecondary, lineHeight: 1.45 }}>Market and strategy shortcuts for quick entries, trend checks, and live trade ideas.</div>
+
+            <div
+              className="dashboard-home-market"
+              role="button"
+              tabIndex={0}
+              onClick={() => router.push('/nifty-strategies')}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') router.push('/nifty-strategies');
+              }}
+            >
+              <div className="dashboard-home-market-head">
+                <div>
+                  <div className="dashboard-home-market-kicker">Market</div>
+                  <div className="dashboard-home-market-title">P/L overview</div>
+                </div>
+                <div className="dashboard-home-market-net">
+                  <div className="dashboard-home-market-net-label">Net P/L</div>
+                  <div
+                    className="dashboard-home-market-net-value"
+                    style={{ color: strategySummary.totalPnl >= 0 ? theme.green : theme.red }}
+                  >
+                    {formatCurrency(strategySummary.totalPnl)}
+                  </div>
+                </div>
+              </div>
+
+              <div
+                className="dashboard-home-market-chart"
+                onClick={(event) => event.stopPropagation()}
+                role="presentation"
+              >
+                <SectionLoadingShell loading={showStrategiesSectionLoader} label="Loading market trend..." theme={theme} height={128}>
+                  <FitWidthTrendChart
+                    points={marketTrendPoints}
+                    theme={theme}
+                    emptyLabel="Close trades to surface your P/L trend"
+                    color={strategySummary.totalPnl >= 0 ? (theme.emerald || '#34d399') : theme.red}
+                    height={116}
+                    gradientId="market-line-fill-home"
+                    ariaLabel="Cumulative P/L trend"
+                    compact
+                    compactTitle="P/L trend"
+                    deltaFormatter={(value) => formatCurrency(value)}
+                  />
+                </SectionLoadingShell>
+              </div>
+
+              <div className="dashboard-home-market-metrics" onClick={(event) => event.stopPropagation()} role="presentation">
+                <MetricGrid items={marketCards} theme={theme} tone="dark" />
+              </div>
+            </div>
           </div>
         </section>
 
@@ -3117,71 +3892,46 @@ export default function Dashboard() {
           </button>
         </section>
 
-        <section style={{ display: activeTab === 'home' ? 'grid' : 'none' }} className="dashboard-market-grid">
-          <div
-            className="dashboard-panel dashboard-glass dashboard-market-panel"
-            role="button"
-            tabIndex={0}
-            onClick={() => router.push('/nifty-strategies')}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') router.push('/nifty-strategies');
-            }}
-          >
-            <div
-              className="dashboard-market-chart-panel"
-              onClick={(event) => event.stopPropagation()}
-              onKeyDown={(event) => event.stopPropagation()}
-              role="presentation"
-            >
-              <div className="dashboard-market-chart-head">
-                <div className="dashboard-market-chart-title">Market overview</div>
-                <div className="dashboard-market-net">
-                  <span className="dashboard-market-net-label">Net P/L</span>
-                  <strong style={{ color: strategySummary.totalPnl >= 0 ? theme.green : theme.red }}>
-                    {formatCurrency(strategySummary.totalPnl)}
-                  </strong>
-                </div>
-                <button
-                  type="button"
-                  className="dashboard-wellness-open"
-                  onClick={() => router.push('/nifty-strategies')}
-                >
-                  Open →
-                </button>
-              </div>
-
-              <SectionLoadingShell loading={showStrategiesSectionLoader} label="Loading market trend..." theme={theme} height={168}>
-                <ScrollableTrendChart
-                  points={strategySummary.profitTrend}
-                  theme={theme}
-                  variant="profit"
-                  emptyLabel="Close trades to surface your cumulative P/L trend"
-                  color={strategySummary.totalPnl >= 0 ? theme.emerald : theme.red}
-                  height={148}
-                  gradientId="market-line-fill"
-                  annotationFormatter={(value) => formatCurrency(value)}
-                  ariaLabel="Cumulative P/L trend"
-                  hintText="Scroll up/down or drag sideways for older trading days"
-                />
-              </SectionLoadingShell>
-            </div>
-
-            <MetricGrid items={marketCards} theme={theme} />
-          </div>
-        </section>
-
       </div>
 
       <MobileBottomNav
         theme={theme}
+        alwaysVisible
         activeId={activeTab}
         items={[
-          { id: 'home', label: 'Home', icon: '🏠', onClick: () => { setActiveTab('home'); if (router.isReady) router.push({ pathname: '/dashboard', query: { tab: 'home' } }, undefined, { shallow: true }); } },
-          { id: 'threads', label: 'Threads', icon: '🧵', onClick: () => { setActiveTab('threads'); if (router.isReady) router.push({ pathname: '/dashboard', query: { tab: 'threads' } }, undefined, { shallow: true }); } },
-          { id: 'posts', label: 'Posts', icon: '📷', onClick: () => { setActiveTab('posts'); if (router.isReady) router.push({ pathname: '/dashboard', query: { tab: 'posts' } }, undefined, { shallow: true }); } },
-          { id: 'buddies', label: 'Buddies', icon: '👥', onClick: () => { setActiveTab('buddies'); if (router.isReady) router.push({ pathname: '/dashboard', query: { tab: 'buddies' } }, undefined, { shallow: true }); } },
-          { id: 'nifty', label: 'Nifty', icon: '📊', href: '/nifty-strategies' },
-          { id: 'wellness', label: 'Well', icon: '💪', href: '/wellness' },
+          {
+            id: 'home',
+            label: 'Home',
+            icon: '🏠',
+            onClick: () => {
+              setActiveTab('home');
+              if (router.isReady) router.push({ pathname: '/dashboard', query: { tab: 'home' } }, undefined, { shallow: true });
+            },
+          },
+          {
+            id: 'threads',
+            label: 'Threads',
+            icon: '🧵',
+            onClick: () => {
+              setActiveTab('threads');
+              if (router.isReady) router.push({ pathname: '/dashboard', query: { tab: 'threads' } }, undefined, { shallow: true });
+            },
+          },
+          {
+            id: 'posts',
+            label: 'Fitstagram',
+            icon: '📷',
+            onClick: () => {
+              setActiveTab('posts');
+              if (router.isReady) router.push({ pathname: '/dashboard', query: { tab: 'posts' } }, undefined, { shallow: true });
+            },
+          },
+          {
+            id: 'running',
+            label: 'Running',
+            icon: '🏃',
+            href: '/running-analytics',
+          },
         ]}
       />
     </div>

@@ -1,6 +1,7 @@
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import { useEffect, useState } from 'react';
+import { CosmixLoader } from '../lib/CosmixLoader';
 import { InstallAppPrompt } from '../lib/InstallAppPrompt';
 import { registerPwaServiceWorker } from '../lib/pwa';
 
@@ -15,24 +16,14 @@ function RouteLoader({ active }) {
           opacity: active ? 1 : 0,
           transition: 'opacity 180ms ease',
           zIndex: 9999,
-          display: 'grid',
-          placeItems: 'center',
-          background: 'radial-gradient(circle at top, rgba(34,197,94,0.15), transparent 24%), radial-gradient(circle at 80% 20%, rgba(14,165,233,0.18), transparent 20%), rgba(2,6,23,0.42)',
-          backdropFilter: 'blur(10px)',
         }}
         aria-hidden={!active}
       >
-        <div style={{ display: 'grid', gap: '14px', justifyItems: 'center' }}>
-          <div style={{ position: 'relative', width: '110px', height: '110px' }}>
-            <div className="cosmix-loader-orbit cosmix-loader-orbit-a" />
-            <div className="cosmix-loader-orbit cosmix-loader-orbit-b" />
-            <div className="cosmix-loader-core">CMX</div>
-          </div>
-          <div style={{ display: 'grid', gap: '6px', justifyItems: 'center' }}>
-            <div style={{ fontSize: '12px', letterSpacing: '0.22em', textTransform: 'uppercase', color: 'rgba(226,232,240,0.72)', fontWeight: 800 }}>Loading workspace</div>
-            <div style={{ fontSize: '14px', color: '#f8fafc', fontWeight: 700 }}>Pulling your next cockpit into view...</div>
-          </div>
-        </div>
+        <CosmixLoader
+          variant="overlay"
+          label="Loading workspace"
+          sublabel="Pulling your next cockpit into view..."
+        />
       </div>
       <div
         style={{
@@ -45,8 +36,8 @@ function RouteLoader({ active }) {
           transform: active ? 'scaleX(1)' : 'scaleX(0)',
           transformOrigin: 'left center',
           transition: active ? 'transform 1.2s cubic-bezier(0.22, 1, 0.36, 1)' : 'transform 160ms ease-out',
-          background: 'linear-gradient(90deg, #22c55e 0%, #06b6d4 45%, #f59e0b 100%)',
-          boxShadow: '0 0 18px rgba(6,182,212,0.45)',
+          background: 'linear-gradient(90deg, #34d399 0%, #38bdf8 45%, #a78bfa 100%)',
+          boxShadow: '0 0 18px rgba(56,189,248,0.45)',
         }}
       />
     </>
@@ -108,44 +99,6 @@ export default function App({ Component, pageProps }) {
         *, *::before, *::after { box-sizing: border-box; }
         html, body, #__next { max-width: 100%; overflow-x: hidden; }
         body { margin: 0; }
-        .cosmix-loader-orbit {
-          position: absolute;
-          inset: 0;
-          border-radius: 999px;
-          border: 2px solid transparent;
-        }
-        .cosmix-loader-orbit-a {
-          border-top-color: rgba(34, 197, 94, 0.95);
-          border-right-color: rgba(6, 182, 212, 0.9);
-          animation: cosmixSpin 1.15s linear infinite;
-        }
-        .cosmix-loader-orbit-b {
-          inset: 12px;
-          border-bottom-color: rgba(245, 158, 11, 0.95);
-          border-left-color: rgba(59, 130, 246, 0.9);
-          animation: cosmixSpinReverse 1.4s linear infinite;
-        }
-        .cosmix-loader-core {
-          position: absolute;
-          inset: 28px;
-          display: grid;
-          place-items: center;
-          border-radius: 999px;
-          background: linear-gradient(135deg, rgba(15,23,42,0.96), rgba(30,41,59,0.94));
-          color: #f8fafc;
-          font-size: 18px;
-          font-weight: 900;
-          letter-spacing: 0.14em;
-          box-shadow: 0 0 0 1px rgba(148,163,184,0.16), 0 18px 40px rgba(15,23,42,0.28);
-        }
-        @keyframes cosmixSpin {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
-        }
-        @keyframes cosmixSpinReverse {
-          from { transform: rotate(360deg); }
-          to { transform: rotate(0deg); }
-        }
         @media (max-width: 640px) {
           button, input, select, textarea {
             font-size: 14px;
@@ -212,6 +165,7 @@ export default function App({ Component, pageProps }) {
         @media (max-width: 720px) {
           .cosmix-mobile-nav { display: block; }
         }
+        .cosmix-mobile-nav--always { display: block; }
       `}</style>
       <RouteLoader active={routeLoading} />
       <InstallAppPrompt />

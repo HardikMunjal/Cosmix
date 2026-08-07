@@ -32,7 +32,7 @@ function navigateToHref(router, href) {
   }
 }
 
-export function MobileBottomNav({ theme, items = [], activeId, hideSpacer = false }) {
+export function MobileBottomNav({ theme, items = [], activeId, hideSpacer = false, alwaysVisible = false }) {
   const router = useRouter();
   const [hydrated, setHydrated] = useState(false);
 
@@ -71,7 +71,7 @@ export function MobileBottomNav({ theme, items = [], activeId, hideSpacer = fals
     <>
       {!hideSpacer ? <div className="cosmix-mobile-nav-spacer" aria-hidden="true" /> : null}
       <nav
-        className="cosmix-mobile-nav"
+        className={`cosmix-mobile-nav${alwaysVisible ? ' cosmix-mobile-nav--always' : ''}`}
         aria-label="Main navigation"
         style={navStyle}
         suppressHydrationWarning
