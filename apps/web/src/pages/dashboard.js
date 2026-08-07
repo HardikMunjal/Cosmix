@@ -725,11 +725,11 @@ function PersonalCockpitPanel({
                   points={trendPoints}
                   theme={theme}
                   emptyLabel="Add wellness entries"
-                  color="#38bdf8"
                   height={70}
                   gradientId="wellness-line-fill-cockpit"
                   ariaLabel="Wellness score trend"
                   compact
+                  palette="wellness"
                 />
               </SectionLoadingShell>
             </div>
@@ -775,6 +775,7 @@ function FitWidthTrendChart({
   compact = false,
   compactTitle = 'Trend',
   deltaFormatter = null,
+  palette = 'wellness',
 }) {
   const wrapRef = useRef(null);
   const [width, setWidth] = useState(280);
@@ -817,20 +818,34 @@ function FitWidthTrendChart({
   const yFor = (value) => pad.top + plotHeight - (((value - min) / range) * plotHeight);
   const clampY = (value) => Math.min(pad.top + plotHeight, Math.max(pad.top, yFor(value)));
   const lastIndex = displayPoints.length - 1;
-  const stroke = color || theme.blue || '#38bdf8';
+  const first = Number(values[0]);
+  const last = Number(values[lastIndex]);
+  const delta = last - first;
+  const rising = delta >= 0;
+  const strokePalettes = {
+    wellness: ['#67e8f9', '#38bdf8', '#818cf8', '#e879f9'],
+    marketUp: ['#34d399', '#2dd4bf', '#38bdf8', '#60a5fa'],
+    marketDown: ['#fbbf24', '#fb7185', '#f472b6', '#e879f9'],
+  };
+  const resolvedPalette = palette === 'market'
+    ? (rising ? strokePalettes.marketUp : strokePalettes.marketDown)
+    : (strokePalettes[palette] || strokePalettes.wellness);
+  const stroke = color || resolvedPalette[2] || theme.blue || '#38bdf8';
   const coords = values.map((value, index) => ({ x: xFor(index), y: clampY(value) }));
   const linePath = buildSmoothTrendPath(coords);
   const areaPath = `${linePath} L ${coords[lastIndex].x} ${pad.top + plotHeight} L ${coords[0].x} ${pad.top + plotHeight} Z`;
   const strokeGrad = `${gradientId}-stroke`;
   const glowId = `${gradientId}-glow`;
-  const first = Number(values[0]);
-  const last = Number(values[lastIndex]);
-  const delta = last - first;
   const deltaLabel = typeof deltaFormatter === 'function'
     ? deltaFormatter(delta)
     : `${delta >= 0 ? '+' : ''}${delta.toFixed(1)}`;
-  const rising = delta >= 0;
   const labelEvery = Math.max(1, Math.ceil(displayPoints.length / 5));
+  const strokeStops = [
+    { offset: '0%', color: resolvedPalette[0] },
+    { offset: '35%', color: resolvedPalette[1] },
+    { offset: '70%', color: resolvedPalette[2] },
+    { offset: '100%', color: resolvedPalette[3] },
+  ];
 
   if (compact) {
     return (
@@ -842,13 +857,14 @@ function FitWidthTrendChart({
         <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: 'block', width: '100%', height }}>
           <defs>
             <linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1">
-              <stop offset="0%" stopColor="#7dd3fc" stopOpacity="0.38" />
-              <stop offset="70%" stopColor="#38bdf8" stopOpacity="0.08" />
-              <stop offset="100%" stopColor="#0ea5e9" stopOpacity="0" />
+              <stop offset="0%" stopColor={resolvedPalette[1]} stopOpacity="0.4" />
+              <stop offset="55%" stopColor={resolvedPalette[2]} stopOpacity="0.12" />
+              <stop offset="100%" stopColor={resolvedPalette[3]} stopOpacity="0" />
             </linearGradient>
             <linearGradient id={strokeGrad} x1="0" x2="1" y1="0" y2="0">
-              <stop offset="0%" stopColor="#67e8f9" />
-              <stop offset="100%" stopColor="#38bdf8" />
+              {strokeStops.map((stop) => (
+                <stop key={stop.offset} offset={stop.offset} stopColor={stop.color} />
+              ))}
             </linearGradient>
             <filter id={glowId} x="-40%" y="-40%" width="180%" height="180%">
               <feGaussianBlur stdDeviation="2.2" result="blur" />
@@ -870,8 +886,8 @@ function FitWidthTrendChart({
             strokeLinejoin="round"
             filter={`url(#${glowId})`}
           />
-          <circle cx={coords[lastIndex].x} cy={coords[lastIndex].y} r="5.5" fill="rgba(56,189,248,0.28)" />
-          <circle cx={coords[lastIndex].x} cy={coords[lastIndex].y} r="3" fill="#fff" stroke={stroke} strokeWidth="1.8" />
+          <circle cx={coords[lastIndex].x} cy={coords[lastIndex].y} r="5.5" fill={`${resolvedPalette[2]}55`} />
+          <circle cx={coords[lastIndex].x} cy={coords[lastIndex].y} r="3" fill="#fff" stroke={resolvedPalette[3]} strokeWidth="1.8" />
           <text x={pad.left} y={height - 3} textAnchor="start" fill="rgba(248,250,252,0.78)" fontSize="8" fontWeight="700">
             {displayPoints[0].label}
           </text>
@@ -890,13 +906,18 @@ function FitWidthTrendChart({
       <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: 'block', width: '100%', height }}>
         <defs>
           <linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="#67e8f9" stopOpacity="0.35" />
-            <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.02" />
+            <stop offset="0%" stopColor={resolvedPalette[1]} stopOpacity="0.38" />
+            <stop offset="100%" stopColor={resolvedPalette[3]} stopOpacity="0.02" />
+          </linearGradient>
+          <linearGradient id={strokeGrad} x1="0" x2="1" y1="0" y2="0">
+            {strokeStops.map((stop) => (
+              <stop key={stop.offset} offset={stop.offset} stopColor={stop.color} />
+            ))}
           </linearGradient>
         </defs>
         <polygon fill={`url(#${gradientId})`} points={`${coords[0].x},${pad.top + plotHeight} ${polyline} ${coords[lastIndex].x},${pad.top + plotHeight}`} />
-        <polyline fill="none" stroke={stroke} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" points={polyline} />
-        <circle cx={coords[lastIndex].x} cy={coords[lastIndex].y} r="3" fill="#fff" stroke={stroke} strokeWidth="1.5" />
+        <polyline fill="none" stroke={`url(#${strokeGrad})`} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" points={polyline} />
+        <circle cx={coords[lastIndex].x} cy={coords[lastIndex].y} r="3" fill="#fff" stroke={resolvedPalette[3]} strokeWidth="1.5" />
         {displayPoints.map((point, index) => {
           if (index !== 0 && index !== lastIndex && index % labelEvery !== 0) return null;
           return (
@@ -3714,13 +3735,13 @@ export default function Dashboard() {
                     points={marketTrendPoints}
                     theme={theme}
                     emptyLabel="Close trades to surface your P/L trend"
-                    color={strategySummary.totalPnl >= 0 ? (theme.emerald || '#34d399') : theme.red}
                     height={116}
                     gradientId="market-line-fill-home"
                     ariaLabel="Cumulative P/L trend"
                     compact
                     compactTitle="P/L trend"
                     deltaFormatter={(value) => formatCurrency(value)}
+                    palette="market"
                   />
                 </SectionLoadingShell>
               </div>

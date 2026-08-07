@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { CosmixLoader } from '../lib/CosmixLoader';
 import { InstallAppPrompt } from '../lib/InstallAppPrompt';
 import { registerPwaServiceWorker } from '../lib/pwa';
+import '../lib/CosmixLoader.css';
 
 function RouteLoader({ active }) {
   return (
