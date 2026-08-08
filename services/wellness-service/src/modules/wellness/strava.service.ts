@@ -534,8 +534,10 @@ export class StravaService {
   }
 
   private summarizeCadenceMetrics(streams: Record<string, any[]> | null, detail: any = {}) {
-    const cadence = Array.isArray(streams?.cadence) ? streams.cadence.map((v) => Number(v) || 0).filter((v) => v > 20) : [];
-    const stride = Array.isArray(streams?.strideLengthM) ? streams.strideLengthM.map((v) => Number(v) || 0).filter((v) => v > 0.4 && v < 2.5) : [];
+    const cadenceSrc = streams?.cadence;
+    const strideSrc = streams?.strideLengthM;
+    const cadence = Array.isArray(cadenceSrc) ? cadenceSrc.map((v) => Number(v) || 0).filter((v) => v > 20) : [];
+    const stride = Array.isArray(strideSrc) ? strideSrc.map((v) => Number(v) || 0).filter((v) => v > 0.4 && v < 2.5) : [];
     const avgCadence = cadence.length
       ? Math.round(cadence.reduce((sum, v) => sum + v, 0) / cadence.length)
       : (Number(detail?.average_cadence) > 0 ? Math.round(Number(detail.average_cadence)) : null);
@@ -599,8 +601,10 @@ export class StravaService {
   /** Attach % of duration + average speed while in each HR zone. */
   private enrichZonesWithSpeed(zones: any[] = [], streams: Record<string, any[]> | null = null) {
     const totalSec = zones.reduce((sum, z) => sum + Math.max(0, Number(z.seconds || 0)), 0) || 1;
-    const heartrate = Array.isArray(streams?.heartrate) ? streams.heartrate.map((v) => Number(v) || 0) : [];
-    const velocity = Array.isArray(streams?.velocityKmh) ? streams.velocityKmh.map((v) => Number(v) || 0) : [];
+    const heartrateSrc = streams?.heartrate;
+    const velocitySrc = streams?.velocityKmh;
+    const heartrate = Array.isArray(heartrateSrc) ? heartrateSrc.map((v) => Number(v) || 0) : [];
+    const velocity = Array.isArray(velocitySrc) ? velocitySrc.map((v) => Number(v) || 0) : [];
     const n = Math.min(heartrate.length, velocity.length);
 
     return zones.map((zone, index) => {
