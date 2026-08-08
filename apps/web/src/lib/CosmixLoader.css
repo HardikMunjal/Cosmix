@@ -175,3 +175,33 @@
     animation: none !important;
   }
 }
+
+@keyframes running-cartoon-stride {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-3px) rotate(-2deg); }
+}
+@keyframes running-cartoon-dust {
+  0% { opacity: 0.15; transform: translateX(0); }
+  100% { opacity: 0; transform: translateX(-14px); }
+}
+@keyframes running-cartoon-lane {
+  0% { stroke-dashoffset: 0; }
+  100% { stroke-dashoffset: -28; }
+}
+.running-cartoon-runner {
+  transform-origin: 68px 58px;
+  animation: running-cartoon-stride 0.85s ease-in-out infinite;
+}
+.running-cartoon-dust {
+  animation: running-cartoon-dust 0.9s ease-out infinite;
+}
+.running-cartoon-lane {
+  animation: running-cartoon-lane 1.4s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .running-cartoon-runner,
+  .running-cartoon-dust,
+  .running-cartoon-lane {
+    animation: none !important;
+  }
+}

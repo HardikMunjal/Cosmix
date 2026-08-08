@@ -118,6 +118,8 @@ export function buildRunningRows(entries = []) {
           avgHeartrate: Number(run.avgHeartrate || 0) || null,
           maxHeartrate: Number(run.maxHeartrate || 0) || null,
           avgSpeedKmh: Number(run.avgSpeedKmh || 0) || null,
+          maxSpeedKmh: Number(run.maxSpeedKmh || 0) || null,
+          bestSplitPaceMinPerKm: Number(run.bestSplitPaceMinPerKm || 0) || null,
           source: 'strava',
         });
       });
@@ -212,6 +214,90 @@ export function computeShoeStats(entries = [], shoes = []) {
       if (!a.shoeId && b.shoeId) return 1;
       return b.totalKm - a.totalKm;
     });
+}
+
+function raceBand(distanceKm) {
+  const d = Number(distanceKm || 0);
+  if (d >= 4.5 && d < 7.5) return '5km';
+  if (d >= 8.5 && d < 12.5) return '10km';
+  if (d >= 18 && d < 23) return '20km';
+  return null;
+}
+
+/** Leaderboards by shoe for speed, distance, split, and race-band HR/speed. */
+export function computeShoeLeaderboards(entries = [], shoes = []) {
+  const shoeMap = new Map((shoes || []).map((shoe) => [shoe.id, shoe]));
+  const rows = buildRunningRows(entries).filter((row) => row.shoeId && shoeMap.has(row.shoeId));
+
+  const byShoe = new Map();
+  rows.forEach((row) => {
+    if (!byShoe.has(row.shoeId)) {
+      const shoe = shoeMap.get(row.shoeId);
+      byShoe.set(row.shoeId, {
+        shoeId: row.shoeId,
+        label: getRunningShoeLabel(shoe),
+        name: shoe?.name || 'Shoe',
+        topSpeed: 0,
+        topKm: 0,
+        bestSplitPace: null,
+        races: {
+          '5km': { hrs: [], speeds: [] },
+          '10km': { hrs: [], speeds: [] },
+          '20km': { hrs: [], speeds: [] },
+        },
+      });
+    }
+    const bucket = byShoe.get(row.shoeId);
+    const speed = Number(row.maxSpeedKmh || row.avgSpeedKmh || 0)
+      || (row.minutes > 0 ? (row.distance / (row.minutes / 60)) : 0);
+    bucket.topSpeed = Math.max(bucket.topSpeed, speed);
+    bucket.topKm = Math.max(bucket.topKm, Number(row.distance || 0));
+    if (row.bestSplitPaceMinPerKm > 0) {
+      if (bucket.bestSplitPace == null || row.bestSplitPaceMinPerKm < bucket.bestSplitPace) {
+        bucket.bestSplitPace = row.bestSplitPaceMinPerKm;
+      }
+    }
+    const band = raceBand(row.distance);
+    if (band) {
+      if (row.avgHeartrate > 0) bucket.races[band].hrs.push(row.avgHeartrate);
+      const avgSpeed = row.avgSpeedKmh || (row.minutes > 0 ? (row.distance / (row.minutes / 60)) : 0);
+      if (avgSpeed > 0) bucket.races[band].speeds.push(avgSpeed);
+    }
+  });
+
+  const list = Array.from(byShoe.values()).map((bucket) => ({
+    ...bucket,
+    topSpeed: Number(bucket.topSpeed.toFixed(2)),
+    topKm: Number(bucket.topKm.toFixed(1)),
+    avgHr5: avg(bucket.races['5km'].hrs),
+    avgHr10: avg(bucket.races['10km'].hrs),
+    avgHr20: avg(bucket.races['20km'].hrs),
+    avgSpeed5: avg(bucket.races['5km'].speeds),
+    avgSpeed10: avg(bucket.races['10km'].speeds),
+    avgSpeed20: avg(bucket.races['20km'].speeds),
+  }));
+
+  const rank = (items, key, desc = true) => [...items]
+    .filter((item) => item[key] != null && Number(item[key]) > 0)
+    .sort((a, b) => (desc ? Number(b[key]) - Number(a[key]) : Number(a[key]) - Number(b[key])))
+    .slice(0, 6);
+
+  return {
+    topSpeed: rank(list, 'topSpeed', true),
+    topKm: rank(list, 'topKm', true),
+    topSplit: rank(list, 'bestSplitPace', false),
+    avgHr5: rank(list, 'avgHr5', true),
+    avgHr10: rank(list, 'avgHr10', true),
+    avgHr20: rank(list, 'avgHr20', true),
+    avgSpeed5: rank(list, 'avgSpeed5', true),
+    avgSpeed10: rank(list, 'avgSpeed10', true),
+    avgSpeed20: rank(list, 'avgSpeed20', true),
+  };
+}
+
+function avg(values = []) {
+  if (!values.length) return null;
+  return Number((values.reduce((sum, v) => sum + Number(v), 0) / values.length).toFixed(1));
 }
 
 let syncTimer = null;

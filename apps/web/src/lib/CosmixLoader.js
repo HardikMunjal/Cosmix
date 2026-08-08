@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { RunningCartoon } from './RunningCartoon';
 
 function resolveLoaderColors(theme = {}) {
   return {
@@ -116,7 +117,11 @@ export function CosmixLoader({
         textAlign: 'center',
         maxWidth: '340px',
       }}>
-        <CosmixOrb size={orbSize} theme={theme} showLabel={isFull || isOverlay} />
+        {(isFull || isOverlay) ? (
+          <RunningCartoon size={108} label="On the move" />
+        ) : (
+          <CosmixOrb size={orbSize} theme={theme} showLabel={false} />
+        )}
         <div style={{ display: 'grid', gap: '4px' }}>
           <div
             className="cosmix-loader-title"

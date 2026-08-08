@@ -8,6 +8,7 @@ import { computeRunningStats, computeWellnessStats, buildWellnessSummary } from 
 import { formatStravaSyncMessage, runStravaAutoSync } from '../lib/stravaAutoSync';
 import {
   buildRunningRows,
+  computeShoeLeaderboards,
   computeShoeStats,
   createRunningShoeId,
   getRunningShoeLabel,
@@ -22,6 +23,7 @@ import { DepthMetric, GlowTrend, DepthBars, DepthHBars, ShoeMixChart } from '../
 import { loadRunningSurfaceId, saveRunningSurfaceId, mergeRunningSurface } from '../lib/runningThemes';
 import { buildMarathonReadiness, loadMarathonGoal } from '../lib/marathonReadiness';
 import { buildTrainingTip } from '../lib/trainingTip';
+import { RunningCartoon } from '../lib/RunningCartoon';
 import Link from 'next/link';
 import { StravaRunExplorer } from '../lib/StravaRunExplorer';
 
@@ -911,8 +913,42 @@ function ShoeKmChart({ shoeStats, theme }) {
   );
 }
 
+function ShoeLeaderBars({ title, items = [], theme, accent, valueFmt }) {
+  if (!items.length) {
+    return (
+      <div style={{ padding: 12, borderRadius: 14, border: `1px solid ${theme.cardBorder}`, color: theme.textMuted, fontSize: 12 }}>
+        {title}: tag more runs with shoes to unlock this chart.
+      </div>
+    );
+  }
+  const max = Math.max(...items.map((item) => Math.abs(Number(item.value) || 0)), 0.01);
+  return (
+    <div style={{ padding: 14, borderRadius: 16, border: `1px solid ${theme.cardBorder}`, background: theme.cardBg, display: 'grid', gap: 8 }}>
+      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase', color: theme.textMuted }}>{title}</div>
+      {items.map((item) => {
+        const value = Number(item.value) || 0;
+        const width = Math.max(6, (Math.abs(value) / max) * 100);
+        return (
+          <div key={`${title}-${item.label}`} style={{ display: 'grid', gridTemplateColumns: '1fr 64px', gap: 8, alignItems: 'center' }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: theme.textHeading, marginBottom: 4 }}>{item.label}</div>
+              <div style={{ height: 8, borderRadius: 99, background: theme.cardBorder, overflow: 'hidden' }}>
+                <div style={{ width: `${width}%`, height: '100%', background: accent || theme.blue, borderRadius: 99 }} />
+              </div>
+            </div>
+            <div style={{ fontSize: 12, fontWeight: 800, color: accent || theme.textHeading, textAlign: 'right' }}>
+              {valueFmt ? valueFmt(value) : value}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function ShoeStatsSection({ entries, shoes, theme, onAssignShoes }) {
   const shoeStats = useMemo(() => computeShoeStats(entries, shoes), [entries, shoes]);
+  const boards = useMemo(() => computeShoeLeaderboards(entries, shoes), [entries, shoes]);
   const untagged = shoeStats.filter((row) => !row.shoeId);
   const unknown = shoeStats.filter((row) => row.shoeId && !(shoes || []).some((shoe) => shoe.id === row.shoeId));
   if (!shoeStats.length) {
@@ -962,6 +998,71 @@ function ShoeStatsSection({ entries, shoes, theme, onAssignShoes }) {
         </div>
       ) : null}
       <ShoeMixChart shoeStats={shoeStats} theme={theme} />
+      <div style={{ display: 'grid', gap: 10 }}>
+        <ShoeLeaderBars
+          title="Top speed by shoe"
+          theme={theme}
+          accent={theme.green}
+          items={boards.topSpeed.map((r) => ({ label: r.label, value: r.topSpeed }))}
+          valueFmt={(v) => `${v} km/h`}
+        />
+        <ShoeLeaderBars
+          title="Top distance by shoe"
+          theme={theme}
+          accent={theme.blue}
+          items={boards.topKm.map((r) => ({ label: r.label, value: r.topKm }))}
+          valueFmt={(v) => `${v} km`}
+        />
+        <ShoeLeaderBars
+          title="Top 1 km split by shoe"
+          theme={theme}
+          accent={theme.cyan}
+          items={boards.topSplit.map((r) => ({ label: r.label, value: r.bestSplitPace }))}
+          valueFmt={(v) => fmtPace(v)}
+        />
+        <ShoeLeaderBars
+          title="Top avg HR · ~5 km races"
+          theme={theme}
+          accent="#f43f5e"
+          items={boards.avgHr5.map((r) => ({ label: r.label, value: r.avgHr5 }))}
+          valueFmt={(v) => `${Math.round(v)} bpm`}
+        />
+        <ShoeLeaderBars
+          title="Top avg HR · ~10 km races"
+          theme={theme}
+          accent="#fb7185"
+          items={boards.avgHr10.map((r) => ({ label: r.label, value: r.avgHr10 }))}
+          valueFmt={(v) => `${Math.round(v)} bpm`}
+        />
+        <ShoeLeaderBars
+          title="Top avg HR · ~20 km races"
+          theme={theme}
+          accent="#e11d48"
+          items={boards.avgHr20.map((r) => ({ label: r.label, value: r.avgHr20 }))}
+          valueFmt={(v) => `${Math.round(v)} bpm`}
+        />
+        <ShoeLeaderBars
+          title="Top avg speed · ~5 km"
+          theme={theme}
+          accent={theme.orange}
+          items={boards.avgSpeed5.map((r) => ({ label: r.label, value: r.avgSpeed5 }))}
+          valueFmt={(v) => `${v} km/h`}
+        />
+        <ShoeLeaderBars
+          title="Top avg speed · ~10 km"
+          theme={theme}
+          accent="#f97316"
+          items={boards.avgSpeed10.map((r) => ({ label: r.label, value: r.avgSpeed10 }))}
+          valueFmt={(v) => `${v} km/h`}
+        />
+        <ShoeLeaderBars
+          title="Top avg speed · ~20 km"
+          theme={theme}
+          accent="#ea580c"
+          items={boards.avgSpeed20.map((r) => ({ label: r.label, value: r.avgSpeed20 }))}
+          valueFmt={(v) => `${v} km/h`}
+        />
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10, minWidth: 0 }}>
         <DepthHBars
           title="Runs per shoe"
@@ -1275,17 +1376,24 @@ function RunningTab({
             padding: '12px 14px',
             background: `linear-gradient(135deg, ${theme.cyan || theme.blue}18, transparent)`,
             color: theme.textHeading,
+            display: 'grid',
+            gridTemplateColumns: '72px 1fr',
+            gap: 12,
+            alignItems: 'center',
           }}
         >
-          <div style={{ fontSize: 13, fontWeight: 900, color: theme.cyan || theme.blue }}>{trainingTip.title}</div>
-          <div style={{ fontSize: 12, color: theme.textSecondary, marginTop: 4, lineHeight: 1.45 }}>
-            {trainingTip.tip}
-          </div>
-          {trainingTip.action ? (
-            <div style={{ marginTop: 8, fontSize: 11, fontWeight: 800, color: theme.orange, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
-              Next · {trainingTip.action}
+          <RunningCartoon size={72} label="" />
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 900, color: theme.cyan || theme.blue }}>{trainingTip.title}</div>
+            <div style={{ fontSize: 12, color: theme.textSecondary, marginTop: 4, lineHeight: 1.45 }}>
+              {trainingTip.tip}
             </div>
-          ) : null}
+            {trainingTip.action ? (
+              <div style={{ marginTop: 8, fontSize: 11, fontWeight: 800, color: theme.orange, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                Next · {trainingTip.action}
+              </div>
+            ) : null}
+          </div>
         </div>
       ) : null}
 

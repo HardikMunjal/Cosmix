@@ -334,7 +334,7 @@ export class StravaService {
   private async fetchActivityStreams(
     accessToken: string,
     activityId: number,
-    keys = 'time,latlng,distance,heartrate,velocity_smooth,altitude',
+    keys = 'time,latlng,distance,heartrate,velocity_smooth,altitude,cadence',
   ): Promise<Record<string, any[]> | null> {
     try {
       const res = await fetch(
@@ -492,6 +492,8 @@ export class StravaService {
     const heartrate = this.downsampleSeries(raw.heartrate || [], 2400).map((v) => Number(v) || 0);
     const velocity = this.downsampleSeries(raw.velocity_smooth || [], 2400).map((v) => round((Number(v) || 0) * 3.6, 2));
     const altitude = this.downsampleSeries(raw.altitude || [], 2400).map((v) => round(Number(v) || 0, 1));
+    // Strava cadence stream is often steps/min for runs (or RPM for rides). Keep as-is.
+    const cadence = this.downsampleSeries(raw.cadence || [], 2400).map((v) => round(Number(v) || 0, 1));
     const latlng = this.downsampleSeries(raw.latlng || [], 2400)
       .map((pair: any) => {
         if (Array.isArray(pair) && pair.length >= 2) return [Number(pair[0]), Number(pair[1])];
@@ -499,14 +501,133 @@ export class StravaService {
       })
       .filter(Boolean) as number[][];
 
+    const strideLengthM = this.computeStrideSeries(distance, cadence, time);
+
     return {
       time,
       distance,
       heartrate,
       velocityKmh: velocity,
       altitude,
+      cadence,
+      strideLengthM,
       latlng,
     };
+  }
+
+  /** Approximate stride length (m) from distance change and cadence (spm). */
+  private computeStrideSeries(distance: number[] = [], cadence: number[] = [], time: number[] = []) {
+    if (!distance.length || !cadence.length) return [];
+    const out: number[] = [];
+    for (let i = 0; i < distance.length; i += 1) {
+      const spm = Number(cadence[i] || 0);
+      const dt = i > 0 ? Math.max(0.5, Number(time[i] || i) - Number(time[i - 1] || i - 1)) : 1;
+      const dd = i > 0 ? Math.max(0, Number(distance[i] || 0) - Number(distance[i - 1] || 0)) : 0;
+      if (spm > 20 && dd > 0) {
+        const steps = (spm / 60) * dt;
+        out.push(steps > 0 ? round(dd / steps, 3) : 0);
+      } else {
+        out.push(0);
+      }
+    }
+    return out;
+  }
+
+  private summarizeCadenceMetrics(streams: Record<string, any[]> | null, detail: any = {}) {
+    const cadence = Array.isArray(streams?.cadence) ? streams.cadence.map((v) => Number(v) || 0).filter((v) => v > 20) : [];
+    const stride = Array.isArray(streams?.strideLengthM) ? streams.strideLengthM.map((v) => Number(v) || 0).filter((v) => v > 0.4 && v < 2.5) : [];
+    const avgCadence = cadence.length
+      ? Math.round(cadence.reduce((sum, v) => sum + v, 0) / cadence.length)
+      : (Number(detail?.average_cadence) > 0 ? Math.round(Number(detail.average_cadence)) : null);
+    const avgStrideM = stride.length
+      ? round(stride.reduce((sum, v) => sum + v, 0) / stride.length, 2)
+      : null;
+    return { avgCadence, avgStrideM };
+  }
+
+  /**
+   * Zone-weighted fuel split from HR time-in-zone.
+   * Lower zones burn more fat; higher zones burn more carbohydrate.
+   */
+  private computeFuelBurn(heartrateZones: any[] = [], calories: number | null = null) {
+    const weights = [
+      { fat: 0.85, carb: 0.12, other: 0.03 }, // Z1 recovery / warm-up
+      { fat: 0.65, carb: 0.30, other: 0.05 }, // Z2 fat burning
+      { fat: 0.45, carb: 0.50, other: 0.05 }, // Z3 aerobic
+      { fat: 0.25, carb: 0.70, other: 0.05 }, // Z4 threshold
+      { fat: 0.10, carb: 0.85, other: 0.05 }, // Z5 max
+    ];
+    const totalSec = heartrateZones.reduce((sum, z) => sum + Math.max(0, Number(z.seconds || 0)), 0);
+    if (totalSec <= 0) {
+      return {
+        fatPercent: null,
+        carbPercent: null,
+        otherPercent: null,
+        fatKcal: null,
+        carbKcal: null,
+        otherKcal: null,
+        calories: calories || null,
+        note: 'Need heart-rate zones to estimate fuel mix.',
+      };
+    }
+    let fat = 0;
+    let carb = 0;
+    let other = 0;
+    heartrateZones.forEach((zone, index) => {
+      const w = weights[Math.min(weights.length - 1, Math.max(0, Number(zone.zone || index + 1) - 1))];
+      const share = Math.max(0, Number(zone.seconds || 0)) / totalSec;
+      fat += share * w.fat;
+      carb += share * w.carb;
+      other += share * w.other;
+    });
+    const fatPercent = Math.round(fat * 100);
+    const carbPercent = Math.round(carb * 100);
+    const otherPercent = Math.max(0, 100 - fatPercent - carbPercent);
+    const kcal = Number(calories) > 0 ? Number(calories) : null;
+    return {
+      fatPercent,
+      carbPercent,
+      otherPercent,
+      fatKcal: kcal != null ? Math.round(kcal * fatPercent / 100) : null,
+      carbKcal: kcal != null ? Math.round(kcal * carbPercent / 100) : null,
+      otherKcal: kcal != null ? Math.round(kcal * otherPercent / 100) : null,
+      calories: kcal,
+      note: 'Estimated from time-in-HR-zone (not lab measured).',
+    };
+  }
+
+  /** Attach % of duration + average speed while in each HR zone. */
+  private enrichZonesWithSpeed(zones: any[] = [], streams: Record<string, any[]> | null = null) {
+    const totalSec = zones.reduce((sum, z) => sum + Math.max(0, Number(z.seconds || 0)), 0) || 1;
+    const heartrate = Array.isArray(streams?.heartrate) ? streams.heartrate.map((v) => Number(v) || 0) : [];
+    const velocity = Array.isArray(streams?.velocityKmh) ? streams.velocityKmh.map((v) => Number(v) || 0) : [];
+    const n = Math.min(heartrate.length, velocity.length);
+
+    return zones.map((zone, index) => {
+      const seconds = Math.max(0, Number(zone.seconds || 0));
+      const percent = round((seconds / totalSec) * 100, 1);
+      let avgSpeedKmh: number | null = null;
+      if (n > 0) {
+        const min = Number(zone.min || 0);
+        const maxRaw = zone.max == null || Number(zone.max) < 0 ? Number.POSITIVE_INFINITY : Number(zone.max);
+        const isLast = index === zones.length - 1;
+        const speeds: number[] = [];
+        for (let i = 0; i < n; i += 1) {
+          const bpm = heartrate[i];
+          if (bpm <= 0) continue;
+          const inZone = bpm >= min && (isLast ? bpm <= maxRaw || bpm >= min : bpm < maxRaw);
+          if (inZone && velocity[i] > 0) speeds.push(velocity[i]);
+        }
+        if (speeds.length) {
+          avgSpeedKmh = round(speeds.reduce((sum, v) => sum + v, 0) / speeds.length, 2);
+        }
+      }
+      return {
+        ...zone,
+        percent,
+        avgSpeedKmh,
+      };
+    });
   }
 
   private async saveActivityDetail(userId: string, activityId: number, payload: any) {
@@ -547,16 +668,34 @@ export class StravaService {
     }
     if (!payload) return null;
     const summary = payload.summary || {};
+    let next = payload;
     if (!summary.bestSplitPaceMinPerKm) {
       const bestSplit = this.pickBestSplit(payload.splits || []);
       if (bestSplit) {
-        payload = {
-          ...payload,
-          summary: { ...summary, ...bestSplit },
+        next = {
+          ...next,
+          summary: { ...(next.summary || {}), ...bestSplit },
         };
       }
     }
-    return payload;
+    const zones = Array.isArray(next.heartrateZones) ? next.heartrateZones : [];
+    if (zones.length) {
+      const enrichedZones = this.enrichZonesWithSpeed(zones, next.streams || null);
+      const fuelBurn = next.fuelBurn
+        || next.summary?.fuelBurn
+        || this.computeFuelBurn(enrichedZones, next.summary?.calories ?? null);
+      next = {
+        ...next,
+        heartrateZones: enrichedZones,
+        fuelBurn,
+        summary: {
+          ...(next.summary || {}),
+          heartrateZones: enrichedZones,
+          fuelBurn,
+        },
+      };
+    }
+    return next;
   }
 
   private async fetchAndBuildActivityDetail(accessToken: string, activityId: number, athleteZones?: any) {
@@ -616,6 +755,9 @@ export class StravaService {
 
     const bestSplit = this.pickBestSplit(splits);
     const vo2Max = this.readVo2Max(detail);
+    const cadenceMetrics = this.summarizeCadenceMetrics(streams, detail);
+    heartrateZones = this.enrichZonesWithSpeed(heartrateZones, streams);
+    const fuelBurn = this.computeFuelBurn(heartrateZones, detail?.calories ? round(Number(detail.calories), 0) : null);
     const summary = {
       ...this.summarizeRun({
         ...(detail || {}),
@@ -624,9 +766,13 @@ export class StravaService {
         paceZones,
         zoneSource,
         paceZoneSource,
+        ...cadenceMetrics,
       }),
       ...(bestSplit || {}),
       vo2Max,
+      avgCadence: cadenceMetrics.avgCadence,
+      avgStrideM: cadenceMetrics.avgStrideM,
+      fuelBurn,
     };
 
     return {
@@ -642,12 +788,15 @@ export class StravaService {
         heartrate: [],
         velocityKmh: [],
         altitude: [],
+        cadence: [],
+        strideLengthM: [],
         latlng: [],
       },
       splits,
       heartrateZones,
       paceZones,
       paceByMinuteBuckets,
+      fuelBurn,
       zoneSource,
       paceZoneSource,
       hasMap: latlng.length > 1,
@@ -969,13 +1118,13 @@ export class StravaService {
 
   private defaultHrZoneBounds(maxHr = 190) {
     const ceiling = Math.max(140, Math.min(230, Number(maxHr) || 190));
-    // Classic 5-zone % of max HR
+    // Classic 5-zone % of max HR with coaching names
     return [
-      { zone: 1, label: 'Z1 Easy', min: 0, max: Math.round(ceiling * 0.6) },
-      { zone: 2, label: 'Z2 Endurance', min: Math.round(ceiling * 0.6), max: Math.round(ceiling * 0.7) },
-      { zone: 3, label: 'Z3 Tempo', min: Math.round(ceiling * 0.7), max: Math.round(ceiling * 0.8) },
+      { zone: 1, label: 'Z1 Recovery', min: 0, max: Math.round(ceiling * 0.6) },
+      { zone: 2, label: 'Z2 Fat Burning', min: Math.round(ceiling * 0.6), max: Math.round(ceiling * 0.7) },
+      { zone: 3, label: 'Z3 Aerobic', min: Math.round(ceiling * 0.7), max: Math.round(ceiling * 0.8) },
       { zone: 4, label: 'Z4 Threshold', min: Math.round(ceiling * 0.8), max: Math.round(ceiling * 0.9) },
-      { zone: 5, label: 'Z5 Max', min: Math.round(ceiling * 0.9), max: ceiling + 1 },
+      { zone: 5, label: 'Z5 Max Effort', min: Math.round(ceiling * 0.9), max: ceiling + 1 },
     ];
   }
 
@@ -985,16 +1134,28 @@ export class StravaService {
     if (!zones?.length) return null;
     return zones.map((zone: any, index: number) => ({
       zone: index + 1,
-      label: `Z${index + 1}`,
+      label: this.zoneName(index),
       min: Number(zone.min || zone.min_hr || 0),
       max: Number(zone.max || zone.max_hr || -1),
     }));
   }
 
+  private zoneName(index: number) {
+    const labels = [
+      'Z1 Recovery',
+      'Z2 Fat Burning',
+      'Z3 Aerobic',
+      'Z4 Threshold',
+      'Z5 Max Effort',
+      'Z6+',
+      'Z7',
+    ];
+    return labels[index] || `Z${index + 1}`;
+  }
+
   private zoneLabel(index: number, min: number, max: number) {
-    const labels = ['Z1 Easy', 'Z2 Endurance', 'Z3 Tempo', 'Z4 Threshold', 'Z5 Max', 'Z6+', 'Z7'];
-    const range = max > 0 ? `${min}–${max}` : `${min}+`;
-    return `${labels[index] || `Z${index + 1}`} (${range})`;
+    const range = max > 0 ? `${min}–${max} bpm` : `${min}+ bpm`;
+    return `${this.zoneName(index)} (${range})`;
   }
 
   private normalizeHrZoneBuckets(buckets: any[] = [], fallbackMaxHr = 190) {
@@ -1282,6 +1443,9 @@ export class StravaService {
       bestSplitSeconds: Number(activity.bestSplitSeconds || 0) || null,
       bestSplitDistanceKm: Number(activity.bestSplitDistanceKm || 0) || null,
       vo2Max: Number(activity.vo2Max || activity.vo2_max || 0) || null,
+      avgCadence: Number(activity.avgCadence || activity.average_cadence || 0) || null,
+      avgStrideM: Number(activity.avgStrideM || 0) || null,
+      fuelBurn: activity.fuelBurn || null,
     };
   }
 
