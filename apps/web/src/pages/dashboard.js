@@ -524,7 +524,7 @@ function useBubbleMotion(targetRef) {
         && Math.abs(prev.y - next.y) < 0.002
         && prev.active === next.active
         && Math.abs(prev.scroll - next.scroll) < 0.5
-        && Math.abs(prev.t - next.t) < 0.04
+        && Math.abs(prev.t - next.t) < 0.08
           ? prev
           : next
       ));
@@ -582,12 +582,12 @@ function QuoteBubble({ quote }) {
   const { pose, pointerHandlers } = useBubbleMotion(wrapRef);
   const dx = pose.x - 0.5;
   const dy = pose.y - 0.5;
-  const floatY = Math.sin((pose.scroll * 0.016) + (pose.t * 1.2)) * 4;
-  const floatX = Math.cos((pose.scroll * 0.012) + (pose.t * 0.9)) * 2;
-  const rotateY = (dx * -14 * (pose.active ? 1 : 0.4)) + Math.sin(pose.scroll * 0.01) * 2;
-  const rotateX = (dy * 12 * (pose.active ? 1 : 0.4)) + 3 + (floatY * 0.3);
-  const translateZ = 10 + (pose.active ? 14 : 4);
-  const scale = pose.active ? 1.03 : 1.01;
+  const floatY = Math.sin((pose.scroll * 0.004) + (pose.t * 0.28)) * 2.2;
+  const floatX = Math.cos((pose.scroll * 0.003) + (pose.t * 0.22)) * 1.2;
+  const rotateY = (dx * -8 * (pose.active ? 1 : 0.25)) + Math.sin(pose.scroll * 0.004) * 1.2;
+  const rotateX = (dy * 7 * (pose.active ? 1 : 0.25)) + 2 + (floatY * 0.2);
+  const translateZ = 8 + (pose.active ? 10 : 3);
+  const scale = pose.active ? 1.02 : 1.005;
 
   return (
     <div
@@ -631,13 +631,13 @@ function MetricBubbleGrid({ items = [] }) {
         const dy = pose.y - cy;
         const dist = Math.min(1, Math.hypot(dx, dy) * 1.35);
         const influence = pose.active ? (1 - dist) : 0.28;
-        const floatY = Math.sin((pose.scroll * 0.018) + (pose.t * 1.4) + index * 0.9) * 5;
-        const floatX = Math.cos((pose.scroll * 0.014) + (pose.t * 1.1) + index * 0.7) * 2.5;
-        const scrollTilt = Math.sin((pose.scroll * 0.012) + index) * 3;
-        const rotateY = (dx * -18 * (pose.active ? 1 : 0.35)) + scrollTilt;
-        const rotateX = (dy * 16 * (pose.active ? 1 : 0.35)) + 4 + (floatY * 0.35);
-        const translateZ = 8 + (influence * 26) + (Math.sin(pose.t + index) * 2);
-        const scale = 1 + (influence * 0.045);
+        const floatY = Math.sin((pose.scroll * 0.005) + (pose.t * 0.32) + index * 0.55) * 2.8;
+        const floatX = Math.cos((pose.scroll * 0.004) + (pose.t * 0.26) + index * 0.4) * 1.4;
+        const scrollTilt = Math.sin((pose.scroll * 0.0035) + index) * 1.5;
+        const rotateY = (dx * -10 * (pose.active ? 1 : 0.22)) + scrollTilt;
+        const rotateX = (dy * 9 * (pose.active ? 1 : 0.22)) + 2.5 + (floatY * 0.2);
+        const translateZ = 6 + (influence * 14) + (Math.sin(pose.t * 0.35 + index) * 1.2);
+        const scale = 1 + (influence * 0.025);
 
         return (
           <article

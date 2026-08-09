@@ -485,15 +485,42 @@ export class StravaService {
     return null;
   }
 
-  private buildStreamPayload(raw: Record<string, any[]> | null) {
+  /** Daniels-style estimate from average pace when Strava does not send VO2. */
+  private estimateVo2FromPace(paceMinPerKm: number | null): number | null {
+    const pace = Number(paceMinPerKm);
+    if (!Number.isFinite(pace) || pace < 2.8 || pace > 12) return null;
+    const velocityMPerMin = 1000 / pace;
+    const vo2 = -4.60 + (0.182258 * velocityMPerMin) + (0.000104 * velocityMPerMin * velocityMPerMin);
+    if (!Number.isFinite(vo2) || vo2 < 22 || vo2 > 85) return null;
+    return round(vo2, 1);
+  }
+
+  private normalizeCadenceSpm(rawValues: number[] = [], detailCadence: number | null = null) {
+    const samples = (rawValues || []).map((v) => Number(v) || 0).filter((v) => v > 20);
+    let avg = samples.length
+      ? samples.reduce((sum, v) => sum + v, 0) / samples.length
+      : (detailCadence && detailCadence > 0 ? detailCadence : null);
+    if (avg == null) return { avgCadence: null, series: rawValues.map((v) => Number(v) || 0) };
+    // Many devices report one-foot cadence (~80–95). Convert to steps/min when clearly half.
+    const doubled = avg < 110;
+    const factor = doubled ? 2 : 1;
+    const series = (rawValues || []).map((v) => {
+      const n = Number(v) || 0;
+      return n > 20 ? round(n * factor, 1) : 0;
+    });
+    return { avgCadence: Math.round(avg * factor), series };
+  }
+
+  private buildStreamPayload(raw: Record<string, any[]> | null, detail: any = null) {
     if (!raw) return null;
     const time = this.downsampleSeries(raw.time || [], 2400).map((v) => Number(v) || 0);
     const distance = this.downsampleSeries(raw.distance || [], 2400).map((v) => Number(v) || 0);
     const heartrate = this.downsampleSeries(raw.heartrate || [], 2400).map((v) => Number(v) || 0);
     const velocity = this.downsampleSeries(raw.velocity_smooth || [], 2400).map((v) => round((Number(v) || 0) * 3.6, 2));
     const altitude = this.downsampleSeries(raw.altitude || [], 2400).map((v) => round(Number(v) || 0, 1));
-    // Strava cadence stream is often steps/min for runs (or RPM for rides). Keep as-is.
-    const cadence = this.downsampleSeries(raw.cadence || [], 2400).map((v) => round(Number(v) || 0, 1));
+    const cadenceRaw = this.downsampleSeries(raw.cadence || [], 2400).map((v) => Number(v) || 0);
+    const cadenceNorm = this.normalizeCadenceSpm(cadenceRaw, Number(detail?.average_cadence) || null);
+    const cadence = cadenceNorm.series;
     const latlng = this.downsampleSeries(raw.latlng || [], 2400)
       .map((pair: any) => {
         if (Array.isArray(pair) && pair.length >= 2) return [Number(pair[0]), Number(pair[1])];
@@ -512,6 +539,7 @@ export class StravaService {
       cadence,
       strideLengthM,
       latlng,
+      avgCadence: cadenceNorm.avgCadence,
     };
   }
 
@@ -536,14 +564,24 @@ export class StravaService {
   private summarizeCadenceMetrics(streams: Record<string, any[]> | null, detail: any = {}) {
     const cadenceSrc = streams?.cadence;
     const strideSrc = streams?.strideLengthM;
-    const cadence = Array.isArray(cadenceSrc) ? cadenceSrc.map((v) => Number(v) || 0).filter((v) => v > 20) : [];
+    const fromStreams = Array.isArray(cadenceSrc) ? cadenceSrc.map((v) => Number(v) || 0).filter((v) => v > 20) : [];
     const stride = Array.isArray(strideSrc) ? strideSrc.map((v) => Number(v) || 0).filter((v) => v > 0.4 && v < 2.5) : [];
-    const avgCadence = cadence.length
-      ? Math.round(cadence.reduce((sum, v) => sum + v, 0) / cadence.length)
-      : (Number(detail?.average_cadence) > 0 ? Math.round(Number(detail.average_cadence)) : null);
-    const avgStrideM = stride.length
+    let avgCadence = Number((streams as any)?.avgCadence) || null;
+    if (!avgCadence && fromStreams.length) {
+      avgCadence = Math.round(fromStreams.reduce((sum, v) => sum + v, 0) / fromStreams.length);
+    }
+    if (!avgCadence) {
+      const detailCadence = Number(detail?.average_cadence || 0);
+      if (detailCadence > 0) {
+        avgCadence = detailCadence < 110 ? Math.round(detailCadence * 2) : Math.round(detailCadence);
+      }
+    }
+    let avgStrideM = stride.length
       ? round(stride.reduce((sum, v) => sum + v, 0) / stride.length, 2)
       : null;
+    if (!avgStrideM && avgCadence && Number(detail?.average_speed) > 0) {
+      avgStrideM = round(Number(detail.average_speed) / (avgCadence / 60), 2);
+    }
     return { avgCadence, avgStrideM };
   }
 
@@ -699,6 +737,31 @@ export class StravaService {
         },
       };
     }
+    const currentSummary = next.summary || {};
+    if (!currentSummary.avgCadence || !currentSummary.avgStrideM) {
+      const cadenceMetrics = this.summarizeCadenceMetrics(next.streams || null, {});
+      next = {
+        ...next,
+        summary: {
+          ...currentSummary,
+          avgCadence: currentSummary.avgCadence || cadenceMetrics.avgCadence,
+          avgStrideM: currentSummary.avgStrideM || cadenceMetrics.avgStrideM,
+        },
+      };
+    }
+    if (!next.summary?.vo2Max && next.summary?.paceMinPerKm) {
+      const estimated = this.estimateVo2FromPace(next.summary.paceMinPerKm);
+      if (estimated) {
+        next = {
+          ...next,
+          summary: {
+            ...next.summary,
+            vo2Max: estimated,
+            vo2Estimated: true,
+          },
+        };
+      }
+    }
     return next;
   }
 
@@ -708,7 +771,7 @@ export class StravaService {
       this.fetchActivityStreams(accessToken, activityId),
     ]);
 
-    const streams = this.buildStreamPayload(rawStreams);
+    const streams = this.buildStreamPayload(rawStreams, detail);
     const summaryPolyline = String(detail?.map?.summary_polyline || detail?.map?.polyline || '');
     const latlngFromPolyline = summaryPolyline ? this.decodePolyline(summaryPolyline) : [];
     const latlng = (streams?.latlng?.length ? streams.latlng : latlngFromPolyline) as number[][];
@@ -758,25 +821,34 @@ export class StravaService {
     );
 
     const bestSplit = this.pickBestSplit(splits);
-    const vo2Max = this.readVo2Max(detail);
+    const vo2FromStrava = this.readVo2Max(detail);
+    const summaryBase = this.summarizeRun({
+      ...(detail || {}),
+      id: activityId,
+      heartrateZones,
+      paceZones,
+      zoneSource,
+      paceZoneSource,
+    });
+    const vo2Max = vo2FromStrava || this.estimateVo2FromPace(summaryBase.paceMinPerKm);
     const cadenceMetrics = this.summarizeCadenceMetrics(streams, detail);
     heartrateZones = this.enrichZonesWithSpeed(heartrateZones, streams);
     const fuelBurn = this.computeFuelBurn(heartrateZones, detail?.calories ? round(Number(detail.calories), 0) : null);
+    const startLatlng = Array.isArray(detail?.start_latlng) && detail.start_latlng.length >= 2
+      ? [Number(detail.start_latlng[0]), Number(detail.start_latlng[1])]
+      : (latlng[0] || null);
     const summary = {
-      ...this.summarizeRun({
-        ...(detail || {}),
-        id: activityId,
-        heartrateZones,
-        paceZones,
-        zoneSource,
-        paceZoneSource,
-        ...cadenceMetrics,
-      }),
+      ...summaryBase,
       ...(bestSplit || {}),
       vo2Max,
+      vo2Estimated: !vo2FromStrava && Boolean(vo2Max),
       avgCadence: cadenceMetrics.avgCadence,
       avgStrideM: cadenceMetrics.avgStrideM,
       fuelBurn,
+      startLat: startLatlng ? Number(startLatlng[0]) : null,
+      startLng: startLatlng ? Number(startLatlng[1]) : null,
+      locationCity: detail?.location_city || null,
+      locationState: detail?.location_state || null,
     };
 
     return {

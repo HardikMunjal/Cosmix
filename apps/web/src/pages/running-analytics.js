@@ -23,7 +23,7 @@ import { DepthMetric, GlowTrend, DepthBars, DepthHBars, ShoeMixChart } from '../
 import { loadRunningSurfaceId, saveRunningSurfaceId, mergeRunningSurface } from '../lib/runningThemes';
 import { buildMarathonReadiness, loadMarathonGoal } from '../lib/marathonReadiness';
 import { buildTrainingTip } from '../lib/trainingTip';
-import { RunningCartoon } from '../lib/RunningCartoon';
+import { CoachBotCard } from '../lib/CoachBotCard';
 import Link from 'next/link';
 import { StravaRunExplorer } from '../lib/StravaRunExplorer';
 
@@ -324,29 +324,48 @@ function PaceTrendChart({ runRows, theme }) {
 }
 
 function buildRunningInsights(runRows = []) {
+  const toDay = (value) => String(value || '').slice(0, 10);
+  const today = new Date();
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const inLastDays = (dateStr, days) => {
+    const day = toDay(dateStr);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return false;
+    const t = new Date(`${day}T12:00:00`).getTime();
+    const start = startOfToday.getTime() - ((days - 1) * 86400000);
+    const end = startOfToday.getTime() + 86400000 - 1;
+    return t >= start && t <= end;
+  };
+
   const rows = [...runRows]
-    .filter((r) => r.distance > 0 && r.minutes > 0)
+    .filter((r) => Number(r.distance || 0) > 0 && Number(r.minutes || 0) > 0)
     .map((r) => ({
       ...r,
-      pace: r.minutes / r.distance,
-      speed: r.distance / (r.minutes / 60),
+      date: toDay(r.date),
+      distance: Number(r.distance),
+      minutes: Number(r.minutes),
+      pace: Number(r.minutes) / Number(r.distance),
+      speed: Number(r.distance) / (Number(r.minutes) / 60),
+      key: r.stravaId || `${toDay(r.date)}-${Number(r.distance).toFixed(2)}-${Number(r.minutes)}`,
     }))
     .sort((a, b) => String(b.date).localeCompare(String(a.date)));
 
-  const today = new Date();
-  const dayMs = 86400000;
-  const cutoff7 = new Date(today.getTime() - 7 * dayMs).toISOString().slice(0, 10);
-  const cutoff30 = new Date(today.getTime() - 30 * dayMs).toISOString().slice(0, 10);
+  // Deduplicate accidental double imports of the same Strava activity.
+  const seen = new Set();
+  const uniqueRows = rows.filter((r) => {
+    if (seen.has(r.key)) return false;
+    seen.add(r.key);
+    return true;
+  });
 
-  const last7 = rows.filter((r) => r.date >= cutoff7);
-  const last30 = rows.filter((r) => r.date >= cutoff30);
+  const last7 = uniqueRows.filter((r) => inLastDays(r.date, 7));
+  const last30 = uniqueRows.filter((r) => inLastDays(r.date, 30));
 
   const avgPace = (list) => (list.length ? list.reduce((s, r) => s + r.pace, 0) / list.length : null);
   const totalKm = (list) => list.reduce((s, r) => s + r.distance, 0);
 
   const weekdayKm = Array.from({ length: 7 }, () => 0);
   const weekdayRuns = Array.from({ length: 7 }, () => 0);
-  rows.forEach((r) => {
+  uniqueRows.forEach((r) => {
     const dow = new Date(`${r.date}T12:00:00`).getDay();
     weekdayKm[dow] += r.distance;
     weekdayRuns[dow] += 1;
@@ -354,7 +373,7 @@ function buildRunningInsights(runRows = []) {
   const weekdayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
   const monthMap = {};
-  rows.forEach((r) => {
+  uniqueRows.forEach((r) => {
     const key = String(r.date).slice(0, 7);
     if (!monthMap[key]) monthMap[key] = { month: key, km: 0, runs: 0, longest: 0 };
     monthMap[key].km += r.distance;
@@ -363,7 +382,7 @@ function buildRunningInsights(runRows = []) {
   });
   const months = Object.values(monthMap).sort((a, b) => a.month.localeCompare(b.month)).slice(-6);
 
-  const recentRuns = rows.slice(0, 8);
+  const recentRuns = uniqueRows.slice(0, 8);
 
   return {
     avgPace7: avgPace(last7),
@@ -925,14 +944,15 @@ function ShoeLeaderBars({ title, items = [], theme, accent, valueFmt }) {
   return (
     <div style={{ padding: 14, borderRadius: 16, border: `1px solid ${theme.cardBorder}`, background: theme.cardBg, display: 'grid', gap: 8 }}>
       <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase', color: theme.textMuted }}>{title}</div>
-      {items.map((item) => {
+      {items.map((item, index) => {
         const value = Number(item.value) || 0;
         const width = Math.max(6, (Math.abs(value) / max) * 100);
         return (
-          <div key={`${title}-${item.label}`} style={{ display: 'grid', gridTemplateColumns: '1fr 64px', gap: 8, alignItems: 'center' }}>
+          <div key={`${title}-${item.id || item.label}-${index}`} style={{ display: 'grid', gridTemplateColumns: '1fr 72px', gap: 8, alignItems: 'center' }}>
             <div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: theme.textHeading, marginBottom: 4 }}>{item.label}</div>
-              <div style={{ height: 8, borderRadius: 99, background: theme.cardBorder, overflow: 'hidden' }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: theme.textHeading }}>{item.label}</div>
+              {item.sub ? <div style={{ fontSize: 10, color: theme.textMuted, marginTop: 2 }}>{item.sub}</div> : null}
+              <div style={{ height: 8, borderRadius: 99, background: theme.cardBorder, overflow: 'hidden', marginTop: 4 }}>
                 <div style={{ width: `${width}%`, height: '100%', background: accent || theme.blue, borderRadius: 99 }} />
               </div>
             </div>
@@ -997,69 +1017,69 @@ function ShoeStatsSection({ entries, shoes, theme, onAssignShoes }) {
           </button>
         </div>
       ) : null}
-      <ShoeMixChart shoeStats={shoeStats} theme={theme} />
+      <ShoeMixChart shoeStats={shoeStats.filter((row) => row.shoeId)} theme={theme} />
       <div style={{ display: 'grid', gap: 10 }}>
         <ShoeLeaderBars
-          title="Top speed by shoe"
+          title="Top distance runs"
+          theme={theme}
+          accent={theme.blue}
+          items={boards.topKm}
+          valueFmt={(v) => `${Number(v).toFixed(1)} km`}
+        />
+        <ShoeLeaderBars
+          title="Top speed runs"
           theme={theme}
           accent={theme.green}
-          items={boards.topSpeed.map((r) => ({ label: r.label, value: r.topSpeed }))}
+          items={boards.topSpeed}
           valueFmt={(v) => `${v} km/h`}
         />
         <ShoeLeaderBars
-          title="Top distance by shoe"
-          theme={theme}
-          accent={theme.blue}
-          items={boards.topKm.map((r) => ({ label: r.label, value: r.topKm }))}
-          valueFmt={(v) => `${v} km`}
-        />
-        <ShoeLeaderBars
-          title="Top 1 km split by shoe"
+          title="Top 1 km splits"
           theme={theme}
           accent={theme.cyan}
-          items={boards.topSplit.map((r) => ({ label: r.label, value: r.bestSplitPace }))}
+          items={boards.topSplit}
           valueFmt={(v) => fmtPace(v)}
         />
         <ShoeLeaderBars
           title="Top avg HR · ~5 km races"
           theme={theme}
           accent="#f43f5e"
-          items={boards.avgHr5.map((r) => ({ label: r.label, value: r.avgHr5 }))}
+          items={boards.avgHr5}
           valueFmt={(v) => `${Math.round(v)} bpm`}
         />
         <ShoeLeaderBars
           title="Top avg HR · ~10 km races"
           theme={theme}
           accent="#fb7185"
-          items={boards.avgHr10.map((r) => ({ label: r.label, value: r.avgHr10 }))}
+          items={boards.avgHr10}
           valueFmt={(v) => `${Math.round(v)} bpm`}
         />
         <ShoeLeaderBars
           title="Top avg HR · ~20 km races"
           theme={theme}
           accent="#e11d48"
-          items={boards.avgHr20.map((r) => ({ label: r.label, value: r.avgHr20 }))}
+          items={boards.avgHr20}
           valueFmt={(v) => `${Math.round(v)} bpm`}
         />
         <ShoeLeaderBars
           title="Top avg speed · ~5 km"
           theme={theme}
           accent={theme.orange}
-          items={boards.avgSpeed5.map((r) => ({ label: r.label, value: r.avgSpeed5 }))}
+          items={boards.avgSpeed5}
           valueFmt={(v) => `${v} km/h`}
         />
         <ShoeLeaderBars
           title="Top avg speed · ~10 km"
           theme={theme}
           accent="#f97316"
-          items={boards.avgSpeed10.map((r) => ({ label: r.label, value: r.avgSpeed10 }))}
+          items={boards.avgSpeed10}
           valueFmt={(v) => `${v} km/h`}
         />
         <ShoeLeaderBars
           title="Top avg speed · ~20 km"
           theme={theme}
           accent="#ea580c"
-          items={boards.avgSpeed20.map((r) => ({ label: r.label, value: r.avgSpeed20 }))}
+          items={boards.avgSpeed20}
           valueFmt={(v) => `${v} km/h`}
         />
       </div>
@@ -1068,20 +1088,20 @@ function ShoeStatsSection({ entries, shoes, theme, onAssignShoes }) {
           title="Runs per shoe"
           theme={theme}
           accent={theme.blue}
-          items={shoeStats.slice(0, 6).map((r) => ({ label: String(r.label || r.name || 'Shoe').slice(0, 18), value: r.runs }))}
+          items={shoeStats.filter((r) => r.shoeId).slice(0, 6).map((r) => ({ label: String(r.label || r.name || 'Shoe').slice(0, 18), value: r.runs }))}
         />
         <DepthHBars
           title="Avg pace (min/km)"
           theme={theme}
           accent={theme.cyan}
-          items={shoeStats.filter((r) => r.avgPace).slice(0, 6).map((r) => ({
+          items={shoeStats.filter((r) => r.shoeId && r.avgPace).slice(0, 6).map((r) => ({
             label: String(r.label || r.name || 'Shoe').slice(0, 18),
             value: Number(r.avgPace).toFixed(1),
           }))}
         />
       </div>
       <div className="sport-3col" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 10, minWidth: 0 }}>
-        {shoeStats.map((row) => (
+        {shoeStats.filter((row) => row.shoeId).map((row) => (
           <div key={row.shoeId || row.label} style={{
             padding: '14px 16px',
             borderRadius: 18,
@@ -1217,7 +1237,7 @@ function RunningTab({
   onOpenRun,
   mapsRefreshKey = 0,
 }) {
-  const noData = !runStats || runStats.totalRuns === 0;
+  const noData = !(runRows || []).some((r) => Number(r.distance || 0) > 0);
   const insights = useMemo(() => buildRunningInsights(runRows), [runRows]);
   const paceDelta = insights.avgPace7 && insights.avgPace30
     ? insights.avgPace7 - insights.avgPace30
@@ -1367,35 +1387,7 @@ function RunningTab({
 
   return (
     <div style={{ display: 'grid', gap: '14px' }}>
-      {trainingTip ? (
-        <div
-          style={{
-            textAlign: 'left',
-            border: `1px solid ${theme.cyan || theme.blue}44`,
-            borderRadius: 16,
-            padding: '12px 14px',
-            background: `linear-gradient(135deg, ${theme.cyan || theme.blue}18, transparent)`,
-            color: theme.textHeading,
-            display: 'grid',
-            gridTemplateColumns: '72px 1fr',
-            gap: 12,
-            alignItems: 'center',
-          }}
-        >
-          <RunningCartoon size={72} label="" />
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 900, color: theme.cyan || theme.blue }}>{trainingTip.title}</div>
-            <div style={{ fontSize: 12, color: theme.textSecondary, marginTop: 4, lineHeight: 1.45 }}>
-              {trainingTip.tip}
-            </div>
-            {trainingTip.action ? (
-              <div style={{ marginTop: 8, fontSize: 11, fontWeight: 800, color: theme.orange, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
-                Next · {trainingTip.action}
-              </div>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
+      {trainingTip ? <CoachBotCard tip={trainingTip} theme={theme} /> : null}
 
       <MarathonRaceHub userId={userId} runRows={runRows} theme={theme} onOpenPlan={onOpenMarathonPlan} refreshKey={goalRefreshKey} compact />
 
@@ -1404,7 +1396,7 @@ function RunningTab({
           <DepthMetric label="7-day km" value={`${insights.km7.toFixed(1)}`} sub={`${insights.runs7} runs`} accent={theme.orange} theme={theme} />
           <DepthMetric label="30-day km" value={`${insights.km30.toFixed(1)}`} sub={`${insights.runs30} runs`} accent={theme.blue} theme={theme} />
           <DepthMetric label="Pace 7d" value={insights.avgPace7 ? fmtPace(insights.avgPace7) : '--'} sub={paceDelta != null ? `${paceDelta < 0 ? 'Faster' : 'Slower'} vs 30d` : 'rolling'} accent={theme.cyan} theme={theme} />
-          <DepthMetric label="Peak speed" value={runStats.fastestSpeed != null ? `${runStats.fastestSpeed}` : '--'} sub="km/h best" accent={theme.green} theme={theme} />
+          <DepthMetric label="Peak speed" value={runStats?.fastestSpeed != null ? `${runStats.fastestSpeed}` : '--'} sub="km/h best" accent={theme.green} theme={theme} />
         </div>
       ) : null}
 

@@ -118,7 +118,7 @@ export function CosmixLoader({
         maxWidth: '340px',
       }}>
         {(isFull || isOverlay) ? (
-          <RunningCartoon size={108} label="On the move" />
+          <RunningCartoon size={120} label="Stride online" variant="bot" />
         ) : (
           <CosmixOrb size={orbSize} theme={theme} showLabel={false} />
         )}

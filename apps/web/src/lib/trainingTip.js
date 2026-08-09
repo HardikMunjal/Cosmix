@@ -1,90 +1,165 @@
 /**
- * Next-session coaching tip from race goal + recent run history.
+ * Coaching tip from race goal + recent run history (HR, speed, long runs, recovery).
  */
-export function buildTrainingTip({ runRows = [], goalDistanceKm = 21.0975, longRunTargetKm = null, readiness = null } = {}) {
+function toDay(value) {
+  return String(value || '').slice(0, 10);
+}
+
+function daysBetween(a, b) {
+  const ms = new Date(`${toDay(b)}T12:00:00`).getTime() - new Date(`${toDay(a)}T12:00:00`).getTime();
+  return Math.round(ms / 86400000);
+}
+
+function fmtPace(minPerKm) {
+  if (!minPerKm || !isFinite(minPerKm) || minPerKm <= 0) return '--';
+  const mins = Math.floor(minPerKm);
+  const secs = Math.round((minPerKm - mins) * 60);
+  return `${mins}:${String(secs).padStart(2, '0')}`;
+}
+
+function hourOfRun(row) {
+  const raw = String(row.startTime || row.date || '');
+  const match = raw.match(/T(\d{2})/);
+  if (match) return Number(match[1]);
+  return 7; // assume morning if unknown
+}
+
+export function buildTrainingTip({
+  runRows = [],
+  goalDistanceKm = 21.0975,
+  longRunTargetKm = null,
+  readiness = null,
+} = {}) {
   const distanceGoal = Math.max(1, Number(goalDistanceKm) || 21.0975);
   const targetLong = Number(longRunTargetKm) || Number((distanceGoal * 0.82).toFixed(1));
   const runs = (Array.isArray(runRows) ? runRows : [])
     .filter((r) => Number(r.distance || 0) > 0 && Number(r.minutes || 0) > 0)
     .map((r) => ({
-      date: String(r.date || '').slice(0, 10),
+      date: toDay(r.date),
       distance: Number(r.distance),
       minutes: Number(r.minutes),
       pace: Number(r.minutes) / Number(r.distance),
+      speed: Number(r.distance) / (Number(r.minutes) / 60),
+      avgHeartrate: Number(r.avgHeartrate || r.avgHeartRate || 0) || null,
+      maxHeartrate: Number(r.maxHeartrate || r.maxHeartRate || 0) || null,
+      startTime: r.startTime || r.date,
     }))
     .sort((a, b) => String(b.date).localeCompare(String(a.date)));
 
+  const today = toDay(new Date().toISOString());
+
   if (!runs.length) {
     return {
-      title: 'Start building',
-      tip: `Log your first easy run (~4–6 km). Aim toward a long run of ~${targetLong} km for your ${distanceGoal.toFixed(1)} km race.`,
+      title: 'Boot sequence',
+      tip: `No recent runs logged. Start with an easy 4–6 km aerobic jog and build toward a ~${targetLong} km long run for your ${distanceGoal.toFixed(1)} km goal.`,
       action: 'Easy 5 km',
+      nextWhen: 'Tomorrow morning',
+      fuel: 'Banana + small oats bowl 60–90 min before. Skip heavy fried food.',
+      hydration: '300–400 ml water 30 min pre-run. Carry 150–250 ml if >40 min.',
+      sleep: '7.5–8.5 hours tonight for a clean first session.',
+      confidence: 0.7,
     };
   }
 
-  const today = new Date();
-  const iso = (d) => d.toISOString().slice(0, 10);
-  const daysAgo = (n) => {
-    const d = new Date(today);
-    d.setDate(d.getDate() - n);
-    return iso(d);
-  };
-  const weekKm = runs.filter((r) => r.date >= daysAgo(7)).reduce((s, r) => s + r.distance, 0);
-  const recentPeak = Math.max(...runs.filter((r) => r.date >= daysAgo(56)).map((r) => r.distance), runs[0].distance);
   const last = runs[0];
   const last3 = runs.slice(0, 3);
+  const last7 = runs.filter((r) => daysBetween(r.date, today) <= 6);
+  const last30 = runs.filter((r) => daysBetween(r.date, today) <= 29);
+  const weekKm = last7.reduce((s, r) => s + r.distance, 0);
+  const recentPeak = Math.max(...runs.filter((r) => daysBetween(r.date, today) <= 56).map((r) => r.distance), last.distance);
   const avgPace3 = last3.reduce((s, r) => s + r.pace, 0) / last3.length;
-  const daysSinceLast = Math.max(0, Math.round((today - new Date(`${last.date}T12:00:00`)) / 86400000));
+  const avgSpeed3 = last3.reduce((s, r) => s + r.speed, 0) / last3.length;
+  const hrRuns = last7.filter((r) => r.avgHeartrate);
+  const avgHr7 = hrRuns.length ? hrRuns.reduce((s, r) => s + r.avgHeartrate, 0) / hrRuns.length : null;
+  const daysSinceLast = Math.max(0, daysBetween(last.date, today));
   const nextLong = Math.min(targetLong, Number((recentPeak + Math.max(1.5, recentPeak * 0.1)).toFixed(1)));
   const ratio = recentPeak / distanceGoal;
+  const morningBias = runs.slice(0, 8).filter((r) => hourOfRun(r) < 11).length >= Math.ceil(Math.min(8, runs.length) / 2);
+  const hardLoad = (avgHr7 && avgHr7 >= 155) || last.pace <= avgPace3 * 0.92;
+  const recoveryHours = hardLoad
+    ? Math.max(36, Math.min(60, 24 + last.distance * 1.8))
+    : Math.max(24, Math.min(48, 18 + last.distance * 1.2));
+  const sleepHours = hardLoad || last.distance >= 15 ? 8.5 : last.distance >= 10 ? 8 : 7.5;
+  const nextWhen = daysSinceLast === 0
+    ? (hardLoad ? `Rest today · next run in ~${Math.round(recoveryHours)}h` : 'Optional easy shakeout this evening, or rest')
+    : daysSinceLast === 1
+      ? (hardLoad ? 'Tomorrow easy aerobic' : (morningBias ? 'Tomorrow morning window' : 'Later today / tomorrow'))
+      : (morningBias ? 'Tomorrow morning' : 'Within 24 hours');
+
+  const fuel = morningBias
+    ? (last.distance >= 12
+      ? 'Light toast + peanut butter or banana 60–90 min before. Skip large dairy.'
+      : 'Banana or 2 dates + black coffee/tea 45–60 min before.')
+    : 'Small carb snack 60 min pre-run (toast/fruit). Avoid heavy lunch within 2.5h.';
+
+  const hydration = last.distance >= 12 || avgSpeed3 >= 10
+    ? 'Pre: 400 ml water. During: 150–200 ml every 15–20 min. Hot day → add electrolytes / 200–300 ml sports drink.'
+    : 'Pre: 300 ml water. For <50 min, sip only if thirsty. Skip sugary energy drinks on easy days.';
+
+  const sleep = `Target ${sleepHours}h sleep before the next key session for full recovery after your ${last.distance.toFixed(1)} km effort.`;
+
+  let title = 'Race sharpening';
+  let tip = '';
+  let action = 'Maintain + quality';
+  let confidence = 0.78;
 
   if (daysSinceLast >= 3) {
-    return {
-      title: 'Get back on schedule',
-      tip: `Last run was ${daysSinceLast}d ago (${last.distance.toFixed(1)} km). Do an easy ${Math.max(5, Math.min(8, recentPeak * 0.6)).toFixed(0)} km shakeout before pushing longer.`,
-      action: `Easy ${Math.max(5, Math.min(8, recentPeak * 0.6)).toFixed(0)} km`,
-    };
-  }
-
-  if (ratio < 0.55) {
-    return {
-      title: 'Build the long run',
-      tip: `Peak long run is ${recentPeak.toFixed(1)} km (${Math.round(ratio * 100)}% of race). This weekend aim for ~${nextLong} km easy (target ~${targetLong} km before race).`,
-      action: `Long run ${nextLong} km`,
-    };
-  }
-
-  if (weekKm < (distanceGoal >= 40 ? 40 : distanceGoal >= 20 ? 28 : 18) * 0.7) {
+    title = 'Reboot after gap';
+    tip = `Last run was ${daysSinceLast}d ago (${last.distance.toFixed(1)} km`
+      + (last.avgHeartrate ? `, avg HR ${Math.round(last.avgHeartrate)}` : '')
+      + `). Priority: easy ${Math.max(5, Math.min(8, recentPeak * 0.55)).toFixed(0)} km aerobic — keep HR conversational, not tempo.`;
+    action = `Easy ${Math.max(5, Math.min(8, recentPeak * 0.55)).toFixed(0)} km`;
+    confidence = 0.86;
+  } else if (avgHr7 && avgHr7 >= 160 && daysSinceLast <= 1) {
+    title = 'Heart-rate load high';
+    tip = `7-day avg HR ~${Math.round(avgHr7)} bpm with ${weekKm.toFixed(1)} km volume. Schedule recovery: easy ${Math.max(4, Math.min(7, last.distance * 0.6)).toFixed(0)} km or full rest, then resume long-run build toward ${targetLong} km.`;
+    action = 'Recovery / easy only';
+    confidence = 0.9;
+  } else if (ratio < 0.55) {
+    title = 'Build the long run';
+    tip = `Peak long run ${recentPeak.toFixed(1)} km (${Math.round(ratio * 100)}% of ${distanceGoal.toFixed(1)} km goal). Recent pace ~${fmtPace(avgPace3)}/km, speed ~${avgSpeed3.toFixed(1)} km/h. Weekend target ~${nextLong} km easy.`;
+    action = `Long run ${nextLong} km`;
+    confidence = 0.88;
+  } else if (weekKm < (distanceGoal >= 40 ? 40 : distanceGoal >= 20 ? 28 : 18) * 0.7) {
     const weekTarget = distanceGoal >= 40 ? 40 : distanceGoal >= 20 ? 28 : 18;
-    return {
-      title: 'Add volume',
-      tip: `This week you’re at ${weekKm.toFixed(1)} km. Add a mid-week ${Math.max(6, Math.round((weekTarget - weekKm) / 2))} km aerobic run to climb toward ~${weekTarget} km.`,
-      action: `+${Math.max(6, Math.round((weekTarget - weekKm) / 2))} km mid-week`,
-    };
+    title = 'Volume below target';
+    tip = `This week ${weekKm.toFixed(1)} km across ${last7.length} run${last7.length === 1 ? '' : 's'} (30d: ${last30.length} runs). Add a mid-week ${Math.max(6, Math.round((weekTarget - weekKm) / 2))} km aerobic run toward ~${weekTarget} km.`;
+    action = `+${Math.max(6, Math.round((weekTarget - weekKm) / 2))} km mid-week`;
+    confidence = 0.84;
+  } else if (avgPace3 > 8.5 && recentPeak >= 8) {
+    title = 'Inject controlled speed';
+    tip = `Long-run base OK (${recentPeak.toFixed(1)} km) but pace sits ~${fmtPace(avgPace3)}/km. Keep one quality day: 6–8×400m or 20–25 min tempo after warm-up; protect easy days and long run.`;
+    action = 'Tempo / intervals';
+    confidence = 0.82;
+  } else if (ratio < 0.75) {
+    title = 'Stretch long-run ceiling';
+    tip = `Peak ${recentPeak.toFixed(1)} km. Next long: ${nextLong} km easy finishing controlled. Goal still wants ~${targetLong} km. Watch HR drift — stay aerobic until final 2 km.`;
+    action = `Long run ${nextLong} km`;
+    confidence = 0.85;
+  } else {
+    const readinessNote = readiness?.readinessPercent != null ? ` Readiness ~${readiness.readinessPercent}%.` : '';
+    tip = `Base looks solid (peak ${recentPeak.toFixed(1)} km, 7d ${weekKm.toFixed(1)} km, pace ~${fmtPace(avgPace3)}/km). Keep weekly volume, one quality session, long run near ${Math.min(targetLong, recentPeak + 1).toFixed(1)} km.${readinessNote}`;
+    confidence = 0.8;
   }
 
-  if (avgPace3 > 8.5 && recentPeak >= 8) {
-    return {
-      title: 'Inject some speed',
-      tip: `Long runs are progressing (${recentPeak.toFixed(1)} km) but recent pace is ~${Math.floor(avgPace3)}:${String(Math.round((avgPace3 % 1) * 60)).padStart(2, '0')}/km. Do 6–8 × 400m or a 20–30 min tempo after an easy warm-up.`,
-      action: 'Tempo / intervals',
-    };
-  }
-
-  if (ratio < 0.75) {
-    return {
-      title: 'Stretch the long run',
-      tip: `You’re at ${recentPeak.toFixed(1)} km peak. Next long run: ${nextLong} km easy, finish feeling controlled. Race goal still needs ~${targetLong} km.`,
-      action: `Long run ${nextLong} km`,
-    };
-  }
-
-  const readinessNote = readiness?.readinessPercent != null
-    ? ` Readiness ~${readiness.readinessPercent}%.`
-    : '';
   return {
-    title: 'Race sharpening',
-    tip: `Long-run base looks solid (${recentPeak.toFixed(1)} km). Keep weekly volume, one quality session, and long run near ${Math.min(targetLong, recentPeak + 1).toFixed(1)} km.${readinessNote}`,
-    action: 'Maintain + quality',
+    title,
+    tip,
+    action,
+    nextWhen,
+    fuel,
+    hydration,
+    sleep,
+    confidence,
+    meta: {
+      weekKm: Number(weekKm.toFixed(1)),
+      runs7: last7.length,
+      runs30: last30.length,
+      avgPace3,
+      avgSpeed3: Number(avgSpeed3.toFixed(2)),
+      avgHr7: avgHr7 ? Math.round(avgHr7) : null,
+      recentPeak: Number(recentPeak.toFixed(1)),
+      daysSinceLast,
+    },
   };
 }

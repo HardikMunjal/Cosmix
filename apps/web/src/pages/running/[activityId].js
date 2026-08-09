@@ -27,6 +27,96 @@ function fmtMins(mins) {
   return h > 0 ? `${h}h ${m}m` : `${m} min`;
 }
 
+/** Light red → deep red by effort vs max HR (or absolute bpm). */
+function hrColor(bpm, maxHr = 190) {
+  const value = Number(bpm) || 0;
+  if (value <= 0) return '#94a3b8';
+  const ceiling = Math.max(140, Number(maxHr) || 190);
+  const ratio = Math.min(1, Math.max(0, value / ceiling));
+  if (ratio < 0.6) return '#fda4af';
+  if (ratio < 0.7) return '#fb7185';
+  if (ratio < 0.8) return '#f43f5e';
+  if (ratio < 0.9) return '#e11d48';
+  return '#9f1239';
+}
+
+function weatherTheme(code) {
+  const c = Number(code);
+  if ([61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99].includes(c)) {
+    return {
+      key: 'rain',
+      label: 'Rainy',
+      gradient: 'linear-gradient(160deg, #0f172a 0%, #1e293b 40%, #334155 100%)',
+      accent: '#7dd3fc',
+      emoji: '🌧',
+    };
+  }
+  if ([71, 73, 75, 77, 85, 86].includes(c)) {
+    return {
+      key: 'snow',
+      label: 'Snow',
+      gradient: 'linear-gradient(160deg, #0f172a 0%, #1e3a5f 55%, #64748b 100%)',
+      accent: '#e2e8f0',
+      emoji: '❄',
+    };
+  }
+  if ([45, 48, 51, 53, 55, 56, 57].includes(c)) {
+    return {
+      key: 'fog',
+      label: 'Foggy',
+      gradient: 'linear-gradient(160deg, #111827 0%, #374151 60%, #6b7280 100%)',
+      accent: '#d1d5db',
+      emoji: '🌫',
+    };
+  }
+  if ([1, 2, 3].includes(c)) {
+    return {
+      key: 'cloud',
+      label: 'Cloudy',
+      gradient: 'linear-gradient(160deg, #0b1220 0%, #1e293b 45%, #475569 100%)',
+      accent: '#94a3b8',
+      emoji: '☁',
+    };
+  }
+  if (c === 0) {
+    return {
+      key: 'sun',
+      label: 'Sunny',
+      gradient: 'linear-gradient(160deg, #0c4a6e 0%, #0369a1 40%, #f59e0b 120%)',
+      accent: '#fde68a',
+      emoji: '☀',
+    };
+  }
+  return {
+    key: 'mixed',
+    label: 'Mixed',
+    gradient: 'linear-gradient(160deg, #020617 0%, #1e1b4b 50%, #0f766e 120%)',
+    accent: '#a5b4fc',
+    emoji: '🌤',
+  };
+}
+
+async function fetchRunWeather({ lat, lng, date }) {
+  if (lat == null || lng == null || !date) return null;
+  const day = String(date).slice(0, 10);
+  const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lng)}&start_date=${day}&end_date=${day}&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=auto`;
+  const res = await fetch(url);
+  if (!res.ok) return null;
+  const data = await res.json();
+  const code = data?.daily?.weathercode?.[0];
+  const tmax = data?.daily?.temperature_2m_max?.[0];
+  const tmin = data?.daily?.temperature_2m_min?.[0];
+  const precip = data?.daily?.precipitation_sum?.[0];
+  if (code == null && tmax == null) return null;
+  return {
+    code,
+    tempMax: tmax != null ? Math.round(tmax) : null,
+    tempMin: tmin != null ? Math.round(tmin) : null,
+    precip: precip != null ? Number(precip) : null,
+    ...weatherTheme(code),
+  };
+}
+
 function downsample(values = [], maxPoints = 120) {
   if (!Array.isArray(values) || values.length <= maxPoints) return values || [];
   const step = Math.ceil(values.length / maxPoints);
@@ -149,9 +239,16 @@ function FuelBurnPanel({ fuel, theme }) {
 
 function StatPill({ label, value, theme, accent }) {
   return (
-    <div style={{ padding: '12px 14px', borderRadius: 14, border: `1px solid ${theme.cardBorder}`, background: theme.cardBg }}>
-      <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: theme.textMuted }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 800, color: accent || theme.textHeading, marginTop: 4 }}>{value}</div>
+    <div style={{
+      padding: '12px 14px',
+      borderRadius: 14,
+      border: '1px solid rgba(148,163,184,0.22)',
+      background: 'rgba(15,23,42,0.72)',
+      backdropFilter: 'blur(8px)',
+    }}
+    >
+      <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#94a3b8' }}>{label}</div>
+      <div style={{ fontSize: 18, fontWeight: 800, color: accent || '#f8fafc', marginTop: 4 }}>{value}</div>
     </div>
   );
 }
@@ -183,6 +280,7 @@ export default function RunDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [enriching, setEnriching] = useState(false);
+  const [weather, setWeather] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -231,6 +329,24 @@ export default function RunDetailPage() {
   const splits = detail?.splits || [];
   const zones = detail?.heartrateZones || summary.heartrateZones || [];
   const fuelBurn = detail?.fuelBurn || summary.fuelBurn || null;
+  const maxHrRef = summary.maxHeartrate || 190;
+
+  useEffect(() => {
+    let cancelled = false;
+    const lat = summary.startLat ?? detail?.polyline?.[0]?.[0] ?? streams.latlng?.[0]?.[0];
+    const lng = summary.startLng ?? detail?.polyline?.[0]?.[1] ?? streams.latlng?.[0]?.[1];
+    const date = summary.date;
+    if (lat == null || lng == null || !date) {
+      setWeather(null);
+      return undefined;
+    }
+    fetchRunWeather({ lat, lng, date }).then((result) => {
+      if (!cancelled) setWeather(result);
+    }).catch(() => {
+      if (!cancelled) setWeather(null);
+    });
+    return () => { cancelled = true; };
+  }, [summary.startLat, summary.startLng, summary.date, detail?.polyline, streams.latlng]);
 
   const needsEnrich = useMemo(() => {
     if (!detail) return false;
@@ -254,64 +370,107 @@ export default function RunDetailPage() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: theme.pageBg || theme.pageBgSolid || '#0b0f14', paddingBottom: 88 }}>
+    <div style={{ minHeight: '100vh', background: '#020617', paddingBottom: 88, color: '#e2e8f0' }}>
       <div style={{ maxWidth: 720, margin: '0 auto', padding: '16px 14px 24px', display: 'grid', gap: 14 }}>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          <button
-            type="button"
-            onClick={() => router.push('/running-analytics')}
-            style={{
-              border: `1px solid ${theme.cardBorder}`,
-              background: theme.cardBg,
-              color: theme.textHeading,
-              borderRadius: 12,
-              padding: '8px 12px',
-              fontWeight: 700,
-              cursor: 'pointer',
+        <div style={{
+          borderRadius: 24,
+          overflow: 'hidden',
+          border: '1px solid rgba(148,163,184,0.22)',
+          background: weather?.gradient || 'linear-gradient(160deg, #020617 0%, #1e1b4b 50%, #0f766e 120%)',
+          boxShadow: '0 20px 50px rgba(0,0,0,0.35)',
+        }}
+        >
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '14px 14px 0' }}>
+            <button
+              type="button"
+              onClick={() => router.push('/running-analytics')}
+              style={{
+                border: '1px solid rgba(148,163,184,0.28)',
+                background: 'rgba(15,23,42,0.55)',
+                color: '#f8fafc',
+                borderRadius: 12,
+                padding: '8px 12px',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              ← Back
+            </button>
+            <div style={{ flex: 1 }} />
+            {weather ? (
+              <div style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '6px 10px',
+                borderRadius: 999,
+                background: 'rgba(15,23,42,0.45)',
+                border: '1px solid rgba(255,255,255,0.12)',
+                fontSize: 12,
+                fontWeight: 800,
+                color: weather.accent,
+              }}
+              >
+                <span>{weather.emoji}</span>
+                <span>{weather.label}</span>
+                {weather.tempMax != null ? <span>· {weather.tempMin}–{weather.tempMax}°C</span> : null}
+              </div>
+            ) : null}
+          </div>
+
+          <div style={{ padding: '18px 16px 16px' }}>
+            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'rgba(226,232,240,0.7)' }}>
+              {fmtDate(summary.date)}
+              {summary.locationCity ? ` · ${summary.locationCity}` : ''}
+              {detail?.cached ? ' · offline-ready' : ''}
+            </div>
+            <div style={{
+              marginTop: 8,
+              fontSize: 'clamp(26px, 7vw, 36px)',
+              fontWeight: 900,
+              color: '#f8fafc',
+              letterSpacing: '-0.03em',
+              lineHeight: 1.1,
+              textShadow: '0 8px 24px rgba(0,0,0,0.35)',
             }}
-          >
-            ← Back
-          </button>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 18, fontWeight: 800, color: theme.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {summary.name || 'Run detail'}
+            >
+              {summary.name || 'Morning Run'}
             </div>
-            <div style={{ fontSize: 12, color: theme.textMuted, marginTop: 2 }}>
-              {fmtDate(summary.date)} · saved in Cosmix{detail?.cached ? ' · offline-ready' : ''}
+            <div style={{ marginTop: 8, fontSize: 13, color: 'rgba(226,232,240,0.78)', fontWeight: 600 }}>
+              {summary.distanceKm ?? '--'} km · {fmtMins(summary.minutes)} · {summary.paceMinPerKm ? `${fmtPace(summary.paceMinPerKm)} /km` : '--'}
             </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 8, padding: '0 14px 14px' }}>
+            <StatPill label="Avg HR" value={summary.avgHeartrate ? `${summary.avgHeartrate} bpm` : '--'} theme={theme} accent={hrColor(summary.avgHeartrate, maxHrRef)} />
+            <StatPill label="Max HR" value={summary.maxHeartrate ? `${summary.maxHeartrate} bpm` : '--'} theme={theme} accent={hrColor(summary.maxHeartrate, maxHrRef)} />
+            <StatPill label="VO2 max" value={summary.vo2Max ? `${summary.vo2Max}${summary.vo2Estimated ? ' est.' : ''}` : '--'} theme={theme} accent="#34d399" />
+            <StatPill
+              label="Fastest 1 km"
+              value={summary.bestSplitPaceMinPerKm ? `${fmtPace(summary.bestSplitPaceMinPerKm)} /km` : '--'}
+              theme={theme}
+              accent="#67e8f9"
+            />
+            <StatPill label="Avg cadence" value={summary.avgCadence ? `${summary.avgCadence} spm` : '--'} theme={theme} accent="#a78bfa" />
+            <StatPill label="Avg stride" value={summary.avgStrideM ? `${summary.avgStrideM} m` : '--'} theme={theme} accent="#34d399" />
+            <StatPill label="Elevation" value={summary.elevationGainM != null ? `↑${summary.elevationGainM} m` : '--'} theme={theme} accent="#c4b5fd" />
+            {summary.calories ? (
+              <StatPill label="Calories" value={`${summary.calories} kcal`} theme={theme} accent="#fb923c" />
+            ) : (
+              <StatPill label="Best pace" value={summary.paceMinPerKm ? `${fmtPace(summary.paceMinPerKm)} /km` : '--'} theme={theme} accent="#38bdf8" />
+            )}
           </div>
         </div>
 
         {loading ? (
-          <div style={{ padding: 32, textAlign: 'center', color: theme.textMuted }}>Loading run maps & streams…</div>
+          <div style={{ padding: 32, textAlign: 'center', color: '#94a3b8' }}>Loading run maps & streams…</div>
         ) : (
           <>
             {error ? (
-              <div style={{ padding: 12, borderRadius: 12, border: `1px solid ${theme.cardBorder}`, color: theme.textMuted, fontSize: 13 }}>
+              <div style={{ padding: 12, borderRadius: 12, border: '1px solid rgba(148,163,184,0.25)', color: '#94a3b8', fontSize: 13 }}>
                 {error}
               </div>
             ) : null}
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 8 }}>
-              <StatPill label="Distance" value={`${summary.distanceKm ?? '--'} km`} theme={theme} accent={theme.blue} />
-              <StatPill label="Time" value={fmtMins(summary.minutes)} theme={theme} accent={theme.orange} />
-              <StatPill label="Best pace" value={summary.paceMinPerKm ? `${fmtPace(summary.paceMinPerKm)} /km` : '--'} theme={theme} accent={theme.cyan} />
-              <StatPill label="Avg HR" value={summary.avgHeartrate ? `${summary.avgHeartrate} bpm` : '--'} theme={theme} accent="#f43f5e" />
-              <StatPill label="Max HR" value={summary.maxHeartrate ? `${summary.maxHeartrate} bpm` : '--'} theme={theme} accent="#fb7185" />
-              <StatPill label="Elevation" value={summary.elevationGainM != null ? `↑${summary.elevationGainM} m` : '--'} theme={theme} accent={theme.purple} />
-              <StatPill label="VO2 max" value={summary.vo2Max ? `${summary.vo2Max}` : '--'} theme={theme} accent={theme.green} />
-              <StatPill
-                label="Fastest 1 km"
-                value={summary.bestSplitPaceMinPerKm ? `${fmtPace(summary.bestSplitPaceMinPerKm)} /km` : '--'}
-                theme={theme}
-                accent={theme.cyan}
-              />
-              <StatPill label="Avg cadence" value={summary.avgCadence ? `${summary.avgCadence} spm` : '--'} theme={theme} accent="#a78bfa" />
-              <StatPill label="Avg stride" value={summary.avgStrideM ? `${summary.avgStrideM} m` : '--'} theme={theme} accent="#34d399" />
-              {summary.calories ? (
-                <StatPill label="Calories" value={`${summary.calories} kcal`} theme={theme} accent={theme.orange} />
-              ) : null}
-            </div>
 
             {needsEnrich ? (
               <div style={{
@@ -454,7 +613,7 @@ export default function RunDetailPage() {
                       <span style={{ fontWeight: 700, color: theme.textHeading }}>
                         {`${Math.floor((Number(split.seconds) || 0) / 60)}:${String(Math.round((Number(split.seconds) || 0) % 60)).padStart(2, '0')}`}
                       </span>
-                      <span style={{ fontWeight: 700, color: '#f43f5e' }}>{split.avgHeartrate ? `${split.avgHeartrate}` : '--'}</span>
+                      <span style={{ fontWeight: 800, color: hrColor(split.avgHeartrate, maxHrRef) }}>{split.avgHeartrate ? `${split.avgHeartrate}` : '--'}</span>
                     </div>
                   ))}
                 </div>
