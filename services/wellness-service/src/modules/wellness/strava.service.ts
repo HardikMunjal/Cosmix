@@ -539,7 +539,6 @@ export class StravaService {
       cadence,
       strideLengthM,
       latlng,
-      avgCadence: cadenceNorm.avgCadence,
     };
   }
 
@@ -566,10 +565,9 @@ export class StravaService {
     const strideSrc = streams?.strideLengthM;
     const fromStreams = Array.isArray(cadenceSrc) ? cadenceSrc.map((v) => Number(v) || 0).filter((v) => v > 20) : [];
     const stride = Array.isArray(strideSrc) ? strideSrc.map((v) => Number(v) || 0).filter((v) => v > 0.4 && v < 2.5) : [];
-    let avgCadence = Number((streams as any)?.avgCadence) || null;
-    if (!avgCadence && fromStreams.length) {
-      avgCadence = Math.round(fromStreams.reduce((sum, v) => sum + v, 0) / fromStreams.length);
-    }
+    let avgCadence = fromStreams.length
+      ? Math.round(fromStreams.reduce((sum, v) => sum + v, 0) / fromStreams.length)
+      : null;
     if (!avgCadence) {
       const detailCadence = Number(detail?.average_cadence || 0);
       if (detailCadence > 0) {
