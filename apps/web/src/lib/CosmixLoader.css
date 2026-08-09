@@ -120,8 +120,28 @@
   -webkit-text-fill-color: transparent;
   color: transparent;
 }
+.cosmix-loader-title--night {
+  background: linear-gradient(105deg, #e2e8f0 0%, #67e8f9 45%, #34d399 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
 .cosmix-loader-sub {
   color: #475569;
+}
+.cosmix-loader-sub--night {
+  color: #94a3b8;
+}
+.cosmix-loader-mesh {
+  position: absolute;
+  inset: 0;
+  opacity: 0.28;
+  background-image:
+    linear-gradient(rgba(148,163,184,0.1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148,163,184,0.1) 1px, transparent 1px);
+  background-size: 36px 36px;
+  mask-image: radial-gradient(ellipse 70% 55% at 50% 40%, black, transparent);
 }
 .cosmix-loader-sat {
   position: absolute;
@@ -176,32 +196,3 @@
   }
 }
 
-@keyframes running-cartoon-stride {
-  0%, 100% { transform: translateY(0) rotate(0deg); }
-  50% { transform: translateY(-3px) rotate(-2deg); }
-}
-@keyframes running-cartoon-dust {
-  0% { opacity: 0.15; transform: translateX(0); }
-  100% { opacity: 0; transform: translateX(-14px); }
-}
-@keyframes running-cartoon-lane {
-  0% { stroke-dashoffset: 0; }
-  100% { stroke-dashoffset: -28; }
-}
-.running-cartoon-runner {
-  transform-origin: 68px 58px;
-  animation: running-cartoon-stride 0.85s ease-in-out infinite;
-}
-.running-cartoon-dust {
-  animation: running-cartoon-dust 0.9s ease-out infinite;
-}
-.running-cartoon-lane {
-  animation: running-cartoon-lane 1.4s linear infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .running-cartoon-runner,
-  .running-cartoon-dust,
-  .running-cartoon-lane {
-    animation: none !important;
-  }
-}

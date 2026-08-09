@@ -1,5 +1,4 @@
 import { useMemo } from 'react';
-import { RunningCartoon } from './RunningCartoon';
 
 function resolveLoaderColors(theme = {}) {
   return {
@@ -51,10 +50,11 @@ export function CosmixLoader({
   const isFull = variant === 'full';
   const isOverlay = variant === 'overlay';
   const isCompact = variant === 'compact';
-  const orbSize = isFull || isOverlay ? 112 : isCompact ? 52 : 84;
+  const orbSize = isFull || isOverlay ? 118 : isCompact ? 52 : 84;
   const title = message || label;
+  const immersive = isFull || isOverlay;
 
-  const shellStyle = isFull || isOverlay
+  const shellStyle = immersive
     ? {
       position: 'relative',
       overflow: 'hidden',
@@ -65,10 +65,10 @@ export function CosmixLoader({
       placeItems: 'center',
       padding: '24px',
       background:
-        'radial-gradient(circle at 18% 12%, rgba(125,211,252,0.42), transparent 34%),'
-        + 'radial-gradient(circle at 84% 18%, rgba(167,139,250,0.32), transparent 30%),'
-        + 'radial-gradient(circle at 50% 88%, rgba(52,211,153,0.22), transparent 36%),'
-        + 'linear-gradient(165deg, #e0f2fe 0%, #f8fafc 42%, #ede9fe 100%)',
+        'radial-gradient(circle at 16% 10%, rgba(56,189,248,0.22), transparent 34%),'
+        + 'radial-gradient(circle at 86% 16%, rgba(52,211,153,0.16), transparent 30%),'
+        + 'radial-gradient(circle at 50% 92%, rgba(14,165,233,0.12), transparent 36%),'
+        + 'linear-gradient(165deg, #020617 0%, #0f172a 48%, #020617 100%)',
       fontFamily: theme?.font,
     }
     : {
@@ -95,17 +95,22 @@ export function CosmixLoader({
           inset: 0,
           overflow: 'hidden',
           pointerEvents: 'none',
-          opacity: 0.55,
-        }}>
-          <div className="cosmix-loader-shimmer-sweep" style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            width: '42%',
-            height: '100%',
-            background: `linear-gradient(90deg, transparent, ${colors.b}33, transparent)`,
-            animation: 'cosmix-loader-shimmer 2.2s ease-in-out infinite',
-          }} />
+          opacity: immersive ? 0.45 : 0.55,
+        }}
+        >
+          <div
+            className="cosmix-loader-shimmer-sweep"
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '42%',
+              height: '100%',
+              background: `linear-gradient(90deg, transparent, ${colors.b}33, transparent)`,
+              animation: 'cosmix-loader-shimmer 2.2s ease-in-out infinite',
+            }}
+          />
+          {immersive ? <div className="cosmix-loader-mesh" aria-hidden="true" /> : null}
         </div>
       ) : null}
       <div style={{
@@ -116,15 +121,12 @@ export function CosmixLoader({
         justifyItems: 'center',
         textAlign: 'center',
         maxWidth: '340px',
-      }}>
-        {(isFull || isOverlay) ? (
-          <RunningCartoon size={120} label="Stride online" variant="bot" />
-        ) : (
-          <CosmixOrb size={orbSize} theme={theme} showLabel={false} />
-        )}
+      }}
+      >
+        <CosmixOrb size={orbSize} theme={theme} showLabel={immersive} />
         <div style={{ display: 'grid', gap: '4px' }}>
           <div
-            className="cosmix-loader-title"
+            className={immersive ? 'cosmix-loader-title cosmix-loader-title--night' : 'cosmix-loader-title'}
             style={{
               fontSize: isCompact ? '12px' : '14px',
               fontWeight: 800,
@@ -135,7 +137,10 @@ export function CosmixLoader({
             {title}
           </div>
           {sublabel && !isCompact ? (
-            <div className="cosmix-loader-sub" style={{ fontSize: '13px', lineHeight: 1.45, fontWeight: 600 }}>
+            <div
+              className={immersive ? 'cosmix-loader-sub cosmix-loader-sub--night' : 'cosmix-loader-sub'}
+              style={{ fontSize: '13px', lineHeight: 1.45, fontWeight: 600 }}
+            >
               {sublabel}
             </div>
           ) : null}
@@ -174,7 +179,8 @@ export function SectionLoadingShell({
           background: 'linear-gradient(160deg, rgba(248,250,252,0.88), rgba(224,242,254,0.84) 55%, rgba(237,233,254,0.86))',
           backdropFilter: 'blur(10px)',
           border: '1px solid rgba(148,163,184,0.22)',
-        }}>
+        }}
+        >
           <CosmixLoader variant="compact" label={label} theme={theme} />
         </div>
       ) : null}
@@ -182,7 +188,8 @@ export function SectionLoadingShell({
         opacity: loading ? 0.2 : 1,
         transition: 'opacity 0.28s ease',
         pointerEvents: loading ? 'none' : 'auto',
-      }}>
+      }}
+      >
         {children}
       </div>
     </div>

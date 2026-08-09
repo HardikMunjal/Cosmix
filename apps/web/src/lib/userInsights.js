@@ -571,7 +571,7 @@ export function computeStrategyStats(strategies = []) {
 }
 
 // ───── Running/Wellness Analytics ─────
-export function computeRunningStats(userId) {
+export function computeRunningStats(userId, options = {}) {
   const entries = readWellnessEntries(userId);
   const runs = entries
     .filter((e) => Number(e.runningDistanceKm || 0) > 0 && Number(e.runningMinutes || 0) > 0)
@@ -583,7 +583,11 @@ export function computeRunningStats(userId) {
       pace: Number(e.runningMinutes) / Number(e.runningDistanceKm),
     }));
 
-  if (!runs.length) {
+  const splitPace = Number(options.bestSplitPaceMinPerKm || 0);
+  const splitSpeed = splitPace > 0 ? Number((60 / splitPace).toFixed(2)) : null;
+  const splitRun = options.bestSplitRun || null;
+
+  if (!runs.length && !splitSpeed) {
     return {
       totalRuns: 0,
       totalDistance: 0,
@@ -598,30 +602,48 @@ export function computeRunningStats(userId) {
       fastestDistanceRun: null,
       topDistances: [],
       topSpeeds: [],
+      speedSource: null,
     };
   }
 
   const qualifiedSpeed = runs.filter((r) => r.distance >= 2);
   const totalDistance = runs.reduce((sum, r) => sum + r.distance, 0);
-  const avgSpeed = totalDistance / runs.reduce((sum, r) => sum + r.minutes, 0) * 60;
+  const totalMinutes = runs.reduce((sum, r) => sum + r.minutes, 0);
+  const avgSpeed = totalMinutes > 0 ? (totalDistance / totalMinutes) * 60 : 0;
 
-  const fastestSpeedRun = qualifiedSpeed.length ? qualifiedSpeed.sort((a, b) => b.speed - a.speed)[0] : null;
-  const slowestSpeedRun = qualifiedSpeed.length ? qualifiedSpeed.sort((a, b) => a.speed - b.speed)[0] : null;
-  const longestDistanceRun = runs.sort((a, b) => b.distance - a.distance)[0];
-  const fastestDistanceRun = runs.sort((a, b) => b.speed - a.speed)[0];
+  const fastestAvgRun = qualifiedSpeed.length ? [...qualifiedSpeed].sort((a, b) => b.speed - a.speed)[0] : null;
+  const slowestSpeedRun = qualifiedSpeed.length ? [...qualifiedSpeed].sort((a, b) => a.speed - b.speed)[0] : null;
+  const longestDistanceRun = runs.length ? [...runs].sort((a, b) => b.distance - a.distance)[0] : null;
+
+  const fastestSpeed = splitSpeed || (fastestAvgRun ? Number(fastestAvgRun.speed.toFixed(2)) : null);
+  const fastestSpeedRun = splitSpeed
+    ? {
+      date: splitRun?.date || null,
+      distance: Number(splitRun?.distanceKm || splitRun?.distance || 1),
+      time: splitRun?.bestSplitSeconds
+        ? `${Math.floor(splitRun.bestSplitSeconds / 60)}:${String(Math.round(splitRun.bestSplitSeconds % 60)).padStart(2, '0')}`
+        : '1 km split',
+      speed: splitSpeed,
+      source: 'best_1km_split',
+      paceMinPerKm: splitPace,
+      splitKm: splitRun?.bestSplitKm || 1,
+    }
+    : (fastestAvgRun ? {
+      date: fastestAvgRun.date,
+      distance: Number(fastestAvgRun.distance.toFixed(1)),
+      time: `${Math.floor(fastestAvgRun.minutes)}m`,
+      speed: Number(fastestAvgRun.speed.toFixed(2)),
+      source: 'avg_run_speed',
+    } : null);
 
   return {
     totalRuns: runs.length,
     totalDistance: Number(totalDistance.toFixed(1)),
     averageSpeed: Number(avgSpeed.toFixed(2)),
     averagePace: runs.length > 0 ? Number((runs.reduce((sum, r) => sum + r.pace, 0) / runs.length).toFixed(2)) : null,
-    fastestSpeed: fastestSpeedRun ? Number(fastestSpeedRun.speed.toFixed(2)) : null,
-    fastestSpeedRun: fastestSpeedRun ? {
-      date: fastestSpeedRun.date,
-      distance: Number(fastestSpeedRun.distance.toFixed(1)),
-      time: `${Math.floor(fastestSpeedRun.minutes)}m`,
-      speed: Number(fastestSpeedRun.speed.toFixed(2)),
-    } : null,
+    fastestSpeed,
+    fastestSpeedRun,
+    speedSource: splitSpeed ? 'best_1km_split' : (fastestSpeed ? 'avg_run_speed' : null),
     slowestSpeed: slowestSpeedRun ? Number(slowestSpeedRun.speed.toFixed(2)) : null,
     slowestSpeedRun: slowestSpeedRun ? {
       date: slowestSpeedRun.date,
@@ -636,13 +658,13 @@ export function computeRunningStats(userId) {
       time: `${Math.floor(longestDistanceRun.minutes)}m`,
       speed: Number(longestDistanceRun.speed.toFixed(2)),
     } : null,
-    fastestDistanceRun: fastestDistanceRun ? {
-      date: fastestDistanceRun.date,
-      distance: Number(fastestDistanceRun.distance.toFixed(1)),
-      time: `${Math.floor(fastestDistanceRun.minutes)}m`,
-      speed: Number(fastestDistanceRun.speed.toFixed(2)),
+    fastestDistanceRun: fastestAvgRun ? {
+      date: fastestAvgRun.date,
+      distance: Number(fastestAvgRun.distance.toFixed(1)),
+      time: `${Math.floor(fastestAvgRun.minutes)}m`,
+      speed: Number(fastestAvgRun.speed.toFixed(2)),
     } : null,
-    topDistances: runs
+    topDistances: [...runs]
       .sort((a, b) => b.distance - a.distance)
       .slice(0, 5)
       .map((r) => ({
@@ -651,15 +673,22 @@ export function computeRunningStats(userId) {
         time: `${Math.floor(r.minutes)}m`,
         speed: Number(r.speed.toFixed(2)),
       })),
-    topSpeeds: qualifiedSpeed
-      .sort((a, b) => b.speed - a.speed)
-      .slice(0, 5)
-      .map((r) => ({
-        date: r.date,
-        distance: Number(r.distance.toFixed(1)),
-        time: `${Math.floor(r.minutes)}m`,
-        speed: Number(r.speed.toFixed(2)),
-      })),
+    topSpeeds: splitSpeed
+      ? [{
+        date: splitRun?.date || null,
+        distance: 1,
+        time: '1 km split',
+        speed: splitSpeed,
+      }]
+      : [...qualifiedSpeed]
+        .sort((a, b) => b.speed - a.speed)
+        .slice(0, 5)
+        .map((r) => ({
+          date: r.date,
+          distance: Number(r.distance.toFixed(1)),
+          time: `${Math.floor(r.minutes)}m`,
+          speed: Number(r.speed.toFixed(2)),
+        })),
   };
 }
 

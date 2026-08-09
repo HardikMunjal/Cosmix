@@ -39,9 +39,34 @@ export function resolveChatSocketClient() {
 
 export function mergeChatMessages(previous, incoming) {
   const map = new Map();
-  [...(previous || []), ...(incoming || [])].forEach((message) => {
-    const key = message?.id || `${message?.user || 'user'}-${message?.timestamp || ''}-${message?.text || ''}`;
-    map.set(key, message);
+  const byClient = new Map();
+
+  const upsert = (message) => {
+    if (!message) return;
+    const clientId = String(message.clientMessageId || '').trim();
+    if (clientId && byClient.has(clientId)) {
+      map.delete(byClient.get(clientId));
+    }
+    const key = message.id
+      || (clientId ? `client:${clientId}` : `${message.user || 'user'}-${message.timestamp || ''}-${message.text || message.gif || ''}`);
+    if (clientId) byClient.set(clientId, key);
+    map.set(key, {
+      ...message,
+      pending: Boolean(message.pending),
+    });
+  };
+
+  (previous || []).forEach(upsert);
+  (incoming || []).forEach((message) => {
+    upsert({
+      ...message,
+      pending: message.pending === true,
+    });
   });
-  return [...map.values()].sort((left, right) => Number(left.timestamp || 0) - Number(right.timestamp || 0));
+
+  return [...map.values()].sort((left, right) => {
+    const a = new Date(left.timestamp || 0).getTime();
+    const b = new Date(right.timestamp || 0).getTime();
+    return a - b;
+  });
 }

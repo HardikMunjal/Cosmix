@@ -5,6 +5,7 @@ import { MobileBottomNav } from '../../lib/MobileNav';
 import { useTheme } from '../../lib/ThemePicker';
 import { RunRouteMap } from '../../lib/RunRouteMap';
 import { isWellnessApiReady, wellnessApiUrl } from '../../lib/runningShoes';
+import { ShareRunButton } from '../../lib/PersonalRecordModal';
 
 function fmtDate(dateStr) {
   if (!dateStr) return '--';
@@ -428,14 +429,26 @@ export default function RunDetailPage() {
               marginTop: 8,
               fontSize: 'clamp(26px, 7vw, 36px)',
               fontWeight: 900,
-              color: '#f8fafc',
               letterSpacing: '-0.03em',
-              lineHeight: 1.1,
-              textShadow: '0 8px 24px rgba(0,0,0,0.35)',
+              color: '#f8fafc',
+              lineHeight: 1.15,
             }}
             >
-              {summary.name || 'Morning Run'}
+              {summary.name || 'Run'}
             </div>
+            {userId && (detail?.polyline?.length || streams.latlng?.length) ? (
+              <div style={{ marginTop: 14 }}>
+                <ShareRunButton
+                  userId={userId}
+                  activityId={activityId}
+                  athleteName={user?.name || user?.username || ''}
+                  theme={{ textMuted: '#94a3b8' }}
+                  label="Share reel · Instagram / WhatsApp"
+                  summary={summary}
+                  polyline={detail?.polyline?.length ? detail.polyline : streams.latlng}
+                />
+              </div>
+            ) : null}
             <div style={{ marginTop: 8, fontSize: 13, color: 'rgba(226,232,240,0.78)', fontWeight: 600 }}>
               {summary.distanceKm ?? '--'} km · {fmtMins(summary.minutes)} · {summary.paceMinPerKm ? `${fmtPace(summary.paceMinPerKm)} /km` : '--'}
             </div>

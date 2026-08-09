@@ -1,4 +1,3 @@
-
 function fmtPace(minPerKm) {
   if (!minPerKm || !Number.isFinite(minPerKm) || minPerKm <= 0) return null;
   const mins = Math.floor(minPerKm);
@@ -26,17 +25,45 @@ function computeStreak(entries, fieldCheck) {
   return streak;
 }
 
+function entryHasActivity(entry) {
+  if (!entry) return false;
+  if (Number(entry.runningDistanceKm || 0) > 0 || Number(entry.runningMinutes || 0) > 0) return true;
+  return [
+    'badmintonMinutes',
+    'cyclingMinutes',
+    'walkingMinutes',
+    'swimmingMinutes',
+    'footballMinutes',
+    'exerciseMinutes',
+    'yogaMinutes',
+  ].some((key) => Number(entry[key] || 0) > 0);
+}
+
+function calendarDaysBetween(laterDate, earlierDate) {
+  const later = new Date(`${String(laterDate).slice(0, 10)}T12:00:00Z`);
+  const earlier = new Date(`${String(earlierDate).slice(0, 10)}T12:00:00Z`);
+  if (Number.isNaN(later.getTime()) || Number.isNaN(earlier.getTime())) return 0;
+  return Math.round((later.getTime() - earlier.getTime()) / 86400000);
+}
+
 function rankedRuns(entries) {
   return sortEntriesDesc(entries)
     .filter((e) => Number(e.runningDistanceKm || 0) >= 2 && Number(e.runningMinutes || 0) > 0)
     .map((e) => ({
-      date: e.date,
+      date: String(e.date),
       distanceKm: Number(e.runningDistanceKm),
       minutes: Number(e.runningMinutes),
       pace: Number(e.runningMinutes) / Number(e.runningDistanceKm),
       speed: Number(e.runningDistanceKm) / (Number(e.runningMinutes) / 60),
     }));
 }
+
+/** Distance bands used for "best split" personal records. */
+const SPLIT_BANDS = [
+  { id: '5k', label: '5K', minKm: 4.5, maxKm: 5.8 },
+  { id: '10k', label: '10K', minKm: 9.0, maxKm: 11.5 },
+  { id: 'half', label: 'half marathon', minKm: 20.0, maxKm: 23.0 },
+];
 
 function buildActivityPosts(authorId, authorName, entries) {
   const posts = [];
@@ -64,7 +91,7 @@ function buildActivityPosts(authorId, authorName, entries) {
         createdAt: `${date}T18:00:00.000Z`,
         comments: [],
         metrics: { distanceKm: runKm, minutes: runMin, pace, speed },
-        notifiable: true,
+        notifiable: false,
       });
     }
 
@@ -98,7 +125,7 @@ function buildActivityPosts(authorId, authorName, entries) {
         createdAt: `${date}T17:30:00.000Z`,
         comments: [],
         metrics: { minutes: mins, distanceKm: dist || null },
-        notifiable: true,
+        notifiable: false,
       });
     });
   });
@@ -113,96 +140,122 @@ function buildAchievementPosts(authorId, authorName, entries) {
 
   const latest = sorted[0];
   const latestDate = String(latest.date || '');
+  const prior = sorted.slice(1);
 
   const runStreak = computeStreak(entries, (e) => Number(e.runningDistanceKm || 0) > 0);
   if (runStreak >= 3 && Number(latest.runningDistanceKm || 0) > 0) {
     const latestRunKm = Number(latest.runningDistanceKm || 0);
-    const id = `fit-${authorId}-run-streak-${latestDate}`;
     posts.push({
-      id,
+      id: `fit-${authorId}-run-streak-${latestDate}`,
       authorId,
       authorName,
       kind: 'streak',
       activityType: latestRunKm >= 21 ? 'Marathon streak' : 'Running streak',
       sport: latestRunKm >= 21 ? 'marathon' : 'running',
       title: `${authorName} is on a ${runStreak}-day running streak`,
-      body: `Momentum is building — ${runStreak} days in a row with a run logged. Buddies are watching.`,
+      body: `Momentum is building — ${runStreak} days in a row with a run logged.`,
       createdAt: `${latestDate}T19:10:00.000Z`,
       comments: [],
-      notifiable: true,
+      notifiable: false,
     });
   }
 
   const badmintonStreak = computeStreak(entries, (e) => Number(e.badmintonMinutes || 0) > 0);
   if (badmintonStreak >= 3 && Number(latest.badmintonMinutes || 0) > 0) {
-    const id = `fit-${authorId}-badminton-streak-${latestDate}`;
     posts.push({
-      id,
+      id: `fit-${authorId}-badminton-streak-${latestDate}`,
       authorId,
       authorName,
       kind: 'streak',
       activityType: 'Badminton streak',
       sport: 'badminton',
       title: `${authorName} made a ${badmintonStreak}-day badminton streak`,
-      body: `${badmintonStreak} days of court time in a row. Sharp reflexes and steady wellness.`,
+      body: `${badmintonStreak} days of court time in a row.`,
       createdAt: `${latestDate}T19:05:00.000Z`,
       comments: [],
-      notifiable: true,
+      notifiable: false,
     });
   }
 
+  // Comeback after a long gap (7+ days since last activity)
+  if (entryHasActivity(latest) && prior.length) {
+    const previousActive = prior.find(entryHasActivity);
+    if (previousActive) {
+      const gapDays = calendarDaysBetween(latestDate, previousActive.date);
+      if (gapDays >= 7) {
+        posts.push({
+          id: `fit-${authorId}-comeback-${latestDate}`,
+          authorId,
+          authorName,
+          kind: 'comeback',
+          activityType: 'Comeback',
+          sport: Number(latest.runningDistanceKm || 0) > 0 ? 'running' : 'wellness',
+          title: `${authorName} is back after ${gapDays} days`,
+          body: `First session in ${gapDays} days — welcome back to the training circle.`,
+          createdAt: `${latestDate}T19:00:00.000Z`,
+          comments: [],
+          metrics: { gapDays },
+          notifiable: true,
+        });
+      }
+    }
+  }
+
   const runs = rankedRuns(entries);
-  if (runs.length && Number(latest.runningDistanceKm || 0) > 0) {
-    const maxDist = Math.max(...runs.map((r) => r.distanceKm));
-    if (Number(latest.runningDistanceKm) >= maxDist && maxDist >= 3) {
-      const id = `fit-${authorId}-pr-distance-${latestDate}`;
+  const latestRun = runs.find((r) => r.date === latestDate);
+  if (latestRun) {
+    const priorRuns = runs.filter((r) => r.date !== latestDate);
+
+    // Personal max distance record (strictly better than every prior run)
+    if (priorRuns.length) {
+      const priorMaxDist = Math.max(...priorRuns.map((r) => r.distanceKm));
+      if (latestRun.distanceKm > priorMaxDist && latestRun.distanceKm >= 3) {
+        posts.push({
+          id: `fit-${authorId}-pr-distance-${latestDate}`,
+          authorId,
+          authorName,
+          kind: 'record',
+          activityType: latestRun.distanceKm >= 21 ? 'Marathon record' : 'Distance PR',
+          sport: latestRun.distanceKm >= 21 ? 'marathon' : 'running',
+          title: `${authorName} set a new max distance record`,
+          body: `New longest run: ${latestRun.distanceKm.toFixed(1)} km (was ${priorMaxDist.toFixed(1)} km).`,
+          createdAt: `${latestDate}T19:20:00.000Z`,
+          comments: [],
+          metrics: { distanceKm: latestRun.distanceKm, previousKm: priorMaxDist },
+          notifiable: true,
+        });
+      }
+    } else if (latestRun.distanceKm >= 5) {
       posts.push({
-        id,
+        id: `fit-${authorId}-pr-distance-${latestDate}`,
         authorId,
         authorName,
         kind: 'record',
-        activityType: maxDist >= 21 ? 'Marathon record' : 'Personal record',
-        sport: maxDist >= 21 ? 'marathon' : 'running',
-        title: `${authorName} broke their max distance record`,
-        body: `New longest run: ${maxDist.toFixed(1)} km. Previous bests are officially in the rear-view.`,
+        activityType: 'Distance PR',
+        sport: 'running',
+        title: `${authorName} logged their first big distance`,
+        body: `${latestRun.distanceKm.toFixed(1)} km — a personal distance marker to beat.`,
         createdAt: `${latestDate}T19:20:00.000Z`,
         comments: [],
-        metrics: { distanceKm: maxDist },
+        metrics: { distanceKm: latestRun.distanceKm },
         notifiable: true,
       });
     }
 
-    const sortedByPace = [...runs].sort((a, b) => a.pace - b.pace);
-    const latestRun = runs.find((r) => r.date === latestDate);
-    if (latestRun && sortedByPace.length >= 2) {
-      const paceRank = sortedByPace.findIndex((r) => r.date === latestDate) + 1;
-      if (paceRank === 2) {
-        const id = `fit-${authorId}-pace-2nd-${latestDate}`;
+    // Best overall speed / pace
+    if (priorRuns.length >= 1) {
+      const priorBestPace = Math.min(...priorRuns.map((r) => r.pace));
+      const priorBestSpeed = Math.max(...priorRuns.map((r) => r.speed));
+      if (latestRun.pace < priorBestPace && latestRun.distanceKm >= 2) {
         posts.push({
-          id,
+          id: `fit-${authorId}-pace-pr-${latestDate}`,
           authorId,
           authorName,
           kind: 'pace',
-          activityType: latestRun.distanceKm >= 21 ? 'Marathon pace' : 'Fast run',
+          activityType: latestRun.distanceKm >= 21 ? 'Marathon PR' : 'Best speed',
           sport: latestRun.distanceKm >= 21 ? 'marathon' : 'running',
-          title: `${authorName} just hit their second fastest run`,
-          body: `${latestRun.distanceKm.toFixed(1)} km at ${fmtPace(latestRun.pace)} — only one session was quicker all-time.`,
-          createdAt: `${latestDate}T19:15:00.000Z`,
-          comments: [],
-          metrics: latestRun,
-          notifiable: true,
-        });
-      } else if (paceRank === 1 && latestRun.distanceKm >= 2) {
-        const id = `fit-${authorId}-pace-pr-${latestDate}`;
-        posts.push({
-          id,
-          authorId,
-          authorName,
-          kind: 'pace',
-          activityType: latestRun.distanceKm >= 21 ? 'Marathon PR' : 'Fastest run',
-          sport: latestRun.distanceKm >= 21 ? 'marathon' : 'running',
-          title: `${authorName} set a new fastest pace`,
-          body: `${latestRun.distanceKm.toFixed(1)} km at ${fmtPace(latestRun.pace)} — a new personal speed benchmark.`,
+          title: `${authorName} set a new best speed`,
+          body: `${latestRun.distanceKm.toFixed(1)} km at ${fmtPace(latestRun.pace)} · ${latestRun.speed.toFixed(1)} km/h (was ${priorBestSpeed.toFixed(1)} km/h).`,
           createdAt: `${latestDate}T19:18:00.000Z`,
           comments: [],
           metrics: latestRun,
@@ -210,6 +263,48 @@ function buildAchievementPosts(authorId, authorName, entries) {
         });
       }
     }
+
+    // Best split within a distance band (5K / 10K / half)
+    SPLIT_BANDS.forEach((band) => {
+      if (latestRun.distanceKm < band.minKm || latestRun.distanceKm > band.maxKm) return;
+      const bandPriors = priorRuns.filter((r) => r.distanceKm >= band.minKm && r.distanceKm <= band.maxKm);
+      if (!bandPriors.length) {
+        if (latestRun.distanceKm >= band.minKm) {
+          posts.push({
+            id: `fit-${authorId}-split-${band.id}-${latestDate}`,
+            authorId,
+            authorName,
+            kind: 'split',
+            activityType: `Best ${band.label} split`,
+            sport: 'running',
+            title: `${authorName} set a best ${band.label} split`,
+            body: `${latestRun.distanceKm.toFixed(1)} km at ${fmtPace(latestRun.pace)} — first ${band.label} benchmark.`,
+            createdAt: `${latestDate}T19:16:00.000Z`,
+            comments: [],
+            metrics: { ...latestRun, splitBand: band.id },
+            notifiable: true,
+          });
+        }
+        return;
+      }
+      const priorBestSplit = Math.min(...bandPriors.map((r) => r.pace));
+      if (latestRun.pace < priorBestSplit) {
+        posts.push({
+          id: `fit-${authorId}-split-${band.id}-${latestDate}`,
+          authorId,
+          authorName,
+          kind: 'split',
+          activityType: `Best ${band.label} split`,
+          sport: 'running',
+          title: `${authorName} broke their best ${band.label} split`,
+          body: `${latestRun.distanceKm.toFixed(1)} km at ${fmtPace(latestRun.pace)} (was ${fmtPace(priorBestSplit)}).`,
+          createdAt: `${latestDate}T19:16:00.000Z`,
+          comments: [],
+          metrics: { ...latestRun, splitBand: band.id, previousPace: priorBestSplit },
+          notifiable: true,
+        });
+      }
+    });
   }
 
   return posts;
@@ -235,7 +330,11 @@ export function rankPostsForViewer(posts, viewerId, viewedIds = new Set()) {
       const leftUnseen = left.seen ? 0 : 1;
       const rightUnseen = right.seen ? 0 : 1;
       if (rightUnseen !== leftUnseen) return rightUnseen - leftUnseen;
+      const leftMilestone = left.notifiable ? 1 : 0;
+      const rightMilestone = right.notifiable ? 1 : 0;
+      if (rightMilestone !== leftMilestone) return rightMilestone - leftMilestone;
       return String(right.createdAt).localeCompare(String(left.createdAt));
     });
 }
 
+export const NOTIFIABLE_KINDS = new Set(['record', 'pace', 'split', 'comeback']);

@@ -95,7 +95,11 @@ export class ChatGateway
     @MessageBody() data: { username: string; userId?: string | null; avatar?: string | null },
     @ConnectedSocket() socket: Socket,
   ) {
-    const { username } = data;
+    const username = String(data?.username || '').trim();
+    if (!username) {
+      socket.emit('chat_error', { message: 'Username is required to join chat.' });
+      return;
+    }
 
     socket.data.username = username;
     socket.data.userId = data.userId || null;
@@ -109,6 +113,7 @@ export class ChatGateway
 
     this.server.emit('online_users', this.getOnlineUsers());
     socket.emit('call_status_snapshot', this.callStatusSnapshot());
+    socket.emit('joined', { username, ok: true });
 
     console.log(`${username} joined`);
   }
@@ -126,8 +131,11 @@ export class ChatGateway
     @MessageBody() data: { room: string },
     @ConnectedSocket() socket: Socket,
   ) {
-    socket.join(data.room);
-    console.log(`${socket.data.username} joined room ${data.room}`);
+    const room = String(data?.room || '').trim();
+    if (!room) return;
+    socket.join(room);
+    socket.emit('room_joined', { room, ok: true });
+    console.log(`${socket.data.username} joined room ${room}`);
   }
 
   @SubscribeMessage('open_chat')
@@ -158,9 +166,10 @@ export class ChatGateway
   async handleMessage(
     @MessageBody()
     data: {
-      type: 'text' | 'gif';
+      type: 'text' | 'gif' | 'image';
       text?: string;
       gif?: string;
+      image?: string;
       chat: { type: 'group' | 'dm'; name: string };
       timestamp: string;
       clientMessageId?: string;
@@ -184,7 +193,11 @@ export class ChatGateway
         avatar: actor.avatar || null,
       });
     } catch (error) {
-      socket.emit('chat_error', { message: error instanceof Error ? error.message : 'Could not send message.' });
+      const message = error instanceof Error ? error.message : 'Could not send message.';
+      socket.emit('chat_error', {
+        message,
+        clientMessageId: data?.clientMessageId || null,
+      });
       return;
     }
     // COMMAND / AI HANDLING

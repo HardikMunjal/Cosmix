@@ -12,9 +12,9 @@ function threadEmoji(name) {
 }
 
 function coverGradient(name) {
-  const hues = [200, 230, 260, 190, 280, 170];
+  const hues = [0, 220, 40, 160, 280, 120];
   const h = hues[Math.abs(String(name || '').split('').reduce((a, c) => a + c.charCodeAt(0), 0)) % hues.length];
-  return `linear-gradient(145deg, hsl(${h} 70% 38%), hsl(${(h + 48) % 360} 65% 52%))`;
+  return `linear-gradient(145deg, hsl(${h} 12% 12%), hsl(${(h + 30) % 360} 10% 22%))`;
 }
 
 function isDisplayableMediaUrl(url) {
@@ -119,9 +119,9 @@ export default function ThreadsModule({
           flex: 1;
           min-width: 180px;
           appearance: none;
-          border: 1px solid rgba(56,189,248,0.28);
-          background: rgba(2,6,23,0.45);
-          color: #e2e8f0;
+          border: 1px solid rgba(255,255,255,0.12);
+          background: #0a0a0a;
+          color: #f4f4f5;
           border-radius: 14px;
           padding: 11px 14px;
           font-size: 13px;
@@ -129,10 +129,10 @@ export default function ThreadsModule({
           outline: none;
         }
         .dashboard-threads-search:focus {
-          border-color: rgba(56,189,248,0.55);
-          box-shadow: 0 0 0 3px rgba(56,189,248,0.12);
+          border-color: rgba(255,255,255,0.28);
+          box-shadow: 0 0 0 3px rgba(255,255,255,0.06);
         }
-        .dashboard-threads-search::placeholder { color: #64748b; }
+        .dashboard-threads-search::placeholder { color: #71717a; }
         .dashboard-threads-actions {
           display: flex;
           gap: 8px;
@@ -149,14 +149,14 @@ export default function ThreadsModule({
           font-family: inherit;
         }
         .dashboard-threads-btn--primary {
-          background: linear-gradient(135deg, #38bdf8, #818cf8);
-          color: #fff;
-          box-shadow: 0 10px 24px rgba(56,189,248,0.22);
+          background: #fafafa;
+          color: #09090b;
+          box-shadow: none;
         }
         .dashboard-threads-btn--ghost {
-          background: rgba(15,23,42,0.55);
-          color: #e2e8f0;
-          border: 1px solid rgba(148,163,184,0.28);
+          background: #141414;
+          color: #f4f4f5;
+          border: 1px solid rgba(255,255,255,0.12);
         }
         .dashboard-threads-grid {
           display: grid;
@@ -165,10 +165,10 @@ export default function ThreadsModule({
         }
         .dashboard-thread-card {
           appearance: none;
-          border: 1px solid rgba(56,189,248,0.22);
+          border: 1px solid rgba(255,255,255,0.1);
           border-radius: 22px;
           overflow: hidden;
-          background: linear-gradient(180deg, rgba(15,23,42,0.92), rgba(30,41,59,0.88));
+          background: #0a0a0a;
           padding: 0;
           cursor: pointer;
           text-align: left;
@@ -176,12 +176,12 @@ export default function ThreadsModule({
           font-family: inherit;
           display: grid;
           transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
-          box-shadow: 0 16px 36px rgba(0,0,0,0.28);
+          box-shadow: 0 16px 36px rgba(0,0,0,0.45);
         }
         .dashboard-thread-card:hover {
           transform: translateY(-3px);
-          border-color: rgba(56,189,248,0.5);
-          box-shadow: 0 22px 44px rgba(56,189,248,0.16);
+          border-color: rgba(255,255,255,0.22);
+          box-shadow: 0 22px 44px rgba(0,0,0,0.55);
         }
         .dashboard-thread-cover {
           position: relative;
@@ -206,7 +206,7 @@ export default function ThreadsModule({
           position: absolute;
           inset: auto 0 0 0;
           height: 48%;
-          background: linear-gradient(180deg, transparent, rgba(2,6,23,0.78));
+          background: linear-gradient(180deg, transparent, rgba(0,0,0,0.88));
         }
         .dashboard-thread-body {
           display: grid;
@@ -244,35 +244,35 @@ export default function ThreadsModule({
           text-transform: uppercase;
           padding: 5px 8px;
           border-radius: 999px;
-          border: 1px solid rgba(148,163,184,0.22);
-          background: rgba(56,189,248,0.08);
-          color: #bae6fd;
+          border: 1px solid rgba(255,255,255,0.1);
+          background: rgba(255,255,255,0.06);
+          color: #d4d4d8;
         }
         .dashboard-thread-chip--owner {
-          border-color: rgba(167,139,250,0.35);
-          background: rgba(167,139,250,0.12);
-          color: #ddd6fe;
+          border-color: rgba(255,255,255,0.18);
+          background: rgba(255,255,255,0.1);
+          color: #fafafa;
         }
         .dashboard-threads-empty {
           border-radius: 20px;
-          border: 1px dashed rgba(148,163,184,0.35);
+          border: 1px dashed rgba(255,255,255,0.16);
           padding: 36px 20px;
           text-align: center;
           display: grid;
           gap: 10px;
           justify-items: center;
-          background: rgba(2,6,23,0.35);
+          background: #0a0a0a;
         }
         .dashboard-threads-empty-title {
           font-size: 18px;
           font-weight: 900;
-          color: #f8fafc;
+          color: #fafafa;
         }
         .dashboard-threads-empty-text {
           font-size: 13px;
           line-height: 1.5;
           max-width: 360px;
-          color: #94a3b8;
+          color: #a1a1aa;
         }
         @media (max-width: 560px) {
           .dashboard-threads-grid {

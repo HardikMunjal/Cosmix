@@ -337,7 +337,22 @@ function getTimeGreeting() {
   return 'Good evening';
 }
 
-function NotificationsModal({
+function formatNotificationTime(createdAt, fallback = 'recently') {
+  const created = createdAt ? new Date(createdAt) : null;
+  if (!created || Number.isNaN(created.getTime())) return fallback;
+  const diffMs = Date.now() - created.getTime();
+  if (diffMs < 0) return 'just now';
+  const mins = Math.round(diffMs / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  if (days < 14) return `${days}d ago`;
+  return created.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function NotificationsDropdown({
   open,
   onClose,
   theme,
@@ -345,55 +360,76 @@ function NotificationsModal({
   onOpenChat,
   onOpenProfile,
   onOpenFitstagram,
+  onMarkAllRead,
 }) {
+  const panelRef = useRef(null);
+
   useEffect(() => {
     if (!open || typeof document === 'undefined') return undefined;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
     const onKeyDown = (event) => {
       if (event.key === 'Escape') onClose();
     };
+    const onPointerDown = (event) => {
+      if (!panelRef.current) return;
+      if (panelRef.current.contains(event.target)) return;
+      if (event.target?.closest?.('[data-notifications-trigger="true"]')) return;
+      onClose();
+    };
     window.addEventListener('keydown', onKeyDown);
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('touchstart', onPointerDown);
     return () => {
-      document.body.style.overflow = previousOverflow;
       window.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('touchstart', onPointerDown);
     };
   }, [open, onClose]);
 
   if (!open) return null;
 
   return (
-    <div className="dashboard-notifications-backdrop" onClick={onClose} role="presentation">
-      <div
-        className="dashboard-notifications-modal"
-        onClick={(event) => event.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Notifications"
-      >
-        <div className="dashboard-notifications-modal-head">
-          <div>
-            <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, fontWeight: 800 }}>Notifications</div>
-            <div style={{ fontSize: '20px', fontWeight: 900, color: theme.textHeading, marginTop: '4px' }}>Alerts & Requests</div>
-          </div>
-          <button type="button" className="dashboard-notifications-close" onClick={onClose} aria-label="Close notifications">✕</button>
+    <div
+      ref={panelRef}
+      className="dashboard-notifications-dropdown"
+      role="dialog"
+      aria-label="Notifications"
+    >
+      <div className="dashboard-notifications-modal-head">
+        <div>
+          <div className="dashboard-notifications-kicker">Notifications</div>
+          <div className="dashboard-notifications-title">Highlights</div>
         </div>
-        <div className="dashboard-notifications-modal-body">
-          <NotificationModule
-            embedded
-            theme={theme}
-            notifications={notifications}
-            onOpenChat={() => { onClose(); onOpenChat(); }}
-            onOpenProfile={() => { onClose(); onOpenProfile(); }}
-            onOpenFitstagram={(item) => { onClose(); onOpenFitstagram(item); }}
-          />
-        </div>
+        <button type="button" className="dashboard-notifications-close" onClick={onClose} aria-label="Close notifications">✕</button>
+      </div>
+      <div className="dashboard-notifications-modal-body">
+        <NotificationModule
+          embedded
+          theme={theme}
+          notifications={notifications}
+          onOpenChat={() => { onClose(); onOpenChat(); }}
+          onOpenProfile={() => { onClose(); onOpenProfile(); }}
+          onOpenFitstagram={(item) => { onClose(); onOpenFitstagram(item); }}
+          onMarkAllRead={onMarkAllRead}
+        />
       </div>
     </div>
   );
 }
 
-function DashboardHero({ user, theme, notificationCount, onOpenNotifications, onOpenSettings }) {
+function DashboardHero({
+  user,
+  theme,
+  notificationCount,
+  notificationsOpen,
+  onToggleNotifications,
+  onCloseNotifications,
+  notifications,
+  onOpenChat,
+  onOpenProfile,
+  onOpenFitstagram,
+  onMarkAllRead,
+  onOpenSettings,
+}) {
   const greeting = getTimeGreeting();
   const displayName = user?.name || user?.username || 'there';
 
@@ -418,17 +454,32 @@ function DashboardHero({ user, theme, notificationCount, onOpenNotifications, on
           </div>
 
           <div className="dashboard-header-actions">
-            <button
-              type="button"
-              className="dashboard-hero-action"
-              onClick={onOpenNotifications}
-              aria-label={`Notifications${notificationCount ? `, ${notificationCount} unread` : ''}`}
-            >
-              <BellIcon color="currentColor" />
-              {notificationCount > 0 ? (
-                <span className="dashboard-hero-badge">{notificationCount}</span>
-              ) : null}
-            </button>
+            <div className="dashboard-notifications-anchor">
+              <button
+                type="button"
+                className="dashboard-hero-action"
+                data-notifications-trigger="true"
+                aria-expanded={notificationsOpen}
+                aria-haspopup="dialog"
+                onClick={onToggleNotifications}
+                aria-label={`Notifications${notificationCount ? `, ${notificationCount} unread` : ''}`}
+              >
+                <BellIcon color="currentColor" />
+                {notificationCount > 0 ? (
+                  <span className="dashboard-hero-badge">{notificationCount}</span>
+                ) : null}
+              </button>
+              <NotificationsDropdown
+                open={notificationsOpen}
+                onClose={onCloseNotifications}
+                theme={theme}
+                notifications={notifications}
+                onOpenChat={onOpenChat}
+                onOpenProfile={onOpenProfile}
+                onOpenFitstagram={onOpenFitstagram}
+                onMarkAllRead={onMarkAllRead}
+              />
+            </div>
             <button
               type="button"
               className="dashboard-hero-action"
@@ -1975,6 +2026,20 @@ export default function Dashboard() {
     }
   }, [notificationsApiBase, router, user]);
 
+  const markAllNotificationsRead = useCallback(async () => {
+    const baseUid = resolveWellnessUserId(user);
+    if (!baseUid) return;
+    setServerNotifications([]);
+    try {
+      await fetch(
+        `${notificationsApiBase}/${encodeURIComponent(baseUid)}/viewed-all`,
+        { method: 'PUT', credentials: 'include' },
+      );
+    } catch (_) {
+      // Ignore mark-all failures; local state already cleared.
+    }
+  }, [notificationsApiBase, user]);
+
   useEffect(() => {
     if (!user) return undefined;
     loadStrategies();
@@ -2262,11 +2327,14 @@ export default function Dashboard() {
       return serverNotifications.map((item) => ({
         id: item.id,
         type: item.type || 'notification',
+        kind: item.kind || null,
         title: item.title,
         description: item.description,
         postId: item.postId,
         linkTab: item.linkTab,
-        timeLabel: item.createdAt ? `${Math.max(0, Math.round((Date.now() - new Date(item.createdAt).getTime()) / 3600000))}h ago` : 'recently',
+        createdAt: item.createdAt,
+        viewed: Boolean(item.viewed),
+        timeLabel: formatNotificationTime(item.createdAt),
         actionLabel: item.type === 'fitstagram' ? 'Open Fitstagram' : 'View',
       }));
     }
@@ -2279,6 +2347,7 @@ export default function Dashboard() {
       items.push({
         id: `friend-req-${fromUser}`,
         type: 'friend_request',
+        kind: 'friend',
         title: `${fromUser} sent you a buddy request`,
         description: 'Accept to compare daily wellness streaks and leaderboard ranks.',
         timeLabel: 'recently',
@@ -2286,32 +2355,8 @@ export default function Dashboard() {
       });
     });
 
-    // Group notifications — show first few active groups
-    chatBootstrap.groups.slice(0, 2).forEach((group) => {
-      const groupName = typeof group === 'string' ? group : (group?.name || group?.label || 'a group');
-      items.push({
-        id: `group-${typeof group === 'string' ? group : group?.id}`,
-        type: 'chat_message',
-        title: `Activity in ${groupName}`,
-        description: 'Open chat to see the latest messages.',
-        timeLabel: 'recently',
-        actionLabel: 'Open Chat',
-      });
-    });
-
-    // Fallback if no real data yet
-    if (items.length === 0 && buddyTrendRows.length > 0) {
-      items.push({
-        id: 'chat-fallback',
-        type: 'chat_message',
-        title: 'New chat message in your buddy group',
-        description: 'Open chat to reply and keep your training circle active.',
-        timeLabel: 'just now',
-      });
-    }
-
-    return items.slice(0, 5);
-  }, [chatBootstrap, buddyTrendRows, serverNotifications]);
+    return items.slice(0, 8);
+  }, [chatBootstrap, serverNotifications]);
 
   const buddyActivityItems = useMemo(() => {
     const items = buddyTrendRows.slice(0, 3).map((row) => {
@@ -2429,7 +2474,7 @@ export default function Dashboard() {
         }
         .dashboard-hero {
           position: relative;
-          overflow: hidden;
+          overflow: visible;
           border-radius: 28px;
           border: 1px solid rgba(148,163,184,0.18);
           background:
@@ -2437,12 +2482,14 @@ export default function Dashboard() {
           box-shadow:
             0 24px 60px rgba(0,0,0,0.35),
             inset 0 1px 0 rgba(255,255,255,0.08);
+          z-index: 20;
         }
         .dashboard-hero-aurora {
           position: absolute;
           inset: 0;
           pointer-events: none;
           overflow: hidden;
+          border-radius: inherit;
         }
         .dashboard-hero-orb {
           position: absolute;
@@ -2553,51 +2600,83 @@ export default function Dashboard() {
         .dashboard-top-grid--lead {
           margin-top: 10px;
         }
-        .dashboard-notifications-backdrop {
-          position: fixed;
-          inset: 0;
-          z-index: 1200;
-          display: grid;
-          place-items: center;
-          padding: 20px;
-          background: rgba(2, 6, 23, 0.62);
-          backdrop-filter: blur(8px);
-          -webkit-backdrop-filter: blur(8px);
+        .dashboard-notifications-anchor {
+          position: relative;
+          z-index: 30;
         }
-        .dashboard-notifications-modal {
-          width: min(520px, 100%);
-          max-height: min(78vh, 720px);
+        .dashboard-notifications-dropdown {
+          position: absolute;
+          top: calc(100% + 10px);
+          right: 0;
+          width: min(360px, calc(100vw - 28px));
+          max-height: min(70vh, 520px);
           overflow: hidden;
           display: grid;
-          grid-template-rows: auto 1fr;
-          border-radius: 22px;
+          grid-template-rows: auto minmax(0, 1fr);
+          border-radius: 18px;
           border: 1px solid rgba(148,163,184,0.28);
-          background: linear-gradient(180deg, rgba(15,23,42,0.98), rgba(30,41,59,0.96));
-          box-shadow: 0 28px 60px rgba(0,0,0,0.45);
+          background: linear-gradient(180deg, rgba(15,23,42,0.99), rgba(2,6,23,0.98));
+          box-shadow: 0 18px 40px rgba(0,0,0,0.45);
+          color: #e2e8f0;
+          z-index: 40;
+        }
+        .dashboard-notifications-dropdown::before {
+          content: '';
+          position: absolute;
+          top: -6px;
+          right: 16px;
+          width: 12px;
+          height: 12px;
+          background: rgba(15,23,42,0.99);
+          border-left: 1px solid rgba(148,163,184,0.28);
+          border-top: 1px solid rgba(148,163,184,0.28);
+          transform: rotate(45deg);
         }
         .dashboard-notifications-modal-head {
           display: flex;
           justify-content: space-between;
           align-items: flex-start;
           gap: 12px;
-          padding: 16px 18px 12px;
+          padding: 14px 14px 10px;
           border-bottom: 1px solid rgba(148,163,184,0.18);
+          position: relative;
+          z-index: 1;
+        }
+        .dashboard-notifications-kicker {
+          font-size: 11px;
+          text-transform: uppercase;
+          letter-spacing: 0.12em;
+          color: #94a3b8;
+          font-weight: 800;
+        }
+        .dashboard-notifications-title {
+          font-size: 16px;
+          font-weight: 900;
+          color: #f8fafc;
+          margin-top: 3px;
+          line-height: 1.2;
         }
         .dashboard-notifications-close {
           appearance: none;
           border: 1px solid rgba(148,163,184,0.28);
           border-radius: 12px;
-          width: 36px;
-          height: 36px;
+          width: 32px;
+          height: 32px;
           background: rgba(2,6,23,0.55);
           color: #e2e8f0;
           cursor: pointer;
-          font-size: 16px;
+          font-size: 14px;
           line-height: 1;
+          flex-shrink: 0;
         }
         .dashboard-notifications-modal-body {
           overflow-y: auto;
-          padding: 14px 18px 18px;
+          overflow-x: hidden;
+          padding: 12px 12px 14px;
+          min-height: 0;
+          -webkit-overflow-scrolling: touch;
+          position: relative;
+          z-index: 1;
         }
         .dashboard-tab-row {
           display: grid;
@@ -2632,9 +2711,9 @@ export default function Dashboard() {
           background: rgba(56,189,248,0.08);
         }
         .dashboard-tab-btn--threads:not(.is-active):hover {
-          color: #a5f3fc;
-          border-color: rgba(34,211,238,0.28);
-          background: rgba(34,211,238,0.08);
+          color: #f4f4f5;
+          border-color: rgba(255,255,255,0.2);
+          background: rgba(255,255,255,0.06);
         }
         .dashboard-tab-btn--posts:not(.is-active):hover {
           color: #fbcfe8;
@@ -2656,11 +2735,8 @@ export default function Dashboard() {
           border-color: rgba(244,114,182,0.28) !important;
         }
         .dashboard-tab-surface--threads {
-          background:
-            radial-gradient(circle at top left, rgba(34,211,238,0.14), transparent 36%),
-            radial-gradient(circle at 90% 10%, rgba(129,140,248,0.12), transparent 40%),
-            linear-gradient(180deg, rgba(30,41,59,0.96), rgba(15,23,42,0.98)) !important;
-          border-color: rgba(34,211,238,0.3) !important;
+          background: #000 !important;
+          border-color: rgba(255,255,255,0.1) !important;
         }
         .dashboard-tab-surface--buddies {
           background:
@@ -2682,7 +2758,7 @@ export default function Dashboard() {
           font-weight: 800;
         }
         .dashboard-tab-surface-eyebrow--posts { color: #f9a8d4; }
-        .dashboard-tab-surface-eyebrow--threads { color: #67e8f9; }
+        .dashboard-tab-surface-eyebrow--threads { color: #a1a1aa; }
         .dashboard-tab-surface-eyebrow--buddies { color: #c4b5fd; }
         .dashboard-tab-surface-title {
           font-size: 24px;
@@ -2697,10 +2773,10 @@ export default function Dashboard() {
           color: transparent;
         }
         .dashboard-tab-surface-title--threads {
-          background: linear-gradient(135deg, #fff 0%, #a5f3fc 50%, #22d3ee 100%);
-          -webkit-background-clip: text;
-          background-clip: text;
-          color: transparent;
+          color: #fafafa;
+          background: none;
+          -webkit-background-clip: unset;
+          background-clip: unset;
         }
         .dashboard-tab-surface-title--buddies {
           background: linear-gradient(135deg, #fff 0%, #ddd6fe 55%, #a78bfa 100%);
@@ -3627,18 +3703,15 @@ export default function Dashboard() {
           user={user}
           theme={theme}
           notificationCount={notificationCount}
-          onOpenNotifications={() => setShowNotifications(true)}
-          onOpenSettings={() => { setShowNotifications(false); router.push('/settings'); }}
-        />
-
-        <NotificationsModal
-          open={showNotifications}
-          onClose={() => setShowNotifications(false)}
-          theme={theme}
+          notificationsOpen={showNotifications}
+          onToggleNotifications={() => setShowNotifications((open) => !open)}
+          onCloseNotifications={() => setShowNotifications(false)}
           notifications={notifications}
           onOpenChat={() => router.push('/chat')}
           onOpenProfile={() => router.push('/profile')}
           onOpenFitstagram={openFitstagram}
+          onMarkAllRead={markAllNotificationsRead}
+          onOpenSettings={() => { setShowNotifications(false); router.push('/settings'); }}
         />
 
         <section style={{ display: activeTab === 'home' ? 'grid' : 'none' }} className="dashboard-home-stage">
@@ -3810,7 +3883,7 @@ export default function Dashboard() {
               <div className="dashboard-tab-surface-eyebrow dashboard-tab-surface-eyebrow--threads">Your spaces</div>
               <div className="dashboard-tab-surface-title dashboard-tab-surface-title--threads">Threads</div>
             </div>
-            <div style={{ fontSize: '11px', color: theme.textMuted, fontWeight: 700, padding: '8px 12px', borderRadius: '999px', border: '1px solid rgba(34,211,238,0.28)', background: 'rgba(34,211,238,0.08)' }}>
+            <div style={{ fontSize: '11px', color: '#a1a1aa', fontWeight: 700, padding: '8px 12px', borderRadius: '999px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.06)' }}>
               {`${(chatBootstrap.groups || []).filter((group) => !group?.parentGroupId).length} active`}
             </div>
           </div>
@@ -3824,6 +3897,8 @@ export default function Dashboard() {
               thread={selectedThread}
               theme={theme}
               username={user?.username || ''}
+              userId={user?.id || null}
+              avatar={user?.avatar || null}
               onBack={closeDashboardThread}
               onCreateFolder={handleCreateThreadFolder}
               onUploadToFolder={handleUploadToFolder}

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { RunRouteMap } from './RunRouteMap';
 import { isWellnessApiReady, wellnessApiUrl } from './runningShoes';
+import { hrEffortColor, hrZoneForBpm, hrZoneLegend, buildSmoothColorSegments, smoothAreaPath } from './hrZones';
+import { HrEffortLegend } from './RunningModernCharts';
 
 function fmtDate(dateStr) {
   if (!dateStr) return '--';
@@ -22,6 +24,98 @@ function fmtSplitClock(seconds) {
   const mins = Math.floor(total / 60);
   const secs = total % 60;
   return `${mins}:${String(secs).padStart(2, '0')}`;
+}
+
+function SplitPaceHrChart({ splits = [], theme, maxHr }) {
+  const rows = (splits || [])
+    .map((split) => ({
+      km: Number(split.km) || 0,
+      pace: Number(split.paceMinPerKm) || 0,
+      hr: Number(split.avgHeartrate) || 0,
+    }))
+    .filter((row) => row.pace > 0);
+
+  if (rows.length < 2) return null;
+
+  const ceiling = Number(maxHr) || Math.max(...rows.map((r) => r.hr), 190);
+  const legend = hrZoneLegend(ceiling);
+  const w = 360;
+  const h = 148;
+  const pad = { t: 18, r: 14, b: 28, l: 14 };
+  const paces = rows.map((r) => r.pace);
+  const min = Math.min(...paces);
+  const max = Math.max(...paces);
+  const span = Math.max(0.2, max - min);
+  const baseY = h - pad.b;
+  const fallback = theme.cyan || '#38bdf8';
+  const coords = rows.map((row, i) => {
+    const x = pad.l + (i / (rows.length - 1)) * (w - pad.l - pad.r);
+    const y = pad.t + ((row.pace - min) / span) * (h - pad.t - pad.b);
+    const color = row.hr > 0 ? hrEffortColor(row.hr, ceiling, fallback) : fallback;
+    const zone = row.hr > 0 ? hrZoneForBpm(row.hr, ceiling) : null;
+    return { ...row, x, y, color, zone };
+  });
+
+  const areaPath = smoothAreaPath(coords, baseY, 16);
+  const smoothSegs = buildSmoothColorSegments(coords, 16);
+  const midColor = coords[Math.floor(coords.length / 2)]?.color || fallback;
+  const gid = `split-area-${coords.length}-${String(midColor).replace('#', '')}`;
+
+  const zoneCounts = rows.reduce((acc, row) => {
+    if (!row.hr) return acc;
+    const zone = hrZoneForBpm(row.hr, ceiling);
+    acc[zone.key] = (acc[zone.key] || 0) + 1;
+    return acc;
+  }, {});
+
+  return (
+    <div style={{ display: 'grid', gap: 10, paddingTop: 4 }}>
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>This run · pace by km</div>
+        <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 3, lineHeight: 1.45 }}>
+          Km pace area · line color follows heart rate (easy → hard).
+        </div>
+      </div>
+      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 148, display: 'block' }}>
+        <defs>
+          <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={midColor} stopOpacity="0.38" />
+            <stop offset="70%" stopColor={midColor} stopOpacity="0.12" />
+            <stop offset="100%" stopColor={midColor} stopOpacity="0.02" />
+          </linearGradient>
+          <linearGradient id={`${gid}-h`} x1="0" y1="0" x2="1" y2="0">
+            {coords.map((c, i) => (
+              <stop
+                key={`stop-${i}`}
+                offset={`${(i / Math.max(1, coords.length - 1)) * 100}%`}
+                stopColor={c.color}
+                stopOpacity="0.22"
+              />
+            ))}
+          </linearGradient>
+        </defs>
+        <path d={areaPath} fill={`url(#${gid})`} />
+        <path d={areaPath} fill={`url(#${gid}-h)`} />
+        {smoothSegs.map((seg, i) => (
+          <path
+            key={`seg-${i}`}
+            d={seg.d}
+            fill="none"
+            stroke={seg.color}
+            strokeWidth="3.4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        ))}
+        {coords.map((c) => (
+          <text key={`km-${c.km}`} x={c.x} y={h - 8} textAnchor="middle" fill={theme.textMuted} fontSize="9" fontWeight="700">
+            {c.km}
+          </text>
+        ))}
+      </svg>
+      <HrEffortLegend theme={theme} legend={legend} counts={zoneCounts} unit="km" />
+    </div>
+  );
 }
 
 function DashPanel({ title, subtitle, theme, children, accent }) {
@@ -138,6 +232,7 @@ export function StravaRunExplorer({ userId, theme, onOpenRun, refreshKey = 0 }) 
     : (mapDetail?.streams?.latlng || activeCard?.polyline || []);
   const playStreams = mapDetail?.streams || {};
   const mapSplits = Array.isArray(mapDetail?.splits) ? mapDetail.splits : [];
+  const maxHrRef = Number(mapSummary?.maxHeartrate || mapDetail?.summary?.maxHeartrate || 0) || 190;
 
   if (!usableMaps.length && !mapRunId) {
     return (
@@ -287,47 +382,56 @@ export function StravaRunExplorer({ userId, theme, onOpenRun, refreshKey = 0 }) 
         {mapLoading ? (
           <div style={{ fontSize: 12, color: theme.textMuted }}>Loading splits…</div>
         ) : mapSplits.length ? (
-          <div style={{ display: 'grid', gap: 0, maxHeight: 220, overflowY: 'auto' }}>
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: '36px 1fr 1fr 1fr',
-              gap: 8,
-              padding: '4px 2px 8px',
-              fontSize: 10,
-              fontWeight: 800,
-              textTransform: 'uppercase',
-              letterSpacing: '0.08em',
-              color: theme.textMuted,
-              position: 'sticky',
-              top: 0,
-              background: theme.cardBg,
-            }}
-            >
-              <span>Km</span>
-              <span>Pace</span>
-              <span>Time</span>
-              <span>HR</span>
-            </div>
-            {mapSplits.map((split) => (
-              <div
-                key={split.km}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '36px 1fr 1fr 1fr',
-                  gap: 8,
-                  padding: '8px 2px',
-                  borderTop: `1px solid ${theme.cardBorder}`,
-                  fontSize: 13,
-                  alignItems: 'center',
-                }}
+          <>
+            <div style={{ display: 'grid', gap: 0, maxHeight: 220, overflowY: 'auto' }}>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: '36px 1fr 1fr 1fr',
+                gap: 8,
+                padding: '4px 2px 8px',
+                fontSize: 10,
+                fontWeight: 800,
+                textTransform: 'uppercase',
+                letterSpacing: '0.08em',
+                color: theme.textMuted,
+                position: 'sticky',
+                top: 0,
+                background: theme.cardBg,
+              }}
               >
-                <span style={{ fontWeight: 800, color: theme.orange }}>{split.km}</span>
-                <span style={{ fontWeight: 700, color: theme.cyan || '#38bdf8' }}>{fmtPace(split.paceMinPerKm)}</span>
-                <span style={{ fontWeight: 700, color: theme.textHeading }}>{fmtSplitClock(split.seconds)}</span>
-                <span style={{ fontWeight: 700, color: '#f43f5e' }}>{split.avgHeartrate ? `${split.avgHeartrate}` : '--'}</span>
+                <span>Km</span>
+                <span>Pace</span>
+                <span>Time</span>
+                <span>HR</span>
               </div>
-            ))}
-          </div>
+              {mapSplits.map((split) => {
+                const zone = Number(split.avgHeartrate) > 0 ? hrZoneForBpm(split.avgHeartrate, maxHrRef) : null;
+                return (
+                  <div
+                    key={split.km}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '36px 1fr 1fr 1fr',
+                      gap: 8,
+                      padding: '8px 2px',
+                      borderTop: `1px solid ${theme.cardBorder}`,
+                      fontSize: 13,
+                      alignItems: 'center',
+                    }}
+                  >
+                    <span style={{ fontWeight: 800, color: theme.orange }}>{split.km}</span>
+                    <span style={{ fontWeight: 700, color: zone?.color || theme.cyan || '#38bdf8' }}>{fmtPace(split.paceMinPerKm)}</span>
+                    <span style={{ fontWeight: 700, color: theme.textHeading }}>{fmtSplitClock(split.seconds)}</span>
+                    <span style={{ fontWeight: 700, color: zone?.color || '#f43f5e' }}>
+                      {split.avgHeartrate ? `${split.avgHeartrate}` : '--'}
+                      {zone ? <span style={{ display: 'block', fontSize: 9, fontWeight: 700, opacity: 0.85 }}>{zone.short} {zone.label}</span> : null}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+            <SplitPaceHrChart splits={mapSplits} theme={theme} maxHr={maxHrRef} />
+          </>
         ) : (
           <div style={{ fontSize: 12, color: theme.textMuted }}>
             Splits appear after GPS streams are imported for this run.

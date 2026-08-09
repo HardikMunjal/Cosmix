@@ -70,9 +70,10 @@ type ChatTarget = {
 };
 
 type ChatMessagePayload = {
-    type: 'text' | 'gif';
+    type: 'text' | 'gif' | 'image';
     text?: string;
     gif?: string;
+    image?: string;
     chat: ChatTarget;
     timestamp?: string;
     user?: string;
@@ -912,7 +913,11 @@ export class ChatService {
     }
 
     private memoryMembership(groupId: string, username: string) {
-        return this.memberships.find((membership) => membership.groupId === groupId && membership.username === username) || null;
+        const needle = this.normalizeUsername(username).toLowerCase();
+        return this.memberships.find((membership) => (
+            membership.groupId === groupId
+            && this.normalizeUsername(membership.username).toLowerCase() === needle
+        )) || null;
     }
 
     private async ensureSchema() {
@@ -1149,7 +1154,7 @@ export class ChatService {
             const result = await pool?.query(
                 `SELECT can_view, can_post, can_comment, can_invite
                  FROM chat_group_memberships
-                 WHERE group_id = $1 AND username = $2 LIMIT 1`,
+                 WHERE group_id = $1 AND LOWER(username) = LOWER($2) LIMIT 1`,
                 [groupId, normalizedUsername],
             );
             const membership = result?.rows[0];
@@ -1169,7 +1174,10 @@ export class ChatService {
             return;
         }
 
-        const membership = this.memoryMembership(groupId, normalizedUsername);
+        const membership = this.memberships.find((entry) => (
+            entry.groupId === groupId
+            && this.normalizeUsername(entry.username).toLowerCase() === normalizedUsername.toLowerCase()
+        ));
         if (!membership) {
             throw new ForbiddenException('You do not have access to this group.');
         }
@@ -1599,12 +1607,17 @@ export class ChatService {
             .map((entry) => entry.username);
     }
 
-    private async notifyGroupMessagePush(groupId: string, senderUsername: string, chatMessage: { id: string; chat: { name: string }; text?: string; gif?: string }) {
+    private async notifyGroupMessagePush(groupId: string, senderUsername: string, chatMessage: { id: string; chat: { name: string }; text?: string; gif?: string; image?: string; type?: string }) {
         try {
             const recipients = (await this.groupMemberUsernames(groupId)).filter((username) => username !== senderUsername);
+            const body = chatMessage.image || chatMessage.type === 'image'
+                ? `${senderUsername} sent a photo`
+                : chatMessage.gif && !chatMessage.text
+                    ? `${senderUsername} sent a GIF`
+                    : `${senderUsername}: ${String(chatMessage.text || 'New message').slice(0, 140)}`;
             void this.sendPushToUsers(recipients, {
                 title: `New message in ${chatMessage.chat.name}`,
-                body: `${senderUsername}: ${String(chatMessage.text || chatMessage.gif || 'New message')}`,
+                body,
                 url: `/chat?thread=${encodeURIComponent(groupId)}`,
                 tag: `group-${groupId}-${chatMessage.id}`,
             }, {
@@ -2727,7 +2740,9 @@ export class ChatService {
                 const dmPeer = this.normalizeUsername(chatMessage.chat.name);
                 void this.sendPushToUsers([chatMessage.chat.name], {
                     title: `New message from ${senderUsername}`,
-                    body: String(chatMessage.text || chatMessage.gif || 'Sent you a message.'),
+                    body: chatMessage.gif && !chatMessage.text
+                        ? `${senderUsername} sent a GIF`
+                        : String(chatMessage.text || 'Sent you a message.').slice(0, 140),
                     url: `/chat?dm=${encodeURIComponent(dmPeer)}`,
                     tag: `dm-${chatMessage.id}`,
                 }, {
@@ -2745,7 +2760,9 @@ export class ChatService {
             const dmPeer = this.normalizeUsername(chatMessage.chat.name);
             void this.sendPushToUsers([chatMessage.chat.name], {
                 title: `New message from ${senderUsername}`,
-                body: String(chatMessage.text || chatMessage.gif || 'Sent you a message.'),
+                body: chatMessage.gif && !chatMessage.text
+                    ? `${senderUsername} sent a GIF`
+                    : String(chatMessage.text || 'Sent you a message.').slice(0, 140),
                 url: `/chat?dm=${encodeURIComponent(dmPeer)}`,
                 tag: `dm-${chatMessage.id}`,
             }, {

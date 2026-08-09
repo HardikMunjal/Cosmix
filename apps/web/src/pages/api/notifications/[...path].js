@@ -3,7 +3,9 @@ import {
   ensureNotificationsForPosts,
   getViewedPostIds,
   listFitstagramNotifications,
+  markAllNotificationsViewed,
   markNotificationViewed,
+  pruneRoutineFitstagramNotifications,
 } from '../../../server/fitstagramStore';
 import { loadFeedMembers } from '../../../server/fitstagramData';
 import { buildPostsForUser, rankPostsForViewer } from '../../../lib/fitstagramFeed';
@@ -45,17 +47,19 @@ export default async function handler(req, res) {
     }
 
     try {
+      pruneRoutineFitstagramNotifications(viewerId);
       const members = await loadFeedMembers(req, user);
       const viewedIds = getViewedPostIds(viewerId);
       const rawPosts = members.flatMap((member) => buildPostsForUser(member.userId, member.name, member.entries));
       const ranked = rankPostsForViewer(rawPosts, viewerId, viewedIds);
-      ensureNotificationsForPosts(viewerId, ranked.filter((p) => !p.seen));
+      ensureNotificationsForPosts(viewerId, ranked.filter((p) => !p.seen && p.notifiable));
 
       const fitNotifs = listFitstagramNotifications(viewerId)
         .filter((item) => !item.viewed)
         .map((item) => ({
           id: item.id,
           type: item.type || 'fitstagram',
+          kind: item.kind || null,
           title: item.title,
           description: item.description,
           postId: item.postId,
@@ -94,6 +98,15 @@ export default async function handler(req, res) {
     }
     markNotificationViewed(viewerId, notificationId);
     return res.status(200).json({ ok: true });
+  }
+
+  if (req.method === 'PUT' && segments.length === 2 && segments[1] === 'viewed-all') {
+    const targetUserId = String(segments[0] || '').trim();
+    if (targetUserId !== viewerId) {
+      return res.status(403).json({ error: 'Forbidden.' });
+    }
+    const marked = markAllNotificationsViewed(viewerId);
+    return res.status(200).json({ ok: true, marked });
   }
 
   res.setHeader('Allow', 'GET, PUT');

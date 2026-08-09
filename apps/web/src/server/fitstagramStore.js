@@ -95,9 +95,42 @@ export function resolvePostLikes(post, viewerId) {
   };
 }
 
+const ROUTINE_ACTIVITY_POST_RE = /-(?:run|badminton|cycling|walking|swimming|football|strength|yoga|run-streak|badminton-streak|pace-2nd)-\d{4}-\d{2}-\d{2}$/;
+const MILESTONE_KINDS = new Set(['record', 'pace', 'split', 'comeback']);
+
+function isMilestoneNotification(item) {
+  if (!item) return false;
+  if (item.kind && MILESTONE_KINDS.has(item.kind)) return true;
+  const postId = String(item.postId || '');
+  if (!postId) return false;
+  if (ROUTINE_ACTIVITY_POST_RE.test(postId)) return false;
+  return /-(?:pr-distance|pace-pr|split-|comeback-)/.test(postId);
+}
+
+/** Drop legacy spam alerts that fired for every routine activity. */
+export function pruneRoutineFitstagramNotifications(userId) {
+  if (!userId) return 0;
+  const store = readStore();
+  const list = userNotifications(store, userId);
+  const kept = list.filter((item) => isMilestoneNotification(item));
+  const removed = list.length - kept.length;
+  if (removed > 0) {
+    store.notifications[userId] = kept;
+    if (store.pushed[userId]) {
+      Object.keys(store.pushed[userId]).forEach((postId) => {
+        if (ROUTINE_ACTIVITY_POST_RE.test(postId)) delete store.pushed[userId][postId];
+      });
+    }
+    writeStore(store);
+  }
+  return removed;
+}
+
 export function listFitstagramNotifications(userId) {
+  pruneRoutineFitstagramNotifications(userId);
   const store = readStore();
   return [...userNotifications(store, userId)]
+    .filter((item) => isMilestoneNotification(item))
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
     .slice(0, 20);
 }
@@ -112,6 +145,21 @@ export function markNotificationViewed(userId, notificationId) {
   return true;
 }
 
+export function markAllNotificationsViewed(userId) {
+  if (!userId) return 0;
+  const store = readStore();
+  const list = userNotifications(store, userId);
+  let changed = 0;
+  list.forEach((item) => {
+    if (!item.viewed) {
+      item.viewed = true;
+      changed += 1;
+    }
+  });
+  if (changed) writeStore(store);
+  return changed;
+}
+
 export function ensureNotificationsForPosts(viewerId, posts = []) {
   if (!viewerId || !posts.length) return [];
   const store = readStore();
@@ -120,7 +168,11 @@ export function ensureNotificationsForPosts(viewerId, posts = []) {
   const created = [];
 
   posts
-    .filter((post) => post.notifiable && String(post.authorId) !== String(viewerId))
+    .filter((post) => (
+      post.notifiable
+      && MILESTONE_KINDS.has(post.kind)
+      && String(post.authorId) !== String(viewerId)
+    ))
     .slice(0, 8)
     .forEach((post) => {
       if (pushed[post.id]) return;
@@ -128,10 +180,12 @@ export function ensureNotificationsForPosts(viewerId, posts = []) {
         id: `fit-notif-${post.id}`,
         userId: viewerId,
         type: 'fitstagram',
+        kind: post.kind,
         title: post.title,
         description: post.body,
         postId: post.id,
         authorName: post.authorName,
+        activityType: post.activityType,
         linkTab: 'posts',
         viewed: false,
         createdAt: post.createdAt || new Date().toISOString(),

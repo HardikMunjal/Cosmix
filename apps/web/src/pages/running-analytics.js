@@ -12,6 +12,7 @@ import {
   computeShoeStats,
   createRunningShoeId,
   getRunningShoeLabel,
+  getShoeColor,
   isWellnessApiReady,
   loadRunningShoesFromServer,
   readRunningShoes,
@@ -19,13 +20,15 @@ import {
   syncRunningShoesToServer,
   wellnessApiUrl,
 } from '../lib/runningShoes';
-import { DepthMetric, GlowTrend, DepthBars, DepthHBars, ShoeMixChart } from '../lib/RunningModernCharts';
+import { DepthMetric, GlowTrend, DepthBars, DepthHBars, ShoeMixChart, ShoeLollipopChart, ShoeHrLadder, ShoeSpeedColumns } from '../lib/RunningModernCharts';
 import { loadRunningSurfaceId, saveRunningSurfaceId, mergeRunningSurface } from '../lib/runningThemes';
 import { buildMarathonReadiness, loadMarathonGoal } from '../lib/marathonReadiness';
 import { buildTrainingTip } from '../lib/trainingTip';
 import { CoachBotCard } from '../lib/CoachBotCard';
 import Link from 'next/link';
 import { StravaRunExplorer } from '../lib/StravaRunExplorer';
+import { detectNewPersonalRecords } from '../lib/personalRecords';
+import { PersonalRecordModal, ShareRunButton } from '../lib/PersonalRecordModal';
 
 // ─── helpers ─────────────────────────────────────────────
 function fmtDate(dateStr) {
@@ -732,22 +735,25 @@ function RunningShoesPanel({
 
       {activeShoes.length ? (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          {activeShoes.map((shoe) => (
+          {activeShoes.map((shoe) => {
+            const shoeColor = getShoeColor(shoe.id, theme.orange);
+            return (
             <span
               key={shoe.id}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: 6,
-                padding: '6px 8px 6px 12px',
+                padding: '6px 8px 6px 10px',
                 borderRadius: 999,
-                border: `1px solid ${theme.cardBorder}`,
-                background: inputBg,
+                border: `1px solid ${shoeColor}66`,
+                background: `${shoeColor}14`,
                 fontSize: 13,
                 fontWeight: 700,
                 color: theme.textHeading,
               }}
             >
+              <span style={{ width: 9, height: 9, borderRadius: 999, background: shoeColor, flexShrink: 0 }} />
               {getRunningShoeLabel(shoe)}
               <button
                 type="button"
@@ -766,7 +772,8 @@ function RunningShoesPanel({
                 ×
               </button>
             </span>
-          ))}
+            );
+          })}
         </div>
       ) : (
         <div style={{ fontSize: 13, color: theme.textMuted }}>Type a shoe name and hit Add.</div>
@@ -1019,68 +1026,45 @@ function ShoeStatsSection({ entries, shoes, theme, onAssignShoes }) {
       ) : null}
       <ShoeMixChart shoeStats={shoeStats.filter((row) => row.shoeId)} theme={theme} />
       <div style={{ display: 'grid', gap: 10 }}>
-        <ShoeLeaderBars
+        <ShoeLollipopChart
           title="Top distance runs"
           theme={theme}
-          accent={theme.blue}
           items={boards.topKm}
           valueFmt={(v) => `${Number(v).toFixed(1)} km`}
         />
-        <ShoeLeaderBars
-          title="Top speed runs"
+        <ShoeLollipopChart
+          title="Top speed · best 1 km split"
           theme={theme}
-          accent={theme.green}
           items={boards.topSpeed}
           valueFmt={(v) => `${v} km/h`}
         />
-        <ShoeLeaderBars
-          title="Top 1 km splits"
+        <ShoeLollipopChart
+          title="Fastest 1 km splits"
           theme={theme}
-          accent={theme.cyan}
           items={boards.topSplit}
+          invert
           valueFmt={(v) => fmtPace(v)}
         />
-        <ShoeLeaderBars
-          title="Top avg HR · ~5 km races"
+        <ShoeHrLadder
+          title="HR ladder · ~5 km races"
           theme={theme}
-          accent="#f43f5e"
           items={boards.avgHr5}
           valueFmt={(v) => `${Math.round(v)} bpm`}
         />
-        <ShoeLeaderBars
-          title="Top avg HR · ~10 km races"
+        <ShoeHrLadder
+          title="HR ladder · ~10 / 20 km"
           theme={theme}
-          accent="#fb7185"
-          items={boards.avgHr10}
+          items={[...(boards.avgHr10 || []), ...(boards.avgHr20 || [])].slice(0, 8)}
           valueFmt={(v) => `${Math.round(v)} bpm`}
         />
-        <ShoeLeaderBars
-          title="Top avg HR · ~20 km races"
+        <ShoeSpeedColumns
+          title="Avg speed by race band"
           theme={theme}
-          accent="#e11d48"
-          items={boards.avgHr20}
-          valueFmt={(v) => `${Math.round(v)} bpm`}
-        />
-        <ShoeLeaderBars
-          title="Top avg speed · ~5 km"
-          theme={theme}
-          accent={theme.orange}
-          items={boards.avgSpeed5}
-          valueFmt={(v) => `${v} km/h`}
-        />
-        <ShoeLeaderBars
-          title="Top avg speed · ~10 km"
-          theme={theme}
-          accent="#f97316"
-          items={boards.avgSpeed10}
-          valueFmt={(v) => `${v} km/h`}
-        />
-        <ShoeLeaderBars
-          title="Top avg speed · ~20 km"
-          theme={theme}
-          accent="#ea580c"
-          items={boards.avgSpeed20}
-          valueFmt={(v) => `${v} km/h`}
+          bands={[
+            { label: '5 km', items: boards.avgSpeed5 || [] },
+            { label: '10 km', items: boards.avgSpeed10 || [] },
+            { label: '20 km', items: boards.avgSpeed20 || [] },
+          ]}
         />
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10, minWidth: 0 }}>
@@ -1088,41 +1072,44 @@ function ShoeStatsSection({ entries, shoes, theme, onAssignShoes }) {
           title="Runs per shoe"
           theme={theme}
           accent={theme.blue}
-          items={shoeStats.filter((r) => r.shoeId).slice(0, 6).map((r) => ({ label: String(r.label || r.name || 'Shoe').slice(0, 18), value: r.runs }))}
-        />
-        <DepthHBars
-          title="Avg pace (min/km)"
-          theme={theme}
-          accent={theme.cyan}
-          items={shoeStats.filter((r) => r.shoeId && r.avgPace).slice(0, 6).map((r) => ({
+          items={shoeStats.filter((r) => r.shoeId).slice(0, 6).map((r) => ({
             label: String(r.label || r.name || 'Shoe').slice(0, 18),
-            value: Number(r.avgPace).toFixed(1),
+            value: r.runs,
+            shoeId: r.shoeId,
+            color: getShoeColor(r.shoeId, theme.blue),
           }))}
         />
       </div>
       <div className="sport-3col" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 10, minWidth: 0 }}>
-        {shoeStats.filter((row) => row.shoeId).map((row) => (
+        {shoeStats.filter((row) => row.shoeId).map((row) => {
+          const shoeColor = getShoeColor(row.shoeId, theme.orange);
+          return (
           <div key={row.shoeId || row.label} style={{
             padding: '14px 16px',
             borderRadius: 18,
-            border: `1px solid ${theme.cardBorder}`,
+            border: `1px solid ${shoeColor}55`,
+            borderLeft: `4px solid ${shoeColor}`,
             background: theme.cardBg,
             boxShadow: theme.chartDepth,
             overflow: 'hidden',
             minWidth: 0,
           }}
           >
-            <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', color: theme.textMuted }}>{row.label}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', color: theme.textMuted }}>
+              <span style={{ width: 10, height: 10, borderRadius: 999, background: shoeColor, flexShrink: 0 }} />
+              {row.label}
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 10, fontSize: 12 }}>
-              <div><span style={{ color: theme.textMuted }}>Runs</span><div style={{ fontWeight: 800, color: theme.orange }}>{row.runs}</div></div>
-              <div><span style={{ color: theme.textMuted }}>Total km</span><div style={{ fontWeight: 800, color: theme.blue }}>{row.totalKm}</div></div>
-              <div><span style={{ color: theme.textMuted }}>Avg distance</span><div style={{ fontWeight: 800, color: theme.green }}>{row.avgDistance} km</div></div>
-              <div><span style={{ color: theme.textMuted }}>Avg pace</span><div style={{ fontWeight: 800, color: theme.cyan }}>{row.avgPace ? fmtPace(row.avgPace) : '--'}</div></div>
-              <div><span style={{ color: theme.textMuted }}>Avg speed</span><div style={{ fontWeight: 800, color: theme.purple }}>{row.avgSpeed} km/h</div></div>
+              <div><span style={{ color: theme.textMuted }}>Runs</span><div style={{ fontWeight: 800, color: shoeColor }}>{row.runs}</div></div>
+              <div><span style={{ color: theme.textMuted }}>Total km</span><div style={{ fontWeight: 800, color: shoeColor }}>{row.totalKm}</div></div>
+              <div><span style={{ color: theme.textMuted }}>Avg distance</span><div style={{ fontWeight: 800, color: theme.textHeading }}>{row.avgDistance} km</div></div>
+              <div><span style={{ color: theme.textMuted }}>Avg pace</span><div style={{ fontWeight: 800, color: theme.textHeading }}>{row.avgPace ? fmtPace(row.avgPace) : '--'}</div></div>
+              <div><span style={{ color: theme.textMuted }}>Avg speed</span><div style={{ fontWeight: 800, color: theme.textHeading }}>{row.avgSpeed} km/h</div></div>
               <div><span style={{ color: theme.textMuted }}>Longest run</span><div style={{ fontWeight: 800, color: theme.textHeading }}>{row.longestRunKm} km</div></div>
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -1346,6 +1333,8 @@ function RunningTab({
       .map((r) => ({
         label: String(r.date).slice(5),
         y: Number((r.minutes / r.distance).toFixed(2)),
+        hr: Number(r.avgHeartrate || r.avgHeartRate || 0) || null,
+        maxHr: Number(r.maxHeartrate || r.maxHeartRate || 0) || null,
       }));
   }, [runRows]);
 
@@ -1387,7 +1376,16 @@ function RunningTab({
 
   return (
     <div style={{ display: 'grid', gap: '14px' }}>
-      {trainingTip ? <CoachBotCard tip={trainingTip} theme={theme} /> : null}
+      {trainingTip ? <CoachBotCard tip={trainingTip} theme={theme} runRows={runRows} /> : null}
+
+      {userId && !noData ? (
+        <ShareRunButton
+          userId={userId}
+          athleteName={name}
+          theme={theme}
+          label="Share last run · Instagram / WhatsApp"
+        />
+      ) : null}
 
       <MarathonRaceHub userId={userId} runRows={runRows} theme={theme} onOpenPlan={onOpenMarathonPlan} refreshKey={goalRefreshKey} compact />
 
@@ -1396,7 +1394,13 @@ function RunningTab({
           <DepthMetric label="7-day km" value={`${insights.km7.toFixed(1)}`} sub={`${insights.runs7} runs`} accent={theme.orange} theme={theme} />
           <DepthMetric label="30-day km" value={`${insights.km30.toFixed(1)}`} sub={`${insights.runs30} runs`} accent={theme.blue} theme={theme} />
           <DepthMetric label="Pace 7d" value={insights.avgPace7 ? fmtPace(insights.avgPace7) : '--'} sub={paceDelta != null ? `${paceDelta < 0 ? 'Faster' : 'Slower'} vs 30d` : 'rolling'} accent={theme.cyan} theme={theme} />
-          <DepthMetric label="Peak speed" value={runStats?.fastestSpeed != null ? `${runStats.fastestSpeed}` : '--'} sub="km/h best" accent={theme.green} theme={theme} />
+          <DepthMetric
+            label="Peak speed"
+            value={runStats?.fastestSpeed != null ? `${runStats.fastestSpeed}` : '--'}
+            sub={runStats?.speedSource === 'best_1km_split' ? 'best 1 km split' : 'km/h best'}
+            accent={theme.green}
+            theme={theme}
+          />
         </div>
       ) : null}
 
@@ -1430,14 +1434,18 @@ function RunningTab({
         <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
           <div className="run-dash-charts-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <GlowTrend
-              title="Pace trend (min/km)"
+              title="Recent runs · pace (min/km)"
+              subtitle="Last 10 runs overall · avg pace. Dot color = HR zone (not this-run splits)."
               points={paceTrendPoints}
               theme={theme}
               accent={theme.cyan}
+              showHrZones
+              maxHr={hrDashboard?.maxHr}
               valueFmt={(v) => fmtPace(Math.abs(v)).replace(' /km', '')}
             />
             <GlowTrend
-              title="Speed trend (km/h)"
+              title="Recent runs · speed (km/h)"
+              subtitle="Last 10 runs overall · avg speed."
               points={speedTrendPoints}
               theme={theme}
               accent={theme.green}
@@ -1488,7 +1496,18 @@ function RunningTab({
 
       <CollapsibleBlock title="Records" theme={theme} defaultOpen={false}>
         <div className="sport-3col" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: '10px', marginTop: 4 }}>
-          <RecordCard label="Fastest Speed" value={runStats.fastestSpeedRun ? `${runStats.fastestSpeedRun.speed} km/h` : null} detail1={runStats.fastestSpeedRun ? `${runStats.fastestSpeedRun.distance} km in ${runStats.fastestSpeedRun.time}` : null} detail2={runStats.fastestSpeedRun ? fmtDate(runStats.fastestSpeedRun.date) : null} accent={theme.green} theme={theme} />
+          <RecordCard
+            label="Fastest Speed"
+            value={runStats.fastestSpeedRun ? `${runStats.fastestSpeedRun.speed} km/h` : null}
+            detail1={runStats.fastestSpeedRun
+              ? (runStats.speedSource === 'best_1km_split'
+                ? `Best 1 km split${runStats.fastestSpeedRun.splitKm ? ` · Km ${runStats.fastestSpeedRun.splitKm}` : ''} · ${runStats.fastestSpeedRun.time}`
+                : `${runStats.fastestSpeedRun.distance} km in ${runStats.fastestSpeedRun.time}`)
+              : null}
+            detail2={runStats.fastestSpeedRun ? fmtDate(runStats.fastestSpeedRun.date) : null}
+            accent={theme.green}
+            theme={theme}
+          />
           <RecordCard label="Longest Run" value={runStats.longestDistanceRun ? `${runStats.longestDistanceRun.distance} km` : null} detail1={runStats.longestDistanceRun ? `${runStats.longestDistanceRun.time} · ${runStats.longestDistanceRun.speed} km/h` : null} detail2={runStats.longestDistanceRun ? fmtDate(runStats.longestDistanceRun.date) : null} accent={theme.blue} theme={theme} />
           <RecordCard
             label="Fastest Split"
@@ -1664,6 +1683,8 @@ export default function RunningAnalytics() {
   const [stravaSyncing, setStravaSyncing] = useState(false);
   const [stravaSyncMsg, setStravaSyncMsg] = useState('');
   const [mapsRefreshKey, setMapsRefreshKey] = useState(0);
+  const [prRecords, setPrRecords] = useState([]);
+  const [showPrModal, setShowPrModal] = useState(false);
 
   const refreshWellnessPayload = async (uid) => {
     if (!uid || !isWellnessApiReady()) return;
@@ -1792,7 +1813,27 @@ export default function RunningAnalytics() {
     [serverEntries, wellSummary],
   );
   const runRows = useMemo(() => buildRunningRows(entries), [entries]);
-  const runStats = useMemo(() => (user?.id ? computeRunningStats(user.id) : null), [user?.id, entries]);
+  const name = user?.name || user?.username || 'Athlete';
+
+  useEffect(() => {
+    if (!user?.id || !runRows.length) return;
+    const { records } = detectNewPersonalRecords({
+      userId: user.id,
+      runRows,
+      stravaInsights,
+    });
+    if (records.length) {
+      setPrRecords(records);
+      setShowPrModal(true);
+    }
+  }, [user?.id, runRows, stravaInsights]);
+  const runStats = useMemo(() => {
+    if (!user?.id) return null;
+    return computeRunningStats(user.id, {
+      bestSplitPaceMinPerKm: stravaInsights?.bestSplitPaceMinPerKm,
+      bestSplitRun: stravaInsights?.bestSplitRun || null,
+    });
+  }, [user?.id, entries, stravaInsights?.bestSplitPaceMinPerKm, stravaInsights?.bestSplitRun]);
   const wellStats = useMemo(() => (user?.id ? computeWellnessStats(user.id) : null), [user?.id, entries]);
 
   const allSportStats = useMemo(() => ({
@@ -1803,8 +1844,6 @@ export default function RunningAnalytics() {
     walking: computeSportStats(entries, 'walkingMinutes', 'walkingDistanceKm'),
     swimming: computeSportStats(entries, 'swimmingMinutes'),
   }), [entries]);
-
-  const name = user?.name || user?.username || 'Athlete';
 
   if (!user) {
     return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: theme.pageBgSolid, color: theme.textPrimary, fontFamily: theme.font }}>Loading...</div>;
@@ -2122,6 +2161,18 @@ export default function RunningAnalytics() {
           if (router.query.setup) router.replace('/running-analytics', undefined, { shallow: true });
         }}
         initialTab={router.query.setup ? 'goal' : 'plan'}
+      />
+
+      <PersonalRecordModal
+        open={showPrModal && prRecords.length > 0}
+        records={prRecords}
+        userId={user?.id}
+        athleteName={name}
+        theme={theme}
+        onClose={() => {
+          setShowPrModal(false);
+          setPrRecords([]);
+        }}
       />
 
       <MobileBottomNav

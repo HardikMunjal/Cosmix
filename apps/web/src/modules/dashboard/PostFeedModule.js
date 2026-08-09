@@ -127,6 +127,11 @@ export default function PostFeedModule({ posts = [], theme, onLike = () => {}, o
                 </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                {post.kind === 'record' || post.kind === 'pace' || post.kind === 'split' || post.kind === 'comeback' ? (
+                  <span style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#fbbf24', background: 'rgba(251,191,36,0.14)', padding: '4px 8px', borderRadius: '999px', border: '1px solid rgba(251,191,36,0.28)' }}>
+                    {post.kind === 'record' ? 'Distance PR' : post.kind === 'pace' ? 'Best speed' : post.kind === 'split' ? 'Best split' : 'Comeback'}
+                  </span>
+                ) : null}
                 {unseen ? (
                   <span style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em', color: theme.orange, background: `${theme.orange}18`, padding: '4px 8px', borderRadius: '999px' }}>New</span>
                 ) : null}

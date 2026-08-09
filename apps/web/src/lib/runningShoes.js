@@ -93,6 +93,36 @@ export function getRunningShoeLabel(shoe) {
   return brand ? `${brand} ${name}` : name;
 }
 
+/** Medium-soft palette — clear on dark UI, not neon, not washed out. */
+export const SHOE_COLOR_PALETTE = [
+  '#e8a06a', // warm apricot
+  '#6eb8c9', // soft teal-blue
+  '#a894d4', // soft violet
+  '#6fbf8a', // soft green
+  '#d48a96', // soft rose
+  '#7aa3d4', // medium sky
+  '#d4b86a', // soft gold
+  '#c48ec4', // soft orchid
+  '#6fbdb0', // soft sea
+  '#d49a7a', // soft clay
+];
+
+export function hashShoeId(shoeId) {
+  const s = String(shoeId || '');
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i += 1) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return Math.abs(h >>> 0);
+}
+
+export function getShoeColor(shoeId, fallback = '#94a3b8') {
+  const id = String(shoeId || '').trim();
+  if (!id) return fallback;
+  return SHOE_COLOR_PALETTE[hashShoeId(id) % SHOE_COLOR_PALETTE.length];
+}
+
 export function findRunningShoe(shoes, shoeId) {
   if (!shoeId) return null;
   return (shoes || []).find((shoe) => shoe.id === shoeId) || null;
@@ -232,7 +262,12 @@ export function computeShoeLeaderboards(entries = [], shoes = []) {
     .map((row) => {
       const shoe = shoeMap.get(row.shoeId);
       const label = getRunningShoeLabel(shoe);
-      const speed = Number(row.maxSpeedKmh || row.avgSpeedKmh || 0)
+      // Prefer true 1 km split speed over GPS max/avg spikes.
+      const splitSpeed = Number(row.bestSplitPaceMinPerKm) > 0
+        ? Number((60 / Number(row.bestSplitPaceMinPerKm)).toFixed(2))
+        : null;
+      const speed = splitSpeed
+        || Number(row.avgSpeedKmh || 0)
         || (row.minutes > 0 ? (row.distance / (row.minutes / 60)) : 0);
       const avgSpeed = Number(row.avgSpeedKmh || 0) || (row.minutes > 0 ? (row.distance / (row.minutes / 60)) : 0);
       return {
@@ -242,7 +277,8 @@ export function computeShoeLeaderboards(entries = [], shoes = []) {
         shoeLabel: label,
         label: `${Number(row.distance).toFixed(1)} km · ${label}`,
         distance: Number(row.distance),
-        speed: Number(speed.toFixed(2)),
+        speed: Number(Number(speed).toFixed(2)),
+        splitSpeed,
         avgSpeed: Number(avgSpeed.toFixed(2)),
         avgHeartrate: row.avgHeartrate || null,
         bestSplitPace: row.bestSplitPaceMinPerKm || null,
@@ -256,13 +292,16 @@ export function computeShoeLeaderboards(entries = [], shoes = []) {
     .slice(0, limit);
 
   const bandRows = (band) => rows.filter((row) => row.band === band);
+  const splitRows = rows.filter((row) => Number(row.bestSplitPace) > 0 || Number(row.splitSpeed) > 0);
 
   return {
-    topSpeed: rank(rows, 'speed', true).map((r) => ({
+    topSpeed: rank(splitRows.length ? splitRows : rows, splitRows.length ? 'splitSpeed' : 'speed', true).map((r) => ({
       ...r,
-      label: `${r.speed} km/h · ${r.shoeLabel}`,
-      value: r.speed,
-      sub: `${r.distance.toFixed(1)} km`,
+      label: `${r.splitSpeed || r.speed} km/h · ${r.shoeLabel}`,
+      value: r.splitSpeed || r.speed,
+      sub: r.bestSplitPace
+        ? `Best 1 km · ${Math.floor(r.bestSplitPace)}:${String(Math.round((r.bestSplitPace % 1) * 60)).padStart(2, '0')} /km`
+        : `${r.distance.toFixed(1)} km avg`,
     })),
     topKm: rank(rows, 'distance', true).map((r) => ({
       ...r,
@@ -274,7 +313,7 @@ export function computeShoeLeaderboards(entries = [], shoes = []) {
       ...r,
       label: `${r.shoeLabel}`,
       value: r.bestSplitPace,
-      sub: `${r.distance.toFixed(1)} km`,
+      sub: `${r.distance.toFixed(1)} km · ${r.date || ''}`,
     })),
     avgHr5: rank(bandRows('5km'), 'avgHeartrate', true).map((r) => ({
       ...r,
