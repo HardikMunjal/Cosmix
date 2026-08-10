@@ -425,12 +425,24 @@ export class ChatService {
 
     private configureWebPush() {
         if (this.webPushConfigured) return;
-        this.webPushConfigured = true;
         const publicKey = process.env.WEB_PUSH_VAPID_PUBLIC_KEY || '';
         const privateKey = process.env.WEB_PUSH_VAPID_PRIVATE_KEY || '';
-        const contactEmail = process.env.WEB_PUSH_CONTACT_EMAIL || 'mailto:notifications@cosmix.local';
-        if (!publicKey || !privateKey) return;
-        webpush.setVapidDetails(contactEmail, publicKey, privateKey);
+        if (!publicKey || !privateKey) {
+            this.webPushConfigured = true;
+            return;
+        }
+        const rawContact = String(process.env.WEB_PUSH_CONTACT_EMAIL || 'mailto:notifications@cosmix.app').trim();
+        const contact = rawContact.startsWith('mailto:') || rawContact.startsWith('https://')
+            ? rawContact
+            : `mailto:${rawContact.replace(/^mailto:/i, '')}`;
+        try {
+            webpush.setVapidDetails(contact, publicKey, privateKey);
+            this.webPushConfigured = true;
+        } catch (error) {
+            // Never crash chat on bad VAPID config — messaging must keep working.
+            console.error('Web Push VAPID configure failed:', error);
+            this.webPushConfigured = true;
+        }
     }
 
     private webPushEnabled() {
@@ -1569,45 +1581,49 @@ export class ChatService {
         payload: { title: string; body: string; url?: string; tag?: string },
         context?: { type?: 'friend' | 'dm' | 'group' | 'wellness' | 'buddy-safety'; senderUsername?: string; groupId?: string },
     ) {
-        if (!this.webPushEnabled()) return;
-        this.configureWebPush();
-        const allowedRecipients: string[] = [];
-        for (const username of usernames || []) {
-            const normalized = this.normalizeUsername(username);
-            const preferences = await this.getPushPreferences(normalized);
-            if (preferences.muteAll) continue;
-            if (context?.type === 'group' && context.groupId && preferences.mutedGroupIds.includes(context.groupId)) continue;
-            if ((context?.type === 'dm' || context?.type === 'friend') && context.senderUsername) {
-                const sender = this.normalizeUsername(context.senderUsername);
-                if (preferences.mutedUsernames.includes(sender)) continue;
+        try {
+            if (!this.webPushEnabled()) return;
+            this.configureWebPush();
+            const allowedRecipients: string[] = [];
+            for (const username of usernames || []) {
+                const normalized = this.normalizeUsername(username);
+                const preferences = await this.getPushPreferences(normalized);
+                if (preferences.muteAll) continue;
+                if (context?.type === 'group' && context.groupId && preferences.mutedGroupIds.includes(context.groupId)) continue;
+                if ((context?.type === 'dm' || context?.type === 'friend') && context.senderUsername) {
+                    const sender = this.normalizeUsername(context.senderUsername);
+                    if (preferences.mutedUsernames.includes(sender)) continue;
+                }
+                if (context?.type === 'wellness' && preferences.wellnessReminderEnabled === false) continue;
+                if (context?.type === 'buddy-safety' && context.senderUsername) {
+                    const sender = this.normalizeUsername(context.senderUsername);
+                    if (preferences.mutedUsernames.includes(sender)) continue;
+                }
+                allowedRecipients.push(normalized);
             }
-            if (context?.type === 'wellness' && preferences.wellnessReminderEnabled === false) continue;
-            if (context?.type === 'buddy-safety' && context.senderUsername) {
-                const sender = this.normalizeUsername(context.senderUsername);
-                if (preferences.mutedUsernames.includes(sender)) continue;
-            }
-            allowedRecipients.push(normalized);
-        }
 
-        const subscriptions = await this.pushSubscriptionsForUsers(allowedRecipients);
-        if (!subscriptions.length) return;
+            const subscriptions = await this.pushSubscriptionsForUsers(allowedRecipients);
+            if (!subscriptions.length) return;
 
-        const message = JSON.stringify({
-            title: String(payload.title || 'Cosmix'),
-            body: String(payload.body || ''),
-            url: String(payload.url || '/chat'),
-            tag: String(payload.tag || 'cosmix-notification'),
-        });
+            const message = JSON.stringify({
+                title: String(payload.title || 'Cosmix'),
+                body: String(payload.body || ''),
+                url: String(payload.url || '/chat'),
+                tag: String(payload.tag || 'cosmix-notification'),
+            });
 
-        for (const entry of subscriptions) {
-            try {
-                await webpush.sendNotification(entry.subscription, message);
-            } catch (error: any) {
-                const statusCode = Number(error?.statusCode || 0);
-                if (statusCode === 404 || statusCode === 410) {
-                    await this.prunePushSubscriptionByEndpoint(entry.endpoint);
+            for (const entry of subscriptions) {
+                try {
+                    await webpush.sendNotification(entry.subscription, message);
+                } catch (error: any) {
+                    const statusCode = Number(error?.statusCode || 0);
+                    if (statusCode === 404 || statusCode === 410) {
+                        await this.prunePushSubscriptionByEndpoint(entry.endpoint);
+                    }
                 }
             }
+        } catch (error) {
+            console.error('Web Push send failed:', error);
         }
     }
 
