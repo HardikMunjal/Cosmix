@@ -3,7 +3,8 @@ FROM node:20-slim AS builder
 WORKDIR /usr/src/app
 
 COPY services/auth-service/package*.json ./
-RUN npm install --legacy-peer-deps
+RUN npm install --legacy-peer-deps \
+  && npm install --save-dev --legacy-peer-deps @types/node@20.17.30 typescript@4.9.5
 
 COPY services/auth-service/ ./
 RUN npm run build
