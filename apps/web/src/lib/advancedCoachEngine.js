@@ -358,8 +358,17 @@ export function buildQuickGuideFromEngine({ runRows = [], tip = null } = {}) {
       { label: 'HR / Z2', value: hrShort },
       { label: 'Sleep', value: tip?.sleep },
     ].filter((row) => row.value),
-    confidence: tip?.confidence || 0.86,
+    confidence: tip?.bodyReadiness?.percent != null
+      ? tip.bodyReadiness.percent / 100
+      : (tip?.confidence ?? 0.7),
+    bodyReadiness: tip?.bodyReadiness || null,
     metaChips: [
+      tip?.bodyReadiness?.percent != null
+        ? { k: 'Ready', v: `${tip.bodyReadiness.percent}% · ${tip.bodyReadiness.label || ''}` }
+        : null,
+      tip?.bodyReadiness?.daysSinceLast != null
+        ? { k: 'Rest', v: tip.bodyReadiness.daysSinceLast === 0 ? 'Ran today' : `${tip.bodyReadiness.daysSinceLast}d` }
+        : null,
       s.weekKm != null ? { k: '7d', v: `${s.weekKm} km` } : null,
       s.runs7 != null ? { k: 'Runs', v: String(s.runs7) } : null,
       s.avgHr != null ? { k: 'HR', v: String(s.avgHr) } : null,

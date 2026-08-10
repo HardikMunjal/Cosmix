@@ -1,35 +1,64 @@
 import { useEffect, useId, useMemo, useState } from 'react';
 import { buildQuickGuideFromEngine, parseMarkdownSections } from './advancedCoachEngine';
 
-function ConfidenceBeam({ value = 0.8, gradId }) {
-  const pct = Math.max(0.08, Math.min(1, Number(value) || 0.8));
+function BodyReadinessMeter({ readiness, fallbackPct = 70, gradId }) {
+  const percent = Math.max(
+    0,
+    Math.min(100, Math.round(Number(readiness?.percent ?? fallbackPct) || 70)),
+  );
+  const label = readiness?.label || (percent >= 85 ? 'Ready' : percent >= 65 ? 'Good' : 'Recovering');
+  const color = readiness?.color || '#34d399';
+  const why = readiness?.why || 'How ready your body is to train hard today.';
+  const radius = 52;
+  const circ = 2 * Math.PI * radius;
+  const offset = circ * (1 - percent / 100);
+
   return (
-    <div className="coach-beam" aria-label={`Confidence ${Math.round(pct * 100)} percent`}>
-      <div className="coach-beam-meta">
-        <span>Signal confidence</span>
-        <strong>{Math.round(pct * 100)}%</strong>
-      </div>
-      <div className="coach-beam-track">
-        <div className="coach-beam-fill" style={{ width: `${pct * 100}%` }}>
-          <span className="coach-beam-glow" />
+    <div
+      className="coach-ready"
+      style={{ '--ready-color': color }}
+      aria-label={`Body readiness ${percent} percent — ${label}`}
+    >
+      <div className="coach-ready-ring-wrap">
+        <svg className="coach-ready-ring" viewBox="0 0 120 120" aria-hidden="true">
+          <defs>
+            <linearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor={color} stopOpacity="0.35" />
+              <stop offset="55%" stopColor={color} />
+              <stop offset="100%" stopColor="#67e8f9" stopOpacity="0.85" />
+            </linearGradient>
+            <filter id={`${gradId}-glow`} x="-40%" y="-40%" width="180%" height="180%">
+              <feGaussianBlur stdDeviation="2.4" result="b" />
+              <feMerge>
+                <feMergeNode in="b" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+          <circle className="coach-ready-track" cx="60" cy="60" r={radius} />
+          <circle
+            className="coach-ready-progress"
+            cx="60"
+            cy="60"
+            r={radius}
+            stroke={`url(#${gradId})`}
+            filter={`url(#${gradId}-glow)`}
+            strokeDasharray={circ}
+            strokeDashoffset={offset}
+          />
+        </svg>
+        <div className="coach-ready-core">
+          <strong className="coach-ready-num">{percent}</strong>
+          <span className="coach-ready-unit">%</span>
         </div>
       </div>
-      <svg className="coach-beam-wave" viewBox="0 0 240 28" preserveAspectRatio="none" aria-hidden="true">
-        <defs>
-          <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="#5eead4" stopOpacity="0.15" />
-            <stop offset="50%" stopColor="#67e8f9" stopOpacity="0.9" />
-            <stop offset="100%" stopColor="#34d399" stopOpacity="0.2" />
-          </linearGradient>
-        </defs>
-        <path
-          d="M0 18 C24 8, 40 26, 64 14 S104 4, 128 16 S168 28, 192 12 S224 6, 240 16"
-          fill="none"
-          stroke={`url(#${gradId})`}
-          strokeWidth="2"
-          className="coach-beam-path"
-        />
-      </svg>
+      <div className="coach-ready-copy">
+        <div className="coach-ready-meta">
+          <span className="coach-ready-kicker">Body readiness</span>
+          <span className="coach-ready-badge">{label}</span>
+        </div>
+        <p className="coach-ready-why">{why}</p>
+      </div>
     </div>
   );
 }
@@ -152,7 +181,6 @@ function AdvancedCoachPanel({ tip, runRows = [] }) {
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-    // tipAction/tipKey/runSig keep seed fetch stable without re-hitting on every tip object identity change
   }, [runSig, tipAction, tipKey]);
 
   return (
@@ -195,7 +223,7 @@ function AdvancedCoachPanel({ tip, runRows = [] }) {
 export function CoachBotCard({ tip, theme, runRows = [] }) {
   const [mode, setMode] = useState('quick');
   const gradId = useId().replace(/:/g, '');
-  const accent = theme?.cyan || theme?.blue || '#38bdf8';
+  const accent = theme?.cyan || theme?.blue || '#22d3ee';
 
   const quick = useMemo(
     () => buildQuickGuideFromEngine({ runRows, tip }),
@@ -207,6 +235,9 @@ export function CoachBotCard({ tip, theme, runRows = [] }) {
   const title = quick?.title || tip?.title || 'Cosmix Coach';
   const body = quick?.tip || tip?.tip || '';
   const action = quick?.action || tip?.action;
+  const readiness = tip?.bodyReadiness || quick?.bodyReadiness || null;
+  const readyPct = readiness?.percent
+    ?? Math.round((quick?.confidence || tip?.confidence || 0.7) * 100);
   const protocols = quick?.protocols?.length
     ? quick.protocols
     : [
@@ -220,12 +251,13 @@ export function CoachBotCard({ tip, theme, runRows = [] }) {
   return (
     <section
       className="coach-brief"
-      style={{ '--coach-accent': accent }}
+      style={{ '--coach-accent': accent, '--ready-color': readiness?.color || '#34d399' }}
       aria-label="Cosmix Coach recommendation"
     >
       <div className="coach-brief-aurora" aria-hidden="true">
         <span className="coach-brief-blob coach-brief-blob-a" />
         <span className="coach-brief-blob coach-brief-blob-b" />
+        <span className="coach-brief-mesh" />
         <span className="coach-brief-sheen" />
       </div>
 
@@ -233,9 +265,12 @@ export function CoachBotCard({ tip, theme, runRows = [] }) {
         <div className="coach-brief-brand-block">
           <div className="coach-brief-status">
             <span className="coach-brief-status-dot" />
-            Data engine · live
+            Live readiness
           </div>
-          <div className="coach-brief-brand">Cosmix Coach</div>
+          <div className="coach-brief-brand">
+            <span className="coach-brief-brand-3d">Cosmix</span>
+            <span className="coach-brief-brand-sub">Coach</span>
+          </div>
         </div>
         <div className="coach-mode-toggle" role="tablist" aria-label="Coach mode">
           <button type="button" className={mode === 'quick' ? 'is-active' : ''} onClick={() => setMode('quick')}>Quick</button>
@@ -248,16 +283,20 @@ export function CoachBotCard({ tip, theme, runRows = [] }) {
       ) : (
         <div className="coach-brief-main">
           <div className="coach-brief-directive">
-            <p className="coach-brief-kicker">Quick guide · data engine</p>
-            <h2 className="coach-brief-title">{title}</h2>
+            <p className="coach-brief-kicker">Today&apos;s call</p>
+            <h2 className="coach-brief-title coach-title-3d">{title}</h2>
             <p className="coach-brief-tip">{body}</p>
             {action ? (
               <div className="coach-brief-cta coach-brief-cta-inline">
-                <span>Execute</span>
+                <span>Next move</span>
                 <strong>{action}</strong>
               </div>
             ) : null}
-            <ConfidenceBeam value={quick?.confidence || tip?.confidence || 0.84} gradId={gradId} />
+            <BodyReadinessMeter
+              readiness={readiness}
+              fallbackPct={readyPct}
+              gradId={`ready-${gradId}`}
+            />
             {meta.length ? (
               <div className="coach-brief-stats">
                 {meta.map((item) => (
@@ -272,8 +311,8 @@ export function CoachBotCard({ tip, theme, runRows = [] }) {
 
           <aside className="coach-brief-rail" aria-label="Recovery protocols">
             <div className="coach-brief-rail-head">
-              <span>Protocol stack</span>
-              <span>{protocols.length} steps</span>
+              <span>Protocol</span>
+              <span>{protocols.length}</span>
             </div>
             <ol className="coach-step-list">
               {protocols.map((row, index) => (
