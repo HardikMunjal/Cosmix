@@ -25,6 +25,13 @@ module.exports = {
     ];
   },
   webpack: (config) => {
+    // ffmpeg.wasm needs these for browser builds
+    config.resolve.fallback = {
+      ...(config.resolve.fallback || {}),
+      fs: false,
+      path: false,
+      crypto: false,
+    };
     return config;
   },
 };

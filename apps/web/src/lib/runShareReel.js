@@ -165,6 +165,62 @@ async function tryShareFiles(files, { title, text } = {}) {
   }
 }
 
+let ffmpegInstance = null;
+let ffmpegLoadPromise = null;
+
+async function getFfmpeg() {
+  if (ffmpegInstance) return ffmpegInstance;
+  if (ffmpegLoadPromise) return ffmpegLoadPromise;
+  ffmpegLoadPromise = (async () => {
+    const { FFmpeg } = await import('@ffmpeg/ffmpeg');
+    const { toBlobURL } = await import('@ffmpeg/util');
+    const ffmpeg = new FFmpeg();
+    const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd';
+    await ffmpeg.load({
+      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+    });
+    ffmpegInstance = ffmpeg;
+    return ffmpeg;
+  })();
+  try {
+    return await ffmpegLoadPromise;
+  } catch (error) {
+    ffmpegLoadPromise = null;
+    throw error;
+  }
+}
+
+/**
+ * WhatsApp / Instagram need MP4. Browsers usually record WebM — convert before share.
+ */
+export async function convertReelToMp4(blob, { onProgress } = {}) {
+  if (!blob) throw new Error('No video to convert');
+  onProgress?.('Preparing WhatsApp video…');
+  const { fetchFile } = await import('@ffmpeg/util');
+  const ffmpeg = await getFfmpeg();
+  onProgress?.('Converting to MP4…');
+  await ffmpeg.writeFile('input.webm', await fetchFile(blob));
+  // ultrafast keeps mobile conversion quick for short reels
+  await ffmpeg.exec([
+    '-i', 'input.webm',
+    '-c:v', 'libx264',
+    '-preset', 'ultrafast',
+    '-crf', '28',
+    '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart',
+    '-an',
+    'output.mp4',
+  ]);
+  const data = await ffmpeg.readFile('output.mp4');
+  try { await ffmpeg.deleteFile('input.webm'); } catch (_) { /* ignore */ }
+  try { await ffmpeg.deleteFile('output.mp4'); } catch (_) { /* ignore */ }
+  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+  const mp4Blob = new Blob([bytes.buffer], { type: 'video/mp4' });
+  if (!mp4Blob.size) throw new Error('MP4 conversion failed');
+  return mp4Blob;
+}
+
 let logoImagePromise = null;
 
 function loadCosmixLogo() {
@@ -642,23 +698,45 @@ export async function shareOrDownloadRunReel(result, {
   filename,
   preferPosterForShare = false,
   forceImage = false,
+  onProgress,
 } = {}) {
   if (!result?.blob) throw new Error('Nothing to share');
 
+  // Build a WhatsApp-friendly MP4 when the browser only recorded WebM.
+  let shareResult = result;
+  if (!forceImage && !result.isImage && !isLikelyShareableVideo(result.mimeType)) {
+    try {
+      const mp4Blob = await convertReelToMp4(result.blob, { onProgress });
+      const mp4Url = URL.createObjectURL(mp4Blob);
+      shareResult = {
+        ...result,
+        blob: mp4Blob,
+        url: mp4Url,
+        mimeType: 'video/mp4',
+        isImage: false,
+        convertedFromWebm: true,
+      };
+    } catch (error) {
+      console.error('MP4 conversion failed, falling back:', error);
+      onProgress?.('Could not convert video — trying photo…');
+    }
+  }
+
   const candidates = [];
   const pushVideo = () => {
-    if (result.isImage) return;
-    const ext = isLikelyShareableVideo(result.mimeType) ? 'mp4' : 'webm';
+    if (shareResult.isImage) return;
+    // Never offer WebM to the share sheet — WhatsApp drops it.
+    if (!isLikelyShareableVideo(shareResult.mimeType)) return;
     candidates.push({
-      blob: result.blob,
-      url: result.url,
-      mimeType: result.mimeType || result.blob.type || `video/${ext}`,
+      blob: shareResult.blob,
+      url: shareResult.url,
+      mimeType: 'video/mp4',
       isImage: false,
-      name: filename || `cosmix-run.${ext}`,
+      name: filename || 'cosmix-run.mp4',
     });
   };
   const pushImage = () => {
-    const poster = result.poster?.blob ? result.poster : (result.isImage ? result : null);
+    const poster = shareResult.poster?.blob ? shareResult.poster : (shareResult.isImage ? shareResult : null);
     if (!poster?.blob) return;
     candidates.push({
       blob: poster.blob,
@@ -675,26 +753,38 @@ export async function shareOrDownloadRunReel(result, {
     pushImage();
     pushVideo();
   } else {
-    // Prefer video for WhatsApp / Instagram status / reels.
     pushVideo();
-    pushImage();
+    // Only fall back to photo if video share isn't possible.
+    if (!candidates.length) pushImage();
   }
 
-  if (!candidates.length && result.blob) {
+  if (!candidates.length && shareResult.blob) {
     candidates.push({
-      blob: result.blob,
-      url: result.url,
-      mimeType: result.mimeType || result.blob.type,
-      isImage: Boolean(result.isImage),
-      name: filename || (result.isImage ? 'cosmix-run.png' : 'cosmix-run.webm'),
+      blob: shareResult.blob,
+      url: shareResult.url,
+      mimeType: shareResult.mimeType || shareResult.blob.type,
+      isImage: Boolean(shareResult.isImage),
+      name: filename || (shareResult.isImage ? 'cosmix-run.png' : 'cosmix-run.mp4'),
     });
   }
 
+  onProgress?.('Opening share…');
   for (const item of candidates) {
-    const file = new File([item.blob], item.name, { type: item.mimeType || (item.isImage ? 'image/png' : 'video/webm') });
+    const file = new File([item.blob], item.name, { type: item.mimeType || (item.isImage ? 'image/png' : 'video/mp4') });
     const shared = await tryShareFiles([file], { title, text });
     if (shared.ok) return { method: 'share', sharedAs: item.isImage ? 'image' : 'video' };
     if (shared.cancelled) return { method: 'cancelled' };
+  }
+
+  // If video share failed (e.g. canShare false), offer photo as last resort.
+  if (!forceImage && !preferPosterForShare) {
+    const poster = shareResult.poster?.blob ? shareResult.poster : null;
+    if (poster?.blob) {
+      const file = new File([poster.blob], 'cosmix-run.png', { type: 'image/png' });
+      const shared = await tryShareFiles([file], { title, text });
+      if (shared.ok) return { method: 'share', sharedAs: 'image' };
+      if (shared.cancelled) return { method: 'cancelled' };
+    }
   }
 
   const fallback = candidates[0];

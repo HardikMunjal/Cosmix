@@ -10,6 +10,8 @@
     "migrate:strategies": "node scripts/migrate-options-strategies-db.js"
   },
   "dependencies": {
+    "@ffmpeg/ffmpeg": "^0.12.10",
+    "@ffmpeg/util": "^0.12.1",
     "@imgly/background-removal": "^1.7.0",
     "@seald-io/nedb": "^4.1.2",
     "aws-sdk": "^2.1693.0",

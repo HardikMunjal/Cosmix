@@ -95,13 +95,14 @@ export function RunSharePreviewModal({
   async function handleConfirmShare({ forceImage = false } = {}) {
     if (sending) return;
     setSending(true);
-    setMsg('');
+    setMsg(forceImage ? 'Opening share…' : 'Converting video for WhatsApp…');
     try {
       const result = await shareOrDownloadRunReel(reel, {
         title: shareTitle,
         text: shareText,
         forceImage,
         preferPosterForShare: forceImage,
+        onProgress: (label) => setMsg(String(label || '')),
       });
       if (result.method === 'cancelled') {
         setMsg('');
@@ -111,7 +112,7 @@ export function RunSharePreviewModal({
         setMsg(result.sharedAs === 'video' ? 'Shared as video' : 'Shared as photo');
       } else {
         setMsg(result.sharedAs === 'video'
-          ? 'Saved video — open WhatsApp or Instagram to post'
+          ? 'Saved MP4 — open WhatsApp and attach the file'
           : 'Saved photo — open WhatsApp or Instagram to post');
       }
       onShared?.(result);
@@ -240,7 +241,7 @@ export function RunSharePreviewModal({
                 opacity: sending ? 0.8 : 1,
               }}
             >
-              {sending ? 'Opening…' : 'Share video'}
+              {sending ? 'Converting…' : 'Share video'}
             </button>
           ) : null}
           <button
