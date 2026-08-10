@@ -1969,11 +1969,16 @@ export class ChatService {
                     throw new ForbiddenException('Incorrect thread password.');
                 }
             }
-            const membership = this.buildMembershipRecord(group.id, actor, 'viewer');
+            const membership = this.buildMembershipRecord(group.id, actor, 'member');
             await pool?.query(
                 `INSERT INTO chat_group_memberships (id, group_id, username, role, can_view, can_post, can_comment, can_invite, created_at, updated_at)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
-                 ON CONFLICT (group_id, username) DO NOTHING`,
+                 ON CONFLICT (group_id, username) DO UPDATE SET
+                   role = CASE WHEN chat_group_memberships.role = 'owner' THEN chat_group_memberships.role ELSE EXCLUDED.role END,
+                   can_view = TRUE,
+                   can_post = CASE WHEN chat_group_memberships.role = 'owner' THEN chat_group_memberships.can_post ELSE EXCLUDED.can_post END,
+                   can_comment = TRUE,
+                   updated_at = EXCLUDED.updated_at`,
                 [membership.id, membership.groupId, membership.username, membership.role, membership.canView, membership.canPost, membership.canComment, membership.canInvite, membership.createdAt],
             );
             return this.getBootstrap(actor);
@@ -1997,7 +2002,7 @@ export class ChatService {
             }
         }
         if (!this.memoryMembership(group.id, actor)) {
-            this.memberships.push(this.buildMembershipRecord(group.id, actor, 'viewer'));
+            this.memberships.push(this.buildMembershipRecord(group.id, actor, 'member'));
         }
         return this.getBootstrap(actor);
     }
