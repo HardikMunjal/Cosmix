@@ -437,13 +437,13 @@ export default function RunDetailPage() {
               {summary.name || 'Run'}
             </div>
             {userId && (detail?.polyline?.length || streams.latlng?.length) ? (
-              <div style={{ marginTop: 14 }}>
+              <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
                 <ShareRunButton
                   userId={userId}
                   activityId={activityId}
                   athleteName={user?.name || user?.username || ''}
                   theme={{ textMuted: '#94a3b8' }}
-                  label="Share reel · Instagram / WhatsApp"
+                  compact
                   summary={summary}
                   polyline={detail?.polyline?.length ? detail.polyline : streams.latlng}
                 />

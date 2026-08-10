@@ -1379,12 +1379,14 @@ function RunningTab({
       {trainingTip ? <CoachBotCard tip={trainingTip} theme={theme} runRows={runRows} /> : null}
 
       {userId && !noData ? (
-        <ShareRunButton
-          userId={userId}
-          athleteName={name}
-          theme={theme}
-          label="Share last run · Instagram / WhatsApp"
-        />
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <ShareRunButton
+            userId={userId}
+            athleteName={name}
+            theme={theme}
+            compact
+          />
+        </div>
       ) : null}
 
       <MarathonRaceHub userId={userId} runRows={runRows} theme={theme} onOpenPlan={onOpenMarathonPlan} refreshKey={goalRefreshKey} compact />

@@ -123,13 +123,46 @@ function drawRoundedRect(ctx, x, y, w, h, r) {
 
 function pickMimeType() {
   if (typeof MediaRecorder === 'undefined') return null;
+  // Prefer MP4 when available — WhatsApp / Instagram reject most WebM shares.
   const candidates = [
+    'video/mp4',
     'video/webm;codecs=vp9',
     'video/webm;codecs=vp8',
     'video/webm',
-    'video/mp4',
   ];
   return candidates.find((type) => MediaRecorder.isTypeSupported(type)) || null;
+}
+
+function isLikelyShareableVideo(mimeType = '') {
+  const type = String(mimeType || '').toLowerCase();
+  return type.includes('mp4') || type.includes('quicktime');
+}
+
+async function canvasToPngBlob(canvas) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error('Could not create share image'));
+    }, 'image/png');
+  });
+}
+
+async function tryShareFiles(files, { title, text } = {}) {
+  if (typeof navigator === 'undefined' || !navigator.share) return { ok: false, reason: 'no-share' };
+  const list = (files || []).filter(Boolean);
+  if (!list.length) return { ok: false, reason: 'no-files' };
+  try {
+    if (navigator.canShare && !navigator.canShare({ files: list })) {
+      return { ok: false, reason: 'cannot-share-files' };
+    }
+    await navigator.share({ files: list, title, text });
+    return { ok: true, reason: 'shared' };
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      return { ok: false, reason: 'cancelled', cancelled: true };
+    }
+    return { ok: false, reason: 'share-failed', detail: String(error?.message || error) };
+  }
 }
 
 let logoImagePromise = null;
@@ -510,7 +543,7 @@ export function drawRunShareFrame(ctx, {
 }
 
 /**
- * Record a Cosmix run share video.
+ * Record a Cosmix run share video (or PNG poster when video isn't shareable).
  */
 export async function renderRunShareReel({
   polyline = [],
@@ -520,6 +553,7 @@ export async function renderRunShareReel({
   width = 1080,
   height = 1920,
   fps = 30,
+  preferShareableImage = true,
 } = {}) {
   if (typeof document === 'undefined') {
     throw new Error('Share reel only runs in the browser');
@@ -544,9 +578,12 @@ export async function renderRunShareReel({
   };
 
   const mimeType = pickMimeType();
-  if (!mimeType || typeof canvas.captureStream !== 'function') {
+  const canRecord = Boolean(mimeType && typeof canvas.captureStream === 'function' && typeof MediaRecorder !== 'undefined');
+
+  // WhatsApp / Instagram rarely accept WebM — default to a branded PNG poster they can post.
+  if (!canRecord || (preferShareableImage && !isLikelyShareableVideo(mimeType))) {
     draw(1);
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    const blob = await canvasToPngBlob(canvas);
     const url = URL.createObjectURL(blob);
     return {
       blob, url, mimeType: 'image/png', width, height, isImage: true,
@@ -567,6 +604,10 @@ export async function renderRunShareReel({
     recorder.onstop = () => {
       try {
         const blob = new Blob(chunks, { type: mimeType });
+        if (!blob.size) {
+          reject(new Error('Empty recording'));
+          return;
+        }
         const url = URL.createObjectURL(blob);
         resolve({
           blob, url, mimeType, width, height, isImage: false,
@@ -599,7 +640,16 @@ export async function renderRunShareReel({
     requestAnimationFrame(tick);
   });
 
-  return done;
+  try {
+    return await done;
+  } catch (_) {
+    draw(1);
+    const blob = await canvasToPngBlob(canvas);
+    const url = URL.createObjectURL(blob);
+    return {
+      blob, url, mimeType: 'image/png', width, height, isImage: true,
+    };
+  }
 }
 
 export async function shareOrDownloadRunReel(result, {
@@ -610,18 +660,18 @@ export async function shareOrDownloadRunReel(result, {
   if (!result?.blob) throw new Error('Nothing to share');
   const ext = result.isImage ? 'png' : (String(result.mimeType || '').includes('mp4') ? 'mp4' : 'webm');
   const name = filename || `cosmix-run.${ext}`;
-  const file = new File([result.blob], name, { type: result.mimeType || result.blob.type });
+  const file = new File([result.blob], name, { type: result.mimeType || result.blob.type || (result.isImage ? 'image/png' : 'video/webm') });
 
-  if (typeof navigator !== 'undefined' && navigator.canShare && navigator.canShare({ files: [file] })) {
-    await navigator.share({ files: [file], title, text });
-    return { method: 'share' };
-  }
-
-  if (typeof navigator !== 'undefined' && navigator.share && result.isImage) {
-    try {
-      await navigator.share({ files: [file], title, text });
-      return { method: 'share' };
-    } catch (_) { /* fall through */ }
+  // Prefer native share sheet (WhatsApp / Instagram) when the file type is accepted.
+  if (result.isImage || isLikelyShareableVideo(result.mimeType)) {
+    const shared = await tryShareFiles([file], { title, text });
+    if (shared.ok) return { method: 'share' };
+    if (shared.cancelled) return { method: 'cancelled' };
+  } else if (typeof navigator !== 'undefined' && navigator.share) {
+    // Last attempt with whatever we have (often fails for WebM — then download).
+    const shared = await tryShareFiles([file], { title, text });
+    if (shared.ok) return { method: 'share' };
+    if (shared.cancelled) return { method: 'cancelled' };
   }
 
   const a = document.createElement('a');
@@ -636,21 +686,42 @@ export async function shareOrDownloadRunReel(result, {
 /** Fetch latest (or specific) run detail for sharing. */
 export async function fetchShareableRun(userId, activityId, wellnessApiUrl) {
   if (!userId || !wellnessApiUrl) return null;
+  const fetchOpts = { credentials: 'include' };
   let id = activityId;
   if (!id) {
-    const mapsRes = await fetch(wellnessApiUrl(`/wellness/strava/maps/${encodeURIComponent(userId)}?limit=8`));
+    const mapsRes = await fetch(wellnessApiUrl(`/wellness/strava/maps/${encodeURIComponent(userId)}?limit=8`), fetchOpts);
     const maps = await mapsRes.json().catch(() => null);
-    const card = (maps?.cards || maps?.runs || []).find((c) => (c.polyline || []).length >= 2)
-      || (maps?.cards || maps?.runs || [])[0];
+    const cards = maps?.cards || maps?.runs || [];
+    const card = cards.find((c) => (c.polyline || []).length >= 2) || cards[0];
     id = card?.id || card?.stravaId || card?.activityId;
     if (!id) return null;
   }
-  const res = await fetch(wellnessApiUrl(`/wellness/strava/runs/${encodeURIComponent(userId)}/${encodeURIComponent(id)}`));
-  const detail = await res.json().catch(() => null);
-  if (!res.ok || !detail) return null;
-  const polyline = detail.polyline?.length
+
+  let res = await fetch(wellnessApiUrl(`/wellness/strava/runs/${encodeURIComponent(userId)}/${encodeURIComponent(id)}`), fetchOpts);
+  let detail = await res.json().catch(() => null);
+  let polyline = Array.isArray(detail?.polyline) && detail.polyline.length
     ? detail.polyline
-    : (detail.streams?.latlng || []);
+    : (Array.isArray(detail?.streams?.latlng) ? detail.streams.latlng : []);
+
+  if ((!polyline || polyline.length < 2) && id) {
+    try {
+      await fetch(wellnessApiUrl(`/wellness/strava/runs/${encodeURIComponent(userId)}/enrich-details`), {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ activityIds: [id], limit: 1 }),
+      });
+      res = await fetch(wellnessApiUrl(`/wellness/strava/runs/${encodeURIComponent(userId)}/${encodeURIComponent(id)}`), fetchOpts);
+      detail = await res.json().catch(() => null);
+      polyline = Array.isArray(detail?.polyline) && detail.polyline.length
+        ? detail.polyline
+        : (Array.isArray(detail?.streams?.latlng) ? detail.streams.latlng : []);
+    } catch (_) {
+      // Enrich is best-effort.
+    }
+  }
+
+  if (!res.ok || !detail) return null;
   return {
     activityId: id,
     summary: detail.summary || {},

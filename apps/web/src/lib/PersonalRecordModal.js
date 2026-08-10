@@ -74,7 +74,11 @@ export function PersonalRecordModal({
         title: record.title,
         text: `${record.title} · ${record.metricValue} on Cosmix`,
       });
-      setShareMsg(result.method === 'share' ? 'Shared!' : 'Saved to your device — post to Instagram or WhatsApp.');
+      if (result.method === 'cancelled') {
+        setShareMsg('');
+        return;
+      }
+      setShareMsg(result.method === 'share' ? 'Opened share sheet' : 'Saved — open Instagram or WhatsApp to post.');
       onShared?.(reel);
     } catch (err) {
       setShareMsg(err?.message || 'Could not build share video.');
@@ -224,7 +228,7 @@ export function PersonalRecordModal({
               opacity: sharing ? 0.75 : 1,
             }}
           >
-            {sharing ? 'Building…' : 'Share reel'}
+            {sharing ? 'Building…' : 'Share'}
           </button>
           {record.activityId ? (
             <Link
@@ -296,9 +300,10 @@ export function ShareRunButton({
   activityId,
   athleteName = '',
   theme,
-  label = 'Share to IG / WhatsApp',
+  label = 'Share',
   summary = null,
   polyline = null,
+  compact = true,
 }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
@@ -306,14 +311,14 @@ export function ShareRunButton({
   async function handleShare() {
     if (!userId || busy) return;
     setBusy(true);
-    setMsg('Building Cosmix reel…');
+    setMsg('');
     try {
       let poly = polyline;
       let sum = summary;
       if (!poly?.length || !sum) {
         const run = await fetchShareableRun(userId, activityId, wellnessApiUrl);
         if (!run?.polyline?.length) {
-          setMsg('Map not ready — enrich this run first.');
+          setMsg('Map not ready — open this run once, then share.');
           return;
         }
         poly = run.polyline;
@@ -326,14 +331,63 @@ export function ShareRunButton({
       });
       const result = await shareOrDownloadRunReel(reel, {
         title: 'My Cosmix run',
-        text: `${Number(sum.distanceKm || 0).toFixed(1)} km · Cosmix run reel`,
+        text: `${Number(sum.distanceKm || 0).toFixed(1)} km · Cosmix run`,
       });
-      setMsg(result.method === 'share' ? 'Shared!' : 'Downloaded — open Instagram or WhatsApp to post.');
+      if (result.method === 'cancelled') {
+        setMsg('');
+        return;
+      }
+      setMsg(result.method === 'share' ? 'Opened share sheet' : 'Saved — open WhatsApp or Instagram to post');
     } catch (err) {
       setMsg(err?.message || 'Share failed');
     } finally {
       setBusy(false);
     }
+  }
+
+  if (compact) {
+    return (
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+        <button
+          type="button"
+          onClick={handleShare}
+          disabled={busy}
+          title={label}
+          aria-label={busy ? 'Building share…' : 'Share run to WhatsApp or Instagram'}
+          style={{
+            appearance: 'none',
+            width: 36,
+            height: 36,
+            borderRadius: 999,
+            border: '1px solid rgba(148,163,184,0.35)',
+            background: busy
+              ? 'rgba(15,23,42,0.7)'
+              : 'linear-gradient(145deg, rgba(249,115,22,0.95), rgba(34,211,238,0.88))',
+            color: '#0f172a',
+            display: 'inline-grid',
+            placeItems: 'center',
+            cursor: busy ? 'wait' : 'pointer',
+            opacity: busy ? 0.75 : 1,
+            padding: 0,
+            boxShadow: '0 6px 16px rgba(2,6,23,0.28)',
+          }}
+        >
+          {busy ? (
+            <span style={{ width: 12, height: 12, borderRadius: 999, border: '2px solid rgba(15,23,42,0.35)', borderTopColor: '#0f172a', display: 'block', animation: 'cosmix-share-spin 0.7s linear infinite' }} />
+          ) : (
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="18" cy="5" r="2.4" />
+              <circle cx="6" cy="12" r="2.4" />
+              <circle cx="18" cy="19" r="2.4" />
+              <path d="M8.2 13.1 15.8 17" />
+              <path d="M15.8 7 8.2 10.9" />
+            </svg>
+          )}
+        </button>
+        {msg ? <span style={{ fontSize: 11, color: theme?.textMuted || '#94a3b8', fontWeight: 600 }}>{msg}</span> : null}
+        <style>{`@keyframes cosmix-share-spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
   }
 
   return (
@@ -356,7 +410,7 @@ export function ShareRunButton({
           boxShadow: '0 10px 28px rgba(249,115,22,0.28)',
         }}
       >
-        {busy ? 'Crafting reel…' : label}
+        {busy ? 'Crafting…' : label}
       </button>
       {msg ? <div style={{ fontSize: 11, color: theme?.textMuted || '#94a3b8', fontWeight: 600 }}>{msg}</div> : null}
     </div>

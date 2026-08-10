@@ -92,7 +92,8 @@ export default function App({ Component, pageProps }) {
       <Head>
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
         <link rel="manifest" href="/manifest.webmanifest" />
-        <link rel="apple-touch-icon" href="/icons/cosmix-icon.svg" />
+        <link rel="icon" href="/icons/cosmix-universe-logo.png" type="image/png" />
+        <link rel="apple-touch-icon" href="/icons/cosmix-universe-logo.png" sizes="192x192" />
         <meta name="theme-color" content="#0f172a" />
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-capable" content="yes" />

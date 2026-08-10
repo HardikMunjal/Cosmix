@@ -51,8 +51,8 @@ self.addEventListener('push', (event) => {
       body,
       tag,
       data: { url },
-      badge: '/icons/cosmix-icon.svg',
-      icon: '/icons/cosmix-icon.svg',
+      badge: '/icons/cosmix-universe-logo.svg',
+      icon: '/icons/cosmix-universe-logo.png',
     }),
   );
 });
