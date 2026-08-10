@@ -282,6 +282,7 @@ export function drawRunShareFrame(ctx, {
   const mapReveal = easeInOut(clamp((t - 0.05) / 0.7, 0, 1));
   const statsReveal = easeOutCubic(clamp((t - 0.2) / 0.4, 0, 1));
   const brandPulse = 0.55 + Math.sin(t * Math.PI * 5) * 0.1;
+  const s = Math.max(0.45, width / 1080);
 
   // Space background
   const bg = ctx.createLinearGradient(0, 0, width, height);
@@ -309,47 +310,47 @@ export function drawRunShareFrame(ctx, {
     const sx = (i * 97) % width;
     const sy = (i * 53 + Math.sin(t * 8 + i) * 4) % (height * 0.55);
     ctx.beginPath();
-    ctx.arc(sx, sy, i % 5 === 0 ? 2.2 : 1.2, 0, Math.PI * 2);
+    ctx.arc(sx, sy, i % 5 === 0 ? 2.2 * s : 1.2 * s, 0, Math.PI * 2);
     ctx.fill();
   }
 
   // Header: logo + Cosmix name
-  const logoSize = 72;
-  const logoX = 56;
-  const logoY = 52;
+  const logoSize = 72 * s;
+  const logoX = 56 * s;
+  const logoY = 52 * s;
   if (logoImage) {
-    drawRoundedRect(ctx, logoX, logoY, logoSize, logoSize, 18);
+    drawRoundedRect(ctx, logoX, logoY, logoSize, logoSize, 18 * s);
     ctx.save();
     ctx.clip();
     ctx.drawImage(logoImage, logoX, logoY, logoSize, logoSize);
     ctx.restore();
     ctx.strokeStyle = 'rgba(103,232,249,0.35)';
-    ctx.lineWidth = 2;
-    drawRoundedRect(ctx, logoX, logoY, logoSize, logoSize, 18);
+    ctx.lineWidth = 2 * s;
+    drawRoundedRect(ctx, logoX, logoY, logoSize, logoSize, 18 * s);
     ctx.stroke();
   } else {
     drawUniverseMark(ctx, logoX, logoY, logoSize);
   }
 
   ctx.fillStyle = '#f8fafc';
-  ctx.font = '900 42px system-ui, sans-serif';
-  ctx.fillText('COSMIX', logoX + logoSize + 18, logoY + 42);
+  ctx.font = `900 ${42 * s}px system-ui, sans-serif`;
+  ctx.fillText('COSMIX', logoX + logoSize + 18 * s, logoY + 42 * s);
   ctx.fillStyle = 'rgba(148,163,184,0.95)';
-  ctx.font = '600 22px system-ui, sans-serif';
+  ctx.font = `600 ${22 * s}px system-ui, sans-serif`;
   const sub = athleteName ? `${athleteName}'s run replay` : 'Universe of your run';
-  ctx.fillText(sub, logoX + logoSize + 18, logoY + 72);
+  ctx.fillText(sub, logoX + logoSize + 18 * s, logoY + 72 * s);
 
   // Map stage — larger, centered route
-  const cardX = 40;
-  const cardY = 150;
-  const cardW = width - 80;
+  const cardX = 40 * s;
+  const cardY = 150 * s;
+  const cardW = width - 80 * s;
   const cardH = Math.round(height * 0.46);
   ctx.save();
-  drawRoundedRect(ctx, cardX, cardY, cardW, cardH, 32);
+  drawRoundedRect(ctx, cardX, cardY, cardW, cardH, 32 * s);
   ctx.fillStyle = 'rgba(8,15,30,0.92)';
   ctx.fill();
   ctx.strokeStyle = 'rgba(125,211,252,0.28)';
-  ctx.lineWidth = 2;
+  ctx.lineWidth = 2 * s;
   ctx.stroke();
   ctx.clip();
 
@@ -357,7 +358,7 @@ export function drawRunShareFrame(ctx, {
   const mapGlow = ctx.createRadialGradient(
     cardX + cardW / 2,
     cardY + cardH / 2,
-    40,
+    40 * s,
     cardX + cardW / 2,
     cardY + cardH / 2,
     cardW * 0.55,
@@ -367,7 +368,7 @@ export function drawRunShareFrame(ctx, {
   ctx.fillStyle = mapGlow;
   ctx.fillRect(cardX, cardY, cardW, cardH);
 
-  const route = projectPolyline(polyline, cardW, cardH, 56).map((p) => ({
+  const route = projectPolyline(polyline, cardW, cardH, 56 * s).map((p) => ({
     x: p.x + cardX,
     y: p.y + cardY,
     lat: p.lat,
@@ -386,7 +387,7 @@ export function drawRunShareFrame(ctx, {
       else ctx.lineTo(p.x, p.y);
     });
     ctx.strokeStyle = 'rgba(148,163,184,0.28)';
-    ctx.lineWidth = 8;
+    ctx.lineWidth = 8 * s;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.stroke();
@@ -410,52 +411,52 @@ export function drawRunShareFrame(ctx, {
     }
     ctx.strokeStyle = '#f97316';
     ctx.shadowColor = '#fb923c';
-    ctx.shadowBlur = 20;
-    ctx.lineWidth = 10;
+    ctx.shadowBlur = 20 * s;
+    ctx.lineWidth = 10 * s;
     ctx.stroke();
     ctx.shadowBlur = 0;
     ctx.strokeStyle = '#fdba74';
-    ctx.lineWidth = 3.5;
+    ctx.lineWidth = 3.5 * s;
     ctx.stroke();
 
     // Start / finish
     const start = route[0];
     const end = route[route.length - 1];
     ctx.beginPath();
-    ctx.arc(start.x, start.y, 10, 0, Math.PI * 2);
+    ctx.arc(start.x, start.y, 10 * s, 0, Math.PI * 2);
     ctx.fillStyle = '#86efac';
     ctx.fill();
     ctx.beginPath();
-    ctx.arc(end.x, end.y, 10, 0, Math.PI * 2);
+    ctx.arc(end.x, end.y, 10 * s, 0, Math.PI * 2);
     ctx.fillStyle = mapReveal > 0.92 ? '#38bdf8' : 'rgba(56,189,248,0.35)';
     ctx.fill();
 
     const runner = pointAlong(route, mapReveal);
     if (runner) {
-      for (let s = 0; s < 8; s += 1) {
-        const ang = (s / 8) * Math.PI * 2 + t * 12;
-        const rad = 16 + (s % 3) * 7;
+      for (let star = 0; star < 8; star += 1) {
+        const ang = (star / 8) * Math.PI * 2 + t * 12;
+        const rad = (16 + (star % 3) * 7) * s;
         ctx.beginPath();
-        ctx.arc(runner.x + Math.cos(ang) * rad, runner.y + Math.sin(ang) * rad, 2, 0, Math.PI * 2);
-        ctx.fillStyle = s % 2 === 0 ? 'rgba(125,211,252,0.85)' : 'rgba(253,186,116,0.8)';
+        ctx.arc(runner.x + Math.cos(ang) * rad, runner.y + Math.sin(ang) * rad, 2 * s, 0, Math.PI * 2);
+        ctx.fillStyle = star % 2 === 0 ? 'rgba(125,211,252,0.85)' : 'rgba(253,186,116,0.8)';
         ctx.fill();
       }
       for (let i = 3; i >= 1; i -= 1) {
         ctx.beginPath();
-        ctx.arc(runner.x, runner.y, 11 + i * 10, 0, Math.PI * 2);
+        ctx.arc(runner.x, runner.y, (11 + i * 10) * s, 0, Math.PI * 2);
         ctx.strokeStyle = `rgba(56,189,248,${0.18 / i})`;
-        ctx.lineWidth = 2;
+        ctx.lineWidth = 2 * s;
         ctx.stroke();
       }
-      const orb = ctx.createRadialGradient(runner.x - 4, runner.y - 4, 2, runner.x, runner.y, 15);
+      const orb = ctx.createRadialGradient(runner.x - 4 * s, runner.y - 4 * s, 2 * s, runner.x, runner.y, 15 * s);
       orb.addColorStop(0, '#ecfeff');
       orb.addColorStop(0.45, '#7dd3fc');
       orb.addColorStop(1, '#f97316');
       ctx.beginPath();
-      ctx.arc(runner.x, runner.y, 14, 0, Math.PI * 2);
+      ctx.arc(runner.x, runner.y, 14 * s, 0, Math.PI * 2);
       ctx.fillStyle = orb;
       ctx.shadowColor = '#38bdf8';
-      ctx.shadowBlur = 22;
+      ctx.shadowBlur = 22 * s;
       ctx.fill();
       ctx.shadowBlur = 0;
     }
@@ -464,15 +465,15 @@ export function drawRunShareFrame(ctx, {
     const place = summary.locationCity || summary.name || '';
     if (place) {
       ctx.fillStyle = 'rgba(2,6,23,0.72)';
-      drawRoundedRect(ctx, cardX + 20, cardY + cardH - 58, Math.min(cardW - 40, 420), 38, 12);
+      drawRoundedRect(ctx, cardX + 20 * s, cardY + cardH - 58 * s, Math.min(cardW - 40 * s, 420 * s), 38 * s, 12 * s);
       ctx.fill();
       ctx.fillStyle = '#e2e8f0';
-      ctx.font = '700 20px system-ui, sans-serif';
-      ctx.fillText(String(place).slice(0, 34), cardX + 34, cardY + cardH - 32);
+      ctx.font = `700 ${20 * s}px system-ui, sans-serif`;
+      ctx.fillText(String(place).slice(0, 34), cardX + 34 * s, cardY + cardH - 32 * s);
     }
   } else {
     ctx.fillStyle = 'rgba(148,163,184,0.75)';
-    ctx.font = '600 28px system-ui, sans-serif';
+    ctx.font = `600 ${28 * s}px system-ui, sans-serif`;
     ctx.textAlign = 'center';
     ctx.fillText('Route not available', width / 2, cardY + cardH / 2);
     ctx.textAlign = 'left';
@@ -483,44 +484,44 @@ export function drawRunShareFrame(ctx, {
   const stats = buildAnalytics(summary, statsReveal);
   const cols = Math.min(4, Math.max(2, Math.ceil(stats.length / 2)));
   const rows = Math.ceil(stats.length / cols);
-  const gap = 14;
-  const gridX = 40;
-  const gridY = cardY + cardH + 28;
-  const boxW = (width - 80 - gap * (cols - 1)) / cols;
-  const boxH = 112;
+  const gap = 14 * s;
+  const gridX = 40 * s;
+  const gridY = cardY + cardH + 28 * s;
+  const boxW = (width - 80 * s - gap * (cols - 1)) / cols;
+  const boxH = 112 * s;
 
   stats.forEach((stat, i) => {
     const col = i % cols;
     const row = Math.floor(i / cols);
     const x = gridX + col * (boxW + gap);
     const y = gridY + row * (boxH + gap);
-    const lift = (1 - statsReveal) * 24;
+    const lift = (1 - statsReveal) * 24 * s;
     ctx.save();
     ctx.globalAlpha = 0.4 + statsReveal * 0.6;
-    drawRoundedRect(ctx, x, y + lift, boxW, boxH, 20);
+    drawRoundedRect(ctx, x, y + lift, boxW, boxH, 20 * s);
     ctx.fillStyle = 'rgba(15,23,42,0.92)';
     ctx.fill();
     ctx.strokeStyle = `${stat.color}55`;
-    ctx.lineWidth = 1.8;
+    ctx.lineWidth = 1.8 * s;
     ctx.stroke();
     ctx.fillStyle = 'rgba(148,163,184,0.95)';
-    ctx.font = '700 15px "DM Mono", ui-monospace, monospace';
-    ctx.fillText(stat.label, x + 16, y + lift + 32);
+    ctx.font = `700 ${15 * s}px "DM Mono", ui-monospace, monospace`;
+    ctx.fillText(stat.label, x + 16 * s, y + lift + 32 * s);
     ctx.fillStyle = '#f8fafc';
-    ctx.font = '800 32px system-ui, sans-serif';
-    ctx.fillText(stat.value, x + 16, y + lift + 72);
+    ctx.font = `800 ${32 * s}px system-ui, sans-serif`;
+    ctx.fillText(stat.value, x + 16 * s, y + lift + 72 * s);
     if (stat.unit) {
       ctx.fillStyle = stat.color;
-      ctx.font = '700 15px system-ui, sans-serif';
-      ctx.fillText(stat.unit, x + 16, y + lift + 96);
+      ctx.font = `700 ${15 * s}px system-ui, sans-serif`;
+      ctx.fillText(stat.unit, x + 16 * s, y + lift + 96 * s);
     }
     ctx.restore();
   });
 
   // Bottom Cosmix brand bar
-  const barY = height - 130;
-  drawRoundedRect(ctx, 40, barY, width - 80, 78, 22);
-  const barGrad = ctx.createLinearGradient(40, barY, width - 40, barY + 78);
+  const barY = height - 130 * s;
+  drawRoundedRect(ctx, 40 * s, barY, width - 80 * s, 78 * s, 22 * s);
+  const barGrad = ctx.createLinearGradient(40 * s, barY, width - 40 * s, barY + 78 * s);
   barGrad.addColorStop(0, 'rgba(249,115,22,0.92)');
   barGrad.addColorStop(0.55, 'rgba(56,189,248,0.88)');
   barGrad.addColorStop(1, 'rgba(129,140,248,0.9)');
@@ -528,32 +529,34 @@ export function drawRunShareFrame(ctx, {
   ctx.fill();
 
   if (logoImage) {
-    ctx.drawImage(logoImage, 58, barY + 12, 54, 54);
+    ctx.drawImage(logoImage, 58 * s, barY + 12 * s, 54 * s, 54 * s);
   } else {
-    drawUniverseMark(ctx, 58, barY + 12, 54);
+    drawUniverseMark(ctx, 58 * s, barY + 12 * s, 54 * s);
   }
   ctx.fillStyle = '#0f172a';
-  ctx.font = '900 34px system-ui, sans-serif';
-  ctx.fillText('COSMIX', 128, barY + 40);
-  ctx.font = '700 18px system-ui, sans-serif';
+  ctx.font = `900 ${34 * s}px system-ui, sans-serif`;
+  ctx.fillText('COSMIX', 128 * s, barY + 40 * s);
+  ctx.font = `700 ${18 * s}px system-ui, sans-serif`;
   ctx.fillStyle = 'rgba(15,23,42,0.78)';
-  ctx.fillText('Train · Track · Share the universe', 128, barY + 64);
+  ctx.fillText('Train · Track · Share the universe', 128 * s, barY + 64 * s);
 
   void rows;
 }
 
 /**
- * Record a Cosmix run share video (or PNG poster when video isn't shareable).
+ * Record a Cosmix run share video (quick preview by default).
+ * Also returns a PNG poster for WhatsApp / Instagram when video isn't accepted.
  */
 export async function renderRunShareReel({
   polyline = [],
   summary = {},
   athleteName = '',
-  durationMs = 6200,
-  width = 1080,
-  height = 1920,
-  fps = 30,
-  preferShareableImage = true,
+  durationMs = 3200,
+  width = 540,
+  height = 960,
+  fps = 24,
+  preferShareableImage = false,
+  includePoster = true,
 } = {}) {
   if (typeof document === 'undefined') {
     throw new Error('Share reel only runs in the browser');
@@ -577,11 +580,7 @@ export async function renderRunShareReel({
     });
   };
 
-  const mimeType = pickMimeType();
-  const canRecord = Boolean(mimeType && typeof canvas.captureStream === 'function' && typeof MediaRecorder !== 'undefined');
-
-  // WhatsApp / Instagram rarely accept WebM — default to a branded PNG poster they can post.
-  if (!canRecord || (preferShareableImage && !isLikelyShareableVideo(mimeType))) {
+  async function makePoster() {
     draw(1);
     const blob = await canvasToPngBlob(canvas);
     const url = URL.createObjectURL(blob);
@@ -590,10 +589,17 @@ export async function renderRunShareReel({
     };
   }
 
+  const mimeType = pickMimeType();
+  const canRecord = Boolean(mimeType && typeof canvas.captureStream === 'function' && typeof MediaRecorder !== 'undefined');
+
+  if (!canRecord || preferShareableImage) {
+    return makePoster();
+  }
+
   const stream = canvas.captureStream(fps);
   const recorder = new MediaRecorder(stream, {
     mimeType,
-    videoBitsPerSecond: 7_500_000,
+    videoBitsPerSecond: 3_500_000,
   });
   const chunks = [];
   recorder.ondataavailable = (e) => {
@@ -619,7 +625,7 @@ export async function renderRunShareReel({
     recorder.onerror = () => reject(new Error('Recording failed'));
   });
 
-  recorder.start(100);
+  recorder.start(80);
   const start = performance.now();
 
   await new Promise((resolve) => {
@@ -634,21 +640,21 @@ export async function renderRunShareReel({
           try { recorder.stop(); } catch (_) { /* ignore */ }
           stream.getTracks().forEach((tr) => tr.stop());
           resolve();
-        }, 260);
+        }, 120);
       }
     };
     requestAnimationFrame(tick);
   });
 
   try {
-    return await done;
+    const video = await done;
+    if (includePoster) {
+      const poster = await makePoster();
+      return { ...video, poster };
+    }
+    return video;
   } catch (_) {
-    draw(1);
-    const blob = await canvasToPngBlob(canvas);
-    const url = URL.createObjectURL(blob);
-    return {
-      blob, url, mimeType: 'image/png', width, height, isImage: true,
-    };
+    return makePoster();
   }
 }
 
@@ -656,31 +662,55 @@ export async function shareOrDownloadRunReel(result, {
   title = 'My Cosmix run',
   text = 'Check out my run on Cosmix',
   filename,
+  preferPosterForShare = true,
 } = {}) {
   if (!result?.blob) throw new Error('Nothing to share');
-  const ext = result.isImage ? 'png' : (String(result.mimeType || '').includes('mp4') ? 'mp4' : 'webm');
-  const name = filename || `cosmix-run.${ext}`;
-  const file = new File([result.blob], name, { type: result.mimeType || result.blob.type || (result.isImage ? 'image/png' : 'video/webm') });
 
-  // Prefer native share sheet (WhatsApp / Instagram) when the file type is accepted.
+  const candidates = [];
+  // Messaging apps often reject WebM — prefer PNG poster when present.
+  if (preferPosterForShare && result.poster?.blob) {
+    candidates.push({
+      blob: result.poster.blob,
+      url: result.poster.url,
+      mimeType: 'image/png',
+      isImage: true,
+      name: 'cosmix-run.png',
+    });
+  }
   if (result.isImage || isLikelyShareableVideo(result.mimeType)) {
+    const ext = result.isImage ? 'png' : 'mp4';
+    candidates.push({
+      blob: result.blob,
+      url: result.url,
+      mimeType: result.mimeType || result.blob.type,
+      isImage: Boolean(result.isImage),
+      name: filename || `cosmix-run.${ext}`,
+    });
+  } else {
+    candidates.push({
+      blob: result.blob,
+      url: result.url,
+      mimeType: result.mimeType || result.blob.type,
+      isImage: Boolean(result.isImage),
+      name: filename || 'cosmix-run.webm',
+    });
+  }
+
+  for (const item of candidates) {
+    const file = new File([item.blob], item.name, { type: item.mimeType || (item.isImage ? 'image/png' : 'video/webm') });
     const shared = await tryShareFiles([file], { title, text });
-    if (shared.ok) return { method: 'share' };
-    if (shared.cancelled) return { method: 'cancelled' };
-  } else if (typeof navigator !== 'undefined' && navigator.share) {
-    // Last attempt with whatever we have (often fails for WebM — then download).
-    const shared = await tryShareFiles([file], { title, text });
-    if (shared.ok) return { method: 'share' };
+    if (shared.ok) return { method: 'share', sharedAs: item.isImage ? 'image' : 'video' };
     if (shared.cancelled) return { method: 'cancelled' };
   }
 
+  const fallback = candidates[0];
   const a = document.createElement('a');
-  a.href = result.url;
-  a.download = name;
+  a.href = fallback.url;
+  a.download = fallback.name;
   document.body.appendChild(a);
   a.click();
   a.remove();
-  return { method: 'download' };
+  return { method: 'download', sharedAs: fallback.isImage ? 'image' : 'video' };
 }
 
 /** Fetch latest (or specific) run detail for sharing. */

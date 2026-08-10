@@ -11,6 +11,193 @@ const KIND_ACCENT = {
   comeback: '#34d399',
 };
 
+function ShareIcon({ size = 16 }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="18" cy="5" r="2.4" />
+      <circle cx="6" cy="12" r="2.4" />
+      <circle cx="18" cy="19" r="2.4" />
+      <path d="M8.2 13.1 15.8 17" />
+      <path d="M15.8 7 8.2 10.9" />
+    </svg>
+  );
+}
+
+/** Preview the quick reel, then share when the user confirms. */
+export function RunSharePreviewModal({
+  open,
+  reel,
+  theme,
+  title = 'Preview',
+  shareTitle = 'My Cosmix run',
+  shareText = 'Check out my run on Cosmix',
+  onClose,
+  onShared,
+}) {
+  const [sending, setSending] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  useEffect(() => {
+    if (!open) {
+      setSending(false);
+      setMsg('');
+    }
+  }, [open]);
+
+  if (!open || !reel?.url) return null;
+
+  async function handleConfirmShare() {
+    if (sending) return;
+    setSending(true);
+    setMsg('');
+    try {
+      const result = await shareOrDownloadRunReel(reel, {
+        title: shareTitle,
+        text: shareText,
+      });
+      if (result.method === 'cancelled') {
+        setMsg('');
+        return;
+      }
+      setMsg(result.method === 'share' ? 'Opened share sheet' : 'Saved — open WhatsApp or Instagram');
+      onShared?.(result);
+      if (result.method === 'share') {
+        setTimeout(() => onClose?.(), 450);
+      }
+    } catch (err) {
+      setMsg(err?.message || 'Share failed');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 1500,
+        background: 'rgba(2,6,23,0.88)',
+        backdropFilter: 'blur(10px)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+        padding: 12,
+      }}
+      onClick={onClose}
+      role="presentation"
+    >
+      <div
+        role="dialog"
+        aria-label="Run share preview"
+        onClick={(event) => event.stopPropagation()}
+        style={{
+          width: 'min(420px, 100%)',
+          maxHeight: 'min(92vh, 760px)',
+          overflow: 'auto',
+          borderRadius: 22,
+          border: `1px solid ${theme?.cardBorder || 'rgba(148,163,184,0.28)'}`,
+          background: 'linear-gradient(180deg, rgba(15,23,42,0.98), rgba(2,6,23,0.98))',
+          boxShadow: '0 24px 60px rgba(0,0,0,0.5)',
+          padding: 14,
+          display: 'grid',
+          gap: 12,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: theme?.textMuted || '#94a3b8' }}>
+              Cosmix reel
+            </div>
+            <div style={{ fontSize: 16, fontWeight: 900, color: '#f8fafc', marginTop: 2 }}>{title}</div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close preview"
+            style={{
+              appearance: 'none',
+              width: 34,
+              height: 34,
+              borderRadius: 999,
+              border: '1px solid rgba(148,163,184,0.3)',
+              background: 'rgba(15,23,42,0.7)',
+              color: '#e2e8f0',
+              cursor: 'pointer',
+              fontSize: 16,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+
+        <div style={{ borderRadius: 16, overflow: 'hidden', border: '1px solid rgba(148,163,184,0.22)', background: '#020617' }}>
+          {reel.isImage ? (
+            <img src={reel.url} alt="Share preview" style={{ width: '100%', display: 'block', maxHeight: '58vh', objectFit: 'contain' }} />
+          ) : (
+            <video
+              key={reel.url}
+              src={reel.url}
+              autoPlay
+              muted
+              loop
+              playsInline
+              controls
+              style={{ width: '100%', display: 'block', maxHeight: '58vh', objectFit: 'contain', background: '#020617' }}
+            />
+          )}
+        </div>
+
+        {msg ? <div style={{ fontSize: 12, color: theme?.textMuted || '#94a3b8', fontWeight: 600 }}>{msg}</div> : null}
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 8 }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              appearance: 'none',
+              borderRadius: 14,
+              padding: '13px 12px',
+              border: '1px solid rgba(148,163,184,0.3)',
+              background: 'transparent',
+              color: '#e2e8f0',
+              fontWeight: 800,
+              fontSize: 13,
+              cursor: 'pointer',
+            }}
+          >
+            Back
+          </button>
+          <button
+            type="button"
+            disabled={sending}
+            onClick={handleConfirmShare}
+            style={{
+              appearance: 'none',
+              border: 'none',
+              borderRadius: 14,
+              padding: '13px 12px',
+              background: 'linear-gradient(120deg, #f97316, #22d3ee)',
+              color: '#0f172a',
+              fontWeight: 900,
+              fontSize: 13,
+              cursor: sending ? 'wait' : 'pointer',
+              opacity: sending ? 0.8 : 1,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+            }}
+          >
+            <ShareIcon size={14} />
+            {sending ? 'Opening…' : 'Share'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function PersonalRecordModal({
   open,
   records = [],
@@ -21,10 +208,10 @@ export function PersonalRecordModal({
   onShared,
 }) {
   const [index, setIndex] = useState(0);
-  const [sharing, setSharing] = useState(false);
+  const [building, setBuilding] = useState(false);
   const [shareMsg, setShareMsg] = useState('');
-  const [previewUrl, setPreviewUrl] = useState('');
-  const [previewIsImage, setPreviewIsImage] = useState(false);
+  const [reel, setReel] = useState(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   const list = useMemo(() => (Array.isArray(records) ? records : []), [records]);
   const record = list[index] || null;
@@ -35,14 +222,19 @@ export function PersonalRecordModal({
     if (!open) return undefined;
     setIndex(0);
     setShareMsg('');
-    setPreviewUrl('');
-    setPreviewIsImage(false);
+    setPreviewOpen(false);
+    setReel((current) => {
+      if (current?.url) URL.revokeObjectURL(current.url);
+      if (current?.poster?.url) URL.revokeObjectURL(current.poster.url);
+      return null;
+    });
     return undefined;
   }, [open, recordsKey]);
 
   useEffect(() => () => {
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-  }, [previewUrl]);
+    if (reel?.url) URL.revokeObjectURL(reel.url);
+    if (reel?.poster?.url) URL.revokeObjectURL(reel.poster.url);
+  }, [reel]);
 
   if (!open || !record) return null;
 
@@ -51,246 +243,235 @@ export function PersonalRecordModal({
     onClose?.();
   }
 
-  async function handleShare() {
-    if (!userId || sharing) return;
-    setSharing(true);
-    setShareMsg('Crafting your Cosmix reel…');
+  async function handleBuildPreview() {
+    if (!userId || building) return;
+    setBuilding(true);
+    setShareMsg('Building quick preview…');
     try {
       const run = await fetchShareableRun(userId, record.activityId, wellnessApiUrl);
       if (!run?.polyline?.length) {
         setShareMsg('Map not ready yet — open the run once, then share.');
         return;
       }
-      const reel = await renderRunShareReel({
+      const next = await renderRunShareReel({
         polyline: run.polyline,
         summary: run.summary,
         athleteName,
       });
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      setPreviewUrl(reel.url);
-      setPreviewIsImage(Boolean(reel.isImage));
-      setShareMsg(reel.isImage ? 'Poster ready — sharing…' : 'Video ready — opening share…');
-      const result = await shareOrDownloadRunReel(reel, {
-        title: record.title,
-        text: `${record.title} · ${record.metricValue} on Cosmix`,
+      setReel((current) => {
+        if (current?.url) URL.revokeObjectURL(current.url);
+        if (current?.poster?.url) URL.revokeObjectURL(current.poster.url);
+        return next;
       });
-      if (result.method === 'cancelled') {
-        setShareMsg('');
-        return;
-      }
-      setShareMsg(result.method === 'share' ? 'Opened share sheet' : 'Saved — open Instagram or WhatsApp to post.');
-      onShared?.(reel);
+      setPreviewOpen(true);
+      setShareMsg('');
     } catch (err) {
       setShareMsg(err?.message || 'Could not build share video.');
     } finally {
-      setSharing(false);
+      setBuilding(false);
     }
   }
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 1400,
-        background: 'rgba(2,6,23,0.82)',
-        backdropFilter: 'blur(10px)',
-        display: 'flex',
-        alignItems: 'flex-end',
-        justifyContent: 'center',
-        padding: 12,
-      }}
-      onClick={handleClose}
-      role="presentation"
-    >
+    <>
       <div
         style={{
-          width: 'min(440px, 100%)',
-          borderRadius: 24,
-          border: `1px solid ${accent}55`,
-          background: `linear-gradient(165deg, ${accent}22 0%, ${theme?.cardBg || '#0f172a'} 42%)`,
-          color: theme?.textHeading || '#f8fafc',
-          padding: '18px 16px 20px',
-          boxShadow: `0 24px 60px ${accent}33`,
-          display: 'grid',
-          gap: 14,
+          position: 'fixed',
+          inset: 0,
+          zIndex: 1400,
+          background: 'rgba(2,6,23,0.82)',
+          backdropFilter: 'blur(10px)',
+          display: 'flex',
+          alignItems: 'flex-end',
+          justifyContent: 'center',
+          padding: 12,
         }}
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-label={record.title}
+        onClick={handleClose}
+        role="presentation"
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
-          <div>
-            <div style={{
-              fontFamily: '"DM Mono", ui-monospace, monospace',
-              fontSize: 11,
-              letterSpacing: '0.14em',
-              textTransform: 'uppercase',
-              color: accent,
-              fontWeight: 800,
-            }}
-            >
-              New personal record
-              {list.length > 1 ? ` · ${index + 1}/${list.length}` : ''}
-            </div>
-            <div style={{ fontSize: 26, fontWeight: 900, marginTop: 8, letterSpacing: '-0.03em', lineHeight: 1.15 }}>
-              {record.emoji} {record.title}
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={handleClose}
-            aria-label="Close"
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: 12,
-              border: `1px solid ${theme?.cardBorder || '#334155'}`,
-              background: 'transparent',
-              color: theme?.textHeading || '#fff',
-              fontWeight: 800,
-              cursor: 'pointer',
-            }}
-          >
-            ✕
-          </button>
-        </div>
-
-        <p style={{ margin: 0, fontSize: 14, lineHeight: 1.55, color: theme?.textSecondary || '#cbd5e1' }}>
-          {record.body}
-        </p>
-
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: record.previousValue ? '1fr 1fr' : '1fr',
-          gap: 10,
-        }}
-        >
-          <div style={{
-            padding: 14,
-            borderRadius: 16,
-            border: `1px solid ${accent}44`,
-            background: 'rgba(2,6,23,0.45)',
+        <div
+          role="dialog"
+          aria-label="Personal record"
+          onClick={(event) => event.stopPropagation()}
+          style={{
+            width: 'min(440px, 100%)',
+            borderRadius: 22,
+            border: `1px solid ${theme?.cardBorder || '#334155'}`,
+            background: 'linear-gradient(180deg, rgba(15,23,42,0.98), rgba(2,6,23,0.98))',
+            boxShadow: '0 24px 60px rgba(0,0,0,0.5)',
+            padding: 16,
+            display: 'grid',
+            gap: 12,
+            color: theme?.text || '#e2e8f0',
           }}
-          >
-            <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: theme?.textMuted || '#94a3b8' }}>
-              {record.metricLabel}
-            </div>
-            <div style={{ fontSize: 28, fontWeight: 900, color: accent, marginTop: 6 }}>{record.metricValue}</div>
-          </div>
-          {record.previousValue ? (
-            <div style={{
-              padding: 14,
-              borderRadius: 16,
-              border: `1px solid ${theme?.cardBorder || '#334155'}`,
-              background: 'rgba(2,6,23,0.35)',
-            }}
-            >
-              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: theme?.textMuted || '#94a3b8' }}>
-                Was
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: accent }}>
+                {record.kind === 'record' ? 'Distance PR' : record.kind || 'Highlight'}
               </div>
-              <div style={{ fontSize: 22, fontWeight: 800, color: theme?.textHeading || '#fff', marginTop: 8 }}>
-                {record.previousValue}
-              </div>
+              <div style={{ fontSize: 20, fontWeight: 900, color: '#f8fafc', marginTop: 4 }}>{record.title}</div>
+              {record.description ? (
+                <div style={{ fontSize: 13, color: theme?.textMuted || '#94a3b8', marginTop: 6, lineHeight: 1.4 }}>
+                  {record.description}
+                </div>
+              ) : null}
             </div>
-          ) : null}
-        </div>
-
-        {previewUrl ? (
-          <div style={{ borderRadius: 16, overflow: 'hidden', border: `1px solid ${theme?.cardBorder || '#334155'}` }}>
-            {previewIsImage ? (
-              <img src={previewUrl} alt="Share preview" style={{ width: '100%', display: 'block', maxHeight: 280, objectFit: 'cover' }} />
-            ) : (
-              <video src={previewUrl} autoPlay muted loop playsInline style={{ width: '100%', display: 'block', maxHeight: 280, objectFit: 'cover', background: '#020617' }} />
-            )}
-          </div>
-        ) : null}
-
-        {shareMsg ? (
-          <div style={{ fontSize: 12, color: theme?.textMuted || '#94a3b8', fontWeight: 600 }}>{shareMsg}</div>
-        ) : null}
-
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-          <button
-            type="button"
-            disabled={sharing}
-            onClick={handleShare}
-            style={{
-              border: 'none',
-              borderRadius: 14,
-              padding: '14px 12px',
-              background: `linear-gradient(120deg, ${accent}, #f97316)`,
-              color: '#0f172a',
-              fontWeight: 900,
-              fontSize: 13,
-              cursor: sharing ? 'wait' : 'pointer',
-              opacity: sharing ? 0.75 : 1,
-            }}
-          >
-            {sharing ? 'Building…' : 'Share'}
-          </button>
-          {record.activityId ? (
-            <Link
-              href={`/running/${encodeURIComponent(record.activityId)}`}
-              onClick={handleClose}
-              style={{
-                display: 'grid',
-                placeItems: 'center',
-                borderRadius: 14,
-                padding: '14px 12px',
-                border: `1px solid ${theme?.cardBorder || '#334155'}`,
-                color: theme?.textHeading || '#fff',
-                fontWeight: 800,
-                fontSize: 13,
-                textDecoration: 'none',
-              }}
-            >
-              View run
-            </Link>
-          ) : (
             <button
               type="button"
               onClick={handleClose}
+              aria-label="Close"
               style={{
-                borderRadius: 14,
-                padding: '14px 12px',
-                border: `1px solid ${theme?.cardBorder || '#334155'}`,
-                background: 'transparent',
-                color: theme?.textHeading || '#fff',
-                fontWeight: 800,
-                fontSize: 13,
+                appearance: 'none',
+                width: 34,
+                height: 34,
+                borderRadius: 999,
+                border: '1px solid rgba(148,163,184,0.3)',
+                background: 'rgba(15,23,42,0.7)',
+                color: '#e2e8f0',
                 cursor: 'pointer',
               }}
             >
-              Nice!
+              ✕
             </button>
-          )}
-        </div>
-
-        {list.length > 1 ? (
-          <div style={{ display: 'flex', justifyContent: 'center', gap: 8 }}>
-            {list.map((item, i) => (
-              <button
-                key={item.id}
-                type="button"
-                aria-label={`Record ${i + 1}`}
-                onClick={() => setIndex(i)}
-                style={{
-                  width: i === index ? 18 : 8,
-                  height: 8,
-                  borderRadius: 999,
-                  border: 'none',
-                  background: i === index ? accent : 'rgba(148,163,184,0.45)',
-                  cursor: 'pointer',
-                  padding: 0,
-                }}
-              />
-            ))}
           </div>
-        ) : null}
+
+          <div style={{ display: 'grid', gridTemplateColumns: record.previousValue ? '1fr 1fr' : '1fr', gap: 8 }}>
+            <div
+              style={{
+                padding: 14,
+                borderRadius: 16,
+                border: `1px solid ${theme?.cardBorder || '#334155'}`,
+                background: 'rgba(2,6,23,0.35)',
+              }}
+            >
+              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: theme?.textMuted || '#94a3b8' }}>
+                Now
+              </div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: theme?.textHeading || '#fff', marginTop: 8 }}>
+                {record.metricValue}
+              </div>
+            </div>
+            {record.previousValue ? (
+              <div
+                style={{
+                  padding: 14,
+                  borderRadius: 16,
+                  border: `1px solid ${theme?.cardBorder || '#334155'}`,
+                  background: 'rgba(2,6,23,0.35)',
+                }}
+              >
+                <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: theme?.textMuted || '#94a3b8' }}>
+                  Was
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: theme?.textHeading || '#fff', marginTop: 8 }}>
+                  {record.previousValue}
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          {shareMsg ? (
+            <div style={{ fontSize: 12, color: theme?.textMuted || '#94a3b8', fontWeight: 600 }}>{shareMsg}</div>
+          ) : null}
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            <button
+              type="button"
+              disabled={building}
+              onClick={handleBuildPreview}
+              style={{
+                border: 'none',
+                borderRadius: 14,
+                padding: '14px 12px',
+                background: `linear-gradient(120deg, ${accent}, #f97316)`,
+                color: '#0f172a',
+                fontWeight: 900,
+                fontSize: 13,
+                cursor: building ? 'wait' : 'pointer',
+                opacity: building ? 0.75 : 1,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+              }}
+            >
+              <ShareIcon size={14} />
+              {building ? 'Building…' : 'Preview & share'}
+            </button>
+            {record.activityId ? (
+              <Link
+                href={`/running/${encodeURIComponent(record.activityId)}`}
+                onClick={handleClose}
+                style={{
+                  display: 'grid',
+                  placeItems: 'center',
+                  borderRadius: 14,
+                  padding: '14px 12px',
+                  border: `1px solid ${theme?.cardBorder || '#334155'}`,
+                  color: theme?.textHeading || '#fff',
+                  fontWeight: 800,
+                  fontSize: 13,
+                  textDecoration: 'none',
+                }}
+              >
+                View run
+              </Link>
+            ) : (
+              <button
+                type="button"
+                onClick={handleClose}
+                style={{
+                  borderRadius: 14,
+                  padding: '14px 12px',
+                  border: `1px solid ${theme?.cardBorder || '#334155'}`,
+                  background: 'transparent',
+                  color: theme?.textHeading || '#fff',
+                  fontWeight: 800,
+                  fontSize: 13,
+                  cursor: 'pointer',
+                }}
+              >
+                Nice!
+              </button>
+            )}
+          </div>
+
+          {list.length > 1 ? (
+            <div style={{ display: 'flex', justifyContent: 'center', gap: 8 }}>
+              {list.map((item, i) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  aria-label={`Record ${i + 1}`}
+                  onClick={() => setIndex(i)}
+                  style={{
+                    width: i === index ? 18 : 8,
+                    height: 8,
+                    borderRadius: 999,
+                    border: 'none',
+                    background: i === index ? accent : 'rgba(148,163,184,0.45)',
+                    cursor: 'pointer',
+                    padding: 0,
+                  }}
+                />
+              ))}
+            </div>
+          ) : null}
+        </div>
       </div>
-    </div>
+
+      <RunSharePreviewModal
+        open={previewOpen}
+        reel={reel}
+        theme={theme}
+        title={record.title}
+        shareTitle={record.title}
+        shareText={`${record.title} · ${record.metricValue} on Cosmix`}
+        onClose={() => setPreviewOpen(false)}
+        onShared={(result) => onShared?.(result)}
+      />
+    </>
   );
 }
 
@@ -307,8 +488,16 @@ export function ShareRunButton({
 }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
+  const [reel, setReel] = useState(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [shareMeta, setShareMeta] = useState({ title: 'My Cosmix run', text: 'Check out my run on Cosmix' });
 
-  async function handleShare() {
+  useEffect(() => () => {
+    if (reel?.url) URL.revokeObjectURL(reel.url);
+    if (reel?.poster?.url) URL.revokeObjectURL(reel.poster.url);
+  }, [reel]);
+
+  async function handleBuildPreview() {
     if (!userId || busy) return;
     setBusy(true);
     setMsg('');
@@ -324,20 +513,21 @@ export function ShareRunButton({
         poly = run.polyline;
         sum = run.summary;
       }
-      const reel = await renderRunShareReel({
+      const next = await renderRunShareReel({
         polyline: poly,
         summary: sum,
         athleteName,
       });
-      const result = await shareOrDownloadRunReel(reel, {
+      setShareMeta({
         title: 'My Cosmix run',
         text: `${Number(sum.distanceKm || 0).toFixed(1)} km · Cosmix run`,
       });
-      if (result.method === 'cancelled') {
-        setMsg('');
-        return;
-      }
-      setMsg(result.method === 'share' ? 'Opened share sheet' : 'Saved — open WhatsApp or Instagram to post');
+      setReel((current) => {
+        if (current?.url) URL.revokeObjectURL(current.url);
+        if (current?.poster?.url) URL.revokeObjectURL(current.poster.url);
+        return next;
+      });
+      setPreviewOpen(true);
     } catch (err) {
       setMsg(err?.message || 'Share failed');
     } finally {
@@ -345,74 +535,78 @@ export function ShareRunButton({
     }
   }
 
-  if (compact) {
-    return (
-      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-        <button
-          type="button"
-          onClick={handleShare}
-          disabled={busy}
-          title={label}
-          aria-label={busy ? 'Building share…' : 'Share run to WhatsApp or Instagram'}
-          style={{
-            appearance: 'none',
-            width: 36,
-            height: 36,
-            borderRadius: 999,
-            border: '1px solid rgba(148,163,184,0.35)',
-            background: busy
-              ? 'rgba(15,23,42,0.7)'
-              : 'linear-gradient(145deg, rgba(249,115,22,0.95), rgba(34,211,238,0.88))',
-            color: '#0f172a',
-            display: 'inline-grid',
-            placeItems: 'center',
-            cursor: busy ? 'wait' : 'pointer',
-            opacity: busy ? 0.75 : 1,
-            padding: 0,
-            boxShadow: '0 6px 16px rgba(2,6,23,0.28)',
-          }}
-        >
-          {busy ? (
-            <span style={{ width: 12, height: 12, borderRadius: 999, border: '2px solid rgba(15,23,42,0.35)', borderTopColor: '#0f172a', display: 'block', animation: 'cosmix-share-spin 0.7s linear infinite' }} />
-          ) : (
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <circle cx="18" cy="5" r="2.4" />
-              <circle cx="6" cy="12" r="2.4" />
-              <circle cx="18" cy="19" r="2.4" />
-              <path d="M8.2 13.1 15.8 17" />
-              <path d="M15.8 7 8.2 10.9" />
-            </svg>
-          )}
-        </button>
-        {msg ? <span style={{ fontSize: 11, color: theme?.textMuted || '#94a3b8', fontWeight: 600 }}>{msg}</span> : null}
-        <style>{`@keyframes cosmix-share-spin { to { transform: rotate(360deg); } }`}</style>
-      </div>
-    );
-  }
-
   return (
-    <div style={{ display: 'grid', gap: 6 }}>
-      <button
-        type="button"
-        onClick={handleShare}
-        disabled={busy}
-        style={{
-          appearance: 'none',
-          border: 'none',
-          borderRadius: 14,
-          padding: '12px 14px',
-          background: 'linear-gradient(120deg, #f97316, #22d3ee)',
-          color: '#0f172a',
-          fontWeight: 900,
-          fontSize: 13,
-          cursor: busy ? 'wait' : 'pointer',
-          opacity: busy ? 0.8 : 1,
-          boxShadow: '0 10px 28px rgba(249,115,22,0.28)',
-        }}
-      >
-        {busy ? 'Crafting…' : label}
-      </button>
-      {msg ? <div style={{ fontSize: 11, color: theme?.textMuted || '#94a3b8', fontWeight: 600 }}>{msg}</div> : null}
-    </div>
+    <>
+      {compact ? (
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <button
+            type="button"
+            onClick={handleBuildPreview}
+            disabled={busy}
+            title={label}
+            aria-label={busy ? 'Building preview…' : 'Preview and share run'}
+            style={{
+              appearance: 'none',
+              width: 36,
+              height: 36,
+              borderRadius: 999,
+              border: '1px solid rgba(148,163,184,0.35)',
+              background: busy
+                ? 'rgba(15,23,42,0.7)'
+                : 'linear-gradient(145deg, rgba(249,115,22,0.95), rgba(34,211,238,0.88))',
+              color: '#0f172a',
+              display: 'inline-grid',
+              placeItems: 'center',
+              cursor: busy ? 'wait' : 'pointer',
+              opacity: busy ? 0.75 : 1,
+              padding: 0,
+              boxShadow: '0 6px 16px rgba(2,6,23,0.28)',
+            }}
+          >
+            {busy ? (
+              <span style={{ width: 12, height: 12, borderRadius: 999, border: '2px solid rgba(15,23,42,0.35)', borderTopColor: '#0f172a', display: 'block', animation: 'cosmix-share-spin 0.7s linear infinite' }} />
+            ) : (
+              <ShareIcon size={16} />
+            )}
+          </button>
+          {msg ? <span style={{ fontSize: 11, color: theme?.textMuted || '#94a3b8', fontWeight: 600 }}>{msg}</span> : null}
+          <style>{`@keyframes cosmix-share-spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gap: 6 }}>
+          <button
+            type="button"
+            onClick={handleBuildPreview}
+            disabled={busy}
+            style={{
+              appearance: 'none',
+              border: 'none',
+              borderRadius: 14,
+              padding: '12px 14px',
+              background: 'linear-gradient(120deg, #f97316, #22d3ee)',
+              color: '#0f172a',
+              fontWeight: 900,
+              fontSize: 13,
+              cursor: busy ? 'wait' : 'pointer',
+              opacity: busy ? 0.8 : 1,
+              boxShadow: '0 10px 28px rgba(249,115,22,0.28)',
+            }}
+          >
+            {busy ? 'Building preview…' : label}
+          </button>
+          {msg ? <div style={{ fontSize: 11, color: theme?.textMuted || '#94a3b8', fontWeight: 600 }}>{msg}</div> : null}
+        </div>
+      )}
+
+      <RunSharePreviewModal
+        open={previewOpen}
+        reel={reel}
+        theme={theme}
+        title="Your run reel"
+        shareTitle={shareMeta.title}
+        shareText={shareMeta.text}
+        onClose={() => setPreviewOpen(false)}
+      />
+    </>
   );
 }
