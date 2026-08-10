@@ -1113,6 +1113,22 @@ export class ChatService {
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     UNIQUE(username, reminder_date)
                 );
+
+                CREATE TABLE IF NOT EXISTS chat_inbox_notifications (
+                    id TEXT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    group_id TEXT,
+                    group_name TEXT,
+                    sender_username TEXT,
+                    title TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    url TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    viewed BOOLEAN NOT NULL DEFAULT FALSE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_chat_inbox_notifications_user
+                  ON chat_inbox_notifications(username, created_at DESC);
             `);
         }
         await this.schemaPromise;
@@ -1519,8 +1535,8 @@ export class ChatService {
         if (this.hasDatabase()) {
             const pool = await this.ensureSchema();
             const result = await pool?.query(
-                'SELECT * FROM chat_push_subscriptions WHERE username = ANY($1::text[])',
-                [targets],
+                'SELECT * FROM chat_push_subscriptions WHERE LOWER(username) = ANY($1::text[])',
+                [targets.map((name) => name.toLowerCase())],
             );
             return ((result?.rows || []) as PushSubscriptionRow[]).map((row) => ({
                 id: row.id,
@@ -1532,7 +1548,9 @@ export class ChatService {
             }));
         }
 
-        return this.pushSubscriptions.filter((entry) => targets.includes(entry.username));
+        return this.pushSubscriptions.filter((entry) => (
+            targets.some((name) => name.toLowerCase() === this.normalizeUsername(entry.username).toLowerCase())
+        ));
     }
 
     private async prunePushSubscriptionByEndpoint(endpoint: string) {
@@ -1609,25 +1627,133 @@ export class ChatService {
 
     private async notifyGroupMessagePush(groupId: string, senderUsername: string, chatMessage: { id: string; chat: { name: string }; text?: string; gif?: string; image?: string; type?: string }) {
         try {
-            const recipients = (await this.groupMemberUsernames(groupId)).filter((username) => username !== senderUsername);
+            const sender = this.normalizeUsername(senderUsername);
+            const recipients = (await this.groupMemberUsernames(groupId)).filter((username) => (
+                this.normalizeUsername(username).toLowerCase() !== sender.toLowerCase()
+            ));
             const body = chatMessage.image || chatMessage.type === 'image'
-                ? `${senderUsername} sent a photo`
+                ? `${sender} sent a photo`
                 : chatMessage.gif && !chatMessage.text
-                    ? `${senderUsername} sent a GIF`
-                    : `${senderUsername}: ${String(chatMessage.text || 'New message').slice(0, 140)}`;
-            void this.sendPushToUsers(recipients, {
-                title: `New message in ${chatMessage.chat.name}`,
+                    ? `${sender} sent a GIF`
+                    : `${sender}: ${String(chatMessage.text || 'New message').slice(0, 140)}`;
+            const title = `New message in ${chatMessage.chat.name}`;
+            const url = `/dashboard?tab=threads&thread=${encodeURIComponent(groupId)}`;
+            await this.createInboxNotifications(recipients, {
+                groupId,
+                groupName: chatMessage.chat.name,
+                senderUsername: sender,
+                title,
                 body,
-                url: `/chat?thread=${encodeURIComponent(groupId)}`,
+                url,
+            });
+            void this.sendPushToUsers(recipients, {
+                title,
+                body,
+                url,
                 tag: `group-${groupId}-${chatMessage.id}`,
             }, {
                 type: 'group',
-                senderUsername,
+                senderUsername: sender,
                 groupId,
             });
         } catch (_) {
             // Push must not block or break message delivery.
         }
+    }
+
+    private async createInboxNotifications(
+        usernames: string[],
+        payload: { groupId?: string; groupName?: string; senderUsername?: string; title: string; body: string; url?: string },
+    ) {
+        const recipients = Array.from(new Set((usernames || []).map((name) => this.normalizeUsername(name)).filter(Boolean)));
+        if (!recipients.length) return;
+        const now = this.nowIso();
+
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            for (const username of recipients) {
+                await pool?.query(
+                    `INSERT INTO chat_inbox_notifications
+                     (id, username, group_id, group_name, sender_username, title, body, url, created_at, viewed)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, FALSE)`,
+                    [
+                        this.buildId('inbox'),
+                        username,
+                        payload.groupId || null,
+                        payload.groupName || null,
+                        payload.senderUsername || null,
+                        payload.title,
+                        payload.body,
+                        payload.url || '/dashboard?tab=threads',
+                        now,
+                    ],
+                );
+            }
+            return;
+        }
+
+        // Memory mode intentionally skipped for inbox (prod uses DB).
+    }
+
+    async listInboxNotifications(username: string, { unreadOnly = true, limit = 30 } = {}) {
+        const actor = this.normalizeUsername(username);
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            const result = await pool?.query(
+                `SELECT id, username, group_id, group_name, sender_username, title, body, url, created_at, viewed
+                 FROM chat_inbox_notifications
+                 WHERE LOWER(username) = LOWER($1)
+                   AND ($2::boolean = FALSE OR viewed = FALSE)
+                 ORDER BY created_at DESC
+                 LIMIT $3`,
+                [actor, unreadOnly, Math.max(1, Math.min(80, Number(limit) || 30))],
+            );
+            return ((result?.rows || []) as Array<any>).map((row) => ({
+                id: row.id,
+                type: 'chat_message',
+                kind: 'chat',
+                title: row.title,
+                description: row.body,
+                groupId: row.group_id,
+                groupName: row.group_name,
+                senderUsername: row.sender_username,
+                url: row.url,
+                linkTab: 'threads',
+                createdAt: row.created_at?.toISOString?.() || String(row.created_at || ''),
+                viewed: Boolean(row.viewed),
+            }));
+        }
+        return [];
+    }
+
+    async markInboxNotificationViewed(username: string, notificationId: string) {
+        const actor = this.normalizeUsername(username);
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            await pool?.query(
+                `UPDATE chat_inbox_notifications
+                 SET viewed = TRUE
+                 WHERE id = $1 AND LOWER(username) = LOWER($2)`,
+                [notificationId, actor],
+            );
+        }
+        return { ok: true };
+    }
+
+    async markAllInboxNotificationsViewed(username: string) {
+        const actor = this.normalizeUsername(username);
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            const result = await pool?.query(
+                `UPDATE chat_inbox_notifications
+                 SET viewed = TRUE
+                 WHERE LOWER(username) = LOWER($1) AND viewed = FALSE
+                 RETURNING id`,
+                [actor],
+            );
+            return { ok: true, marked: (result?.rows || []).length };
+        }
+        return { ok: true, marked: 0 };
     }
 
     async sendFriendRequest(actorUsername: string, targetUsername: string) {

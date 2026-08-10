@@ -49,6 +49,31 @@ export class ChatController {
     return this.chatService.getPushPreferences(username);
   }
 
+  @Get('inbox-notifications')
+  listInboxNotifications(
+    @Query('username') username: string,
+    @Query('unreadOnly') unreadOnly?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.chatService.listInboxNotifications(username, {
+      unreadOnly: unreadOnly !== 'false' && unreadOnly !== '0',
+      limit: limit ? Number(limit) : 30,
+    });
+  }
+
+  @Put('inbox-notifications/:notificationId/viewed')
+  markInboxViewed(
+    @Param('notificationId') notificationId: string,
+    @Body() body: { actorUsername: string },
+  ) {
+    return this.chatService.markInboxNotificationViewed(body.actorUsername, notificationId);
+  }
+
+  @Put('inbox-notifications/viewed-all')
+  markAllInboxViewed(@Body() body: { actorUsername: string }) {
+    return this.chatService.markAllInboxNotificationsViewed(body.actorUsername);
+  }
+
   @Put('push/preferences')
   updatePushPreferences(
     @Body()

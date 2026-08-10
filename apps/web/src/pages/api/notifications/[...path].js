@@ -14,6 +14,15 @@ const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL || '';
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
+function chatApiBase(req) {
+  const host = String(req.headers.host || '').toLowerCase();
+  const isLocalHost = host.startsWith('localhost:') || host.startsWith('127.0.0.1:');
+  if (isLocalHost) return 'http://127.0.0.1:3002/chat';
+  return process.env.CHAT_SERVICE_URL
+    ? `${String(process.env.CHAT_SERVICE_URL).replace(/\/$/, '')}/chat`
+    : 'http://chat-service:3002/chat';
+}
+
 async function fetchLegacyNotifications(req, userId) {
   const segments = userId;
   const host = String(req.headers.host || '').toLowerCase();
@@ -31,6 +40,47 @@ async function fetchLegacyNotifications(req, userId) {
   }
 }
 
+async function fetchChatInboxNotifications(req, username) {
+  const actor = String(username || '').trim();
+  if (!actor) return [];
+  try {
+    const target = `${chatApiBase(req)}/inbox-notifications?username=${encodeURIComponent(actor)}&unreadOnly=true&limit=20`;
+    const upstream = await fetch(target, { method: 'GET', headers: { 'content-type': 'application/json' } });
+    const data = await upstream.json().catch(() => ([]));
+    return Array.isArray(data) ? data : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+async function markChatInboxViewed(req, username, notificationId) {
+  const actor = String(username || '').trim();
+  if (!actor || !notificationId) return;
+  try {
+    await fetch(`${chatApiBase(req)}/inbox-notifications/${encodeURIComponent(notificationId)}/viewed`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ actorUsername: actor }),
+    });
+  } catch (_) {
+    // ignore
+  }
+}
+
+async function markAllChatInboxViewed(req, username) {
+  const actor = String(username || '').trim();
+  if (!actor) return;
+  try {
+    await fetch(`${chatApiBase(req)}/inbox-notifications/viewed-all`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ actorUsername: actor }),
+    });
+  } catch (_) {
+    // ignore
+  }
+}
+
 export default async function handler(req, res) {
   const user = await getAuthenticatedUser(req, res);
   if (!user) {
@@ -38,6 +88,7 @@ export default async function handler(req, res) {
   }
 
   const viewerId = String(user.id || '').trim();
+  const viewerUsername = String(user.username || '').trim();
   const segments = Array.isArray(req.query.path) ? req.query.path : [String(req.query.path || '')];
 
   if (req.method === 'GET' && segments.length === 1) {
@@ -68,6 +119,7 @@ export default async function handler(req, res) {
           viewed: item.viewed,
         }));
 
+      const chatNotifs = await fetchChatInboxNotifications(req, viewerUsername);
       const legacy = await fetchLegacyNotifications(req, viewerId);
       const legacyMapped = legacy.map((item) => ({
         id: item.id,
@@ -79,9 +131,9 @@ export default async function handler(req, res) {
         linkTab: 'home',
       }));
 
-      const merged = [...fitNotifs, ...legacyMapped]
+      const merged = [...chatNotifs, ...fitNotifs, ...legacyMapped]
         .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
-        .slice(0, 15);
+        .slice(0, 20);
 
       return res.status(200).json({ notifications: merged });
     } catch (error) {
@@ -97,6 +149,7 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: 'Forbidden.' });
     }
     markNotificationViewed(viewerId, notificationId);
+    await markChatInboxViewed(req, viewerUsername, notificationId);
     return res.status(200).json({ ok: true });
   }
 
@@ -106,6 +159,7 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: 'Forbidden.' });
     }
     const marked = markAllNotificationsViewed(viewerId);
+    await markAllChatInboxViewed(req, viewerUsername);
     return res.status(200).json({ ok: true, marked });
   }
 

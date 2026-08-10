@@ -51,7 +51,7 @@ export default function NotificationModule({
       <div className="notif-empty-icon" aria-hidden="true">🔔</div>
       <div className="notif-empty-title">You&apos;re all caught up</div>
       <div className="notif-empty-copy">
-        Alerts only appear for personal records, best splits, best speed, and comebacks after a long break.
+        Alerts appear for chat messages, personal records, best splits, best speed, and comebacks.
       </div>
     </div>
   ) : (
@@ -68,8 +68,12 @@ export default function NotificationModule({
         const meta = kindMeta(item, theme);
         const isFriend = item.type === 'friend_request';
         const isFitstagram = item.type === 'fitstagram';
-        const onAction = isFriend ? onOpenProfile : (isFitstagram ? onOpenFitstagram : onOpenChat);
-        const actionLabel = isFriend ? 'Open profile' : (isFitstagram ? 'Open Fitstagram' : 'Open chat');
+        const isChat = item.type === 'chat_message';
+        const onAction = isFriend
+          ? onOpenProfile
+          : (isFitstagram ? onOpenFitstagram : onOpenChat);
+        const actionLabel = item.actionLabel
+          || (isFriend ? 'Open profile' : (isFitstagram ? 'Open Fitstagram' : (isChat ? 'Open chat' : 'View')));
         const timeLabel = item.timeLabel || formatRelativeTime(item.createdAt);
 
         return (

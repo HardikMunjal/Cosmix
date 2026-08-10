@@ -406,7 +406,7 @@ function NotificationsDropdown({
           embedded
           theme={theme}
           notifications={notifications}
-          onOpenChat={() => { onClose(); onOpenChat(); }}
+          onOpenChat={(item) => { onClose(); onOpenChat(item); }}
           onOpenProfile={() => { onClose(); onOpenProfile(); }}
           onOpenFitstagram={(item) => { onClose(); onOpenFitstagram(item); }}
           onMarkAllRead={onMarkAllRead}
@@ -2026,6 +2026,32 @@ export default function Dashboard() {
     }
   }, [notificationsApiBase, router, user]);
 
+  const openChatNotification = useCallback((item) => {
+    const baseUid = resolveWellnessUserId(user);
+    if (item?.id && baseUid) {
+      fetch(
+        `${notificationsApiBase}/${encodeURIComponent(baseUid)}/viewed/${encodeURIComponent(item.id)}`,
+        { method: 'PUT', credentials: 'include' },
+      ).catch(() => {});
+      setServerNotifications((current) => current.filter((n) => n.id !== item.id));
+    }
+    setShowNotifications(false);
+    const groupId = String(item?.groupId || '').trim();
+    if (groupId) {
+      setSelectedThreadId(groupId);
+      setActiveTab('threads');
+      if (router.isReady) {
+        router.push(
+          { pathname: '/dashboard', query: { tab: 'threads', thread: groupId } },
+          undefined,
+          { shallow: true },
+        );
+      }
+      return;
+    }
+    router.push('/chat');
+  }, [notificationsApiBase, router, user]);
+
   const markAllNotificationsRead = useCallback(async () => {
     const baseUid = resolveWellnessUserId(user);
     if (!baseUid) return;
@@ -2331,11 +2357,16 @@ export default function Dashboard() {
         title: item.title,
         description: item.description,
         postId: item.postId,
+        groupId: item.groupId || null,
         linkTab: item.linkTab,
         createdAt: item.createdAt,
         viewed: Boolean(item.viewed),
         timeLabel: formatNotificationTime(item.createdAt),
-        actionLabel: item.type === 'fitstagram' ? 'Open Fitstagram' : 'View',
+        actionLabel: item.type === 'fitstagram'
+          ? 'Open Fitstagram'
+          : item.type === 'chat_message'
+            ? 'Open chat'
+            : 'View',
       }));
     }
 
@@ -2609,6 +2640,7 @@ export default function Dashboard() {
           top: calc(100% + 10px);
           right: 0;
           width: min(360px, calc(100vw - 28px));
+          max-width: calc(100vw - 24px);
           max-height: min(70vh, 520px);
           overflow: hidden;
           display: grid;
@@ -2619,6 +2651,21 @@ export default function Dashboard() {
           box-shadow: 0 18px 40px rgba(0,0,0,0.45);
           color: #e2e8f0;
           z-index: 40;
+        }
+        @media (max-width: 720px) {
+          .dashboard-notifications-dropdown {
+            position: fixed;
+            top: calc(12px + env(safe-area-inset-top, 0px));
+            left: 12px;
+            right: 12px;
+            width: auto;
+            max-width: none;
+            max-height: min(78vh, 560px);
+            z-index: 1400;
+          }
+          .dashboard-notifications-dropdown::before {
+            display: none;
+          }
         }
         .dashboard-notifications-dropdown::before {
           content: '';
@@ -3707,7 +3754,7 @@ export default function Dashboard() {
           onToggleNotifications={() => setShowNotifications((open) => !open)}
           onCloseNotifications={() => setShowNotifications(false)}
           notifications={notifications}
-          onOpenChat={() => router.push('/chat')}
+          onOpenChat={openChatNotification}
           onOpenProfile={() => router.push('/profile')}
           onOpenFitstagram={openFitstagram}
           onMarkAllRead={markAllNotificationsRead}
