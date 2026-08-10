@@ -1,4 +1,4 @@
-import { getPwaServiceWorkerRegistration } from './pwa';
+import { getPwaServiceWorkerRegistration, registerPwaServiceWorker } from './pwa';
 
 function base64UrlToUint8Array(base64String) {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
@@ -11,6 +11,13 @@ function base64UrlToUint8Array(base64String) {
   return output;
 }
 
+function uint8ToBase64Url(bytes) {
+  let binary = '';
+  const arr = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : new Uint8Array(bytes || []);
+  arr.forEach((b) => { binary += String.fromCharCode(b); });
+  return window.btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
 function chatApiBase() {
   if (typeof window === 'undefined') return '';
   const host = window.location.hostname;
@@ -20,11 +27,16 @@ function chatApiBase() {
 
 const subscribedUsers = new Set();
 
+export function getNotificationPermission() {
+  if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
+  return window.Notification.permission;
+}
+
 /**
  * Register this browser for Web Push (chat DMs, groups, friend requests).
- * Safe to call multiple times; runs once per username per page load.
+ * Must be called after the user grants notification permission (tap "Enable alerts").
  */
-export async function subscribeToWebPush(username, { force = false } = {}) {
+export async function subscribeToWebPush(username, { force = false, requestPermission = true } = {}) {
   if (typeof window === 'undefined') return { ok: false, reason: 'no-window' };
   const actor = String(username || '').trim();
   if (!actor) return { ok: false, reason: 'no-user' };
@@ -35,18 +47,21 @@ export async function subscribeToWebPush(username, { force = false } = {}) {
   }
 
   try {
-    const permission = window.Notification.permission === 'default'
-      ? await window.Notification.requestPermission()
-      : window.Notification.permission;
+    let permission = window.Notification.permission;
+    if (permission === 'default' && requestPermission) {
+      permission = await window.Notification.requestPermission();
+    }
     if (permission !== 'granted') {
-      return { ok: false, reason: 'permission-denied' };
+      return { ok: false, reason: 'permission-denied', permission };
     }
 
+    await registerPwaServiceWorker();
     const apiBase = chatApiBase();
     const registration = await getPwaServiceWorkerRegistration();
     if (!registration) {
       return { ok: false, reason: 'no-service-worker' };
     }
+
     const keyResponse = await fetch(`${apiBase}/push/public-key`);
     const keyPayload = await keyResponse.json().catch(() => ({}));
     const publicKey = String(keyPayload?.publicKey || '').trim();
@@ -54,11 +69,21 @@ export async function subscribeToWebPush(username, { force = false } = {}) {
       return { ok: false, reason: 'no-vapid-key' };
     }
 
-    const existingSubscription = await registration.pushManager.getSubscription();
-    const subscription = existingSubscription || await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: base64UrlToUint8Array(publicKey),
-    });
+    let subscription = await registration.pushManager.getSubscription();
+    const existingKey = subscription?.options?.applicationServerKey
+      ? uint8ToBase64Url(subscription.options.applicationServerKey)
+      : '';
+    const keyMismatch = Boolean(subscription && existingKey && existingKey !== publicKey);
+
+    if (!subscription || force || keyMismatch) {
+      if (subscription) {
+        try { await subscription.unsubscribe(); } catch (_) { /* ignore */ }
+      }
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: base64UrlToUint8Array(publicKey),
+      });
+    }
 
     const subscribeResponse = await fetch(`${apiBase}/push/subscribe`, {
       method: 'POST',
@@ -70,7 +95,7 @@ export async function subscribeToWebPush(username, { force = false } = {}) {
     }
 
     subscribedUsers.add(actor);
-    return { ok: true, reason: 'subscribed' };
+    return { ok: true, reason: keyMismatch ? 'resubscribed' : 'subscribed' };
   } catch (error) {
     return { ok: false, reason: 'error', detail: String(error?.message || error) };
   }

@@ -13,7 +13,7 @@ import ThreadWorkspaceModule from '../modules/dashboard/ThreadWorkspaceModule';
 import { runStravaAutoSync } from '../lib/stravaAutoSync';
 import { xhrUploadFormData } from '../lib/ThreadUploadProgress';
 import { ACTIVITY_METRIC_DEFS as activityMetricDefs, aggregateActivityTotals } from '../lib/activityMetrics';
-import { subscribeToWebPush } from '../lib/webPush';
+import { subscribeToWebPush, getNotificationPermission } from '../lib/webPush';
 
 const tradingDeskModules = [
   { icon: 'NT', title: 'Nifty Tracker', desc: 'Track saved strategies, live payoff movement, and execution snapshots.', path: '/nifty-strategies', accent: '#22c55e' },
@@ -429,9 +429,13 @@ function DashboardHero({
   onOpenFitstagram,
   onMarkAllRead,
   onOpenSettings,
+  pushStatus = 'unknown',
+  onEnablePush,
+  pushBusy = false,
 }) {
   const greeting = getTimeGreeting();
   const displayName = user?.name || user?.username || 'there';
+  const showPushEnable = pushStatus === 'default' || pushStatus === 'denied' || pushStatus === 'prompt';
 
   return (
     <section className="dashboard-hero dashboard-glass" aria-label="Dashboard header">
@@ -451,6 +455,28 @@ function DashboardHero({
             <h1 className="dashboard-title">
               <span className="dashboard-title-gradient">{displayName}</span>
             </h1>
+            {showPushEnable ? (
+              <button
+                type="button"
+                onClick={onEnablePush}
+                disabled={pushBusy}
+                style={{
+                  appearance: 'none',
+                  marginTop: 8,
+                  border: '1px solid rgba(56,189,248,0.35)',
+                  background: 'rgba(14,165,233,0.12)',
+                  color: '#bae6fd',
+                  borderRadius: 999,
+                  padding: '5px 10px',
+                  fontSize: 10,
+                  fontWeight: 800,
+                  letterSpacing: '0.04em',
+                  cursor: pushBusy ? 'wait' : 'pointer',
+                }}
+              >
+                {pushBusy ? 'Enabling…' : 'Enable phone alerts'}
+              </button>
+            ) : null}
           </div>
 
           <div className="dashboard-header-actions">
@@ -1552,6 +1578,8 @@ export default function Dashboard() {
   const [buddiesLoading, setBuddiesLoading] = useState(false);
   const [buddiesReady, setBuddiesReady] = useState(false);
   const [isNarrowScreen, setIsNarrowScreen] = useState(false);
+  const [pushStatus, setPushStatus] = useState('unknown');
+  const [pushBusy, setPushBusy] = useState(false);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -1588,8 +1616,29 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!user?.username) return;
-    void subscribeToWebPush(user.username);
+    // Quiet retry if already granted — don't prompt without a tap on mobile.
+    void subscribeToWebPush(user.username, { requestPermission: false });
   }, [user?.username]);
+
+  useEffect(() => {
+    setPushStatus(getNotificationPermission());
+  }, [user?.username]);
+
+  const enablePhoneAlerts = useCallback(async () => {
+    if (!user?.username || pushBusy) return;
+    setPushBusy(true);
+    try {
+      const result = await subscribeToWebPush(user.username, { force: true, requestPermission: true });
+      setPushStatus(getNotificationPermission());
+      if (!result.ok && result.reason === 'permission-denied') {
+        setPushStatus('denied');
+      } else if (result.ok) {
+        setPushStatus('granted');
+      }
+    } finally {
+      setPushBusy(false);
+    }
+  }, [user?.username, pushBusy]);
 
   useEffect(() => {
     if (!router.isReady) return;
@@ -3759,6 +3808,9 @@ export default function Dashboard() {
           onOpenFitstagram={openFitstagram}
           onMarkAllRead={markAllNotificationsRead}
           onOpenSettings={() => { setShowNotifications(false); router.push('/settings'); }}
+          pushStatus={pushStatus}
+          onEnablePush={enablePhoneAlerts}
+          pushBusy={pushBusy}
         />
 
         <section style={{ display: activeTab === 'home' ? 'grid' : 'none' }} className="dashboard-home-stage">

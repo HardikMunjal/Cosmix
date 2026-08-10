@@ -15,8 +15,11 @@ self.addEventListener('push', (event) => {
     self.registration.showNotification(title, {
       body,
       tag,
+      renotify: true,
+      silent: false,
+      vibrate: [120, 60, 120],
       data: { url },
-      badge: '/icons/cosmix-universe-logo.svg',
+      badge: '/icons/cosmix-universe-logo-192.png',
       icon: '/icons/cosmix-universe-logo.png',
     }),
   );

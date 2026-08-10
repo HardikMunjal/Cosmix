@@ -234,40 +234,39 @@ function buildAnalytics(summary = {}, reveal = 1) {
   const cadence = Number(summary.avgCadence || 0);
   const split = Number(summary.bestSplitPaceMinPerKm || 0);
   const calories = Number(summary.calories || 0);
+  const stride = Number(summary.avgStrideM || 0);
+  const vo2 = Number(summary.vo2Max || 0);
   const speed = distance > 0 && minutes > 0 ? distance / (minutes / 60) : 0;
 
   const cards = [
     { label: 'DISTANCE', value: distance ? (distance * reveal).toFixed(2) : '--', unit: 'km', color: '#fdba74' },
     { label: 'AVG PACE', value: pace ? fmtPace(pace) : '--', unit: '/km', color: '#7dd3fc' },
     { label: 'TIME', value: minutes ? fmtMins(minutes * reveal) : '--', unit: '', color: '#c4b5fd' },
-    { label: 'AVG HR', value: hr ? String(Math.round(hr * reveal)) : '--', unit: hr ? 'bpm' : '', color: '#fda4af' },
   ];
 
-  if (split > 0) {
-    cards.push({ label: 'BEST 1 KM', value: fmtPace(split), unit: '/km', color: '#86efac' });
-  } else if (speed > 0) {
-    cards.push({ label: 'AVG SPEED', value: (speed * reveal).toFixed(1), unit: 'km/h', color: '#86efac' });
-  }
+  if (hr > 0) cards.push({ label: 'AVG HR', value: String(Math.round(hr * reveal)), unit: 'bpm', color: '#fda4af' });
+  if (split > 0) cards.push({ label: 'BEST 1 KM', value: fmtPace(split), unit: '/km', color: '#86efac' });
+  else if (speed > 0) cards.push({ label: 'AVG SPEED', value: (speed * reveal).toFixed(1), unit: 'km/h', color: '#86efac' });
+  if (elev > 0) cards.push({ label: 'ELEVATION', value: `↑${Math.round(elev * reveal)}`, unit: 'm', color: '#a5b4fc' });
+  if (cadence > 0) cards.push({ label: 'CADENCE', value: String(Math.round(cadence * reveal)), unit: 'spm', color: '#f9a8d4' });
+  if (stride > 0) cards.push({ label: 'STRIDE', value: (stride * reveal).toFixed(2), unit: 'm', color: '#67e8f9' });
+  if (maxHr > 0) cards.push({ label: 'MAX HR', value: String(Math.round(maxHr * reveal)), unit: 'bpm', color: '#fb7185' });
+  if (vo2 > 0) cards.push({ label: 'VO2 MAX', value: (vo2 * reveal).toFixed(1), unit: summary.vo2Estimated ? 'est' : '', color: '#34d399' });
+  if (calories > 0) cards.push({ label: 'CALORIES', value: String(Math.round(calories * reveal)), unit: 'kcal', color: '#fb923c' });
 
-  if (elev > 0) {
-    cards.push({ label: 'ELEVATION', value: String(Math.round(elev * reveal)), unit: 'm', color: '#a5b4fc' });
-  } else if (maxHr > 0) {
-    cards.push({ label: 'MAX HR', value: String(Math.round(maxHr * reveal)), unit: 'bpm', color: '#a5b4fc' });
-  }
+  return cards.slice(0, 9);
+}
 
-  if (cadence > 0) {
-    cards.push({ label: 'CADENCE', value: String(Math.round(cadence * reveal)), unit: 'spm', color: '#f9a8d4' });
-  } else if (calories > 0) {
-    cards.push({ label: 'CALORIES', value: String(Math.round(calories * reveal)), unit: 'kcal', color: '#f9a8d4' });
-  } else if (speed > 0 && split > 0) {
-    cards.push({ label: 'AVG SPEED', value: (speed * reveal).toFixed(1), unit: 'km/h', color: '#f9a8d4' });
-  }
-
-  return cards.slice(0, 8);
+function fmtRunDate(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 12);
+  return date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
 /**
  * Render one frame of the share reel onto ctx.
+ * Athletic layout: big race numbers first, subtle brand mark, dense stats.
  */
 export function drawRunShareFrame(ctx, {
   width,
@@ -279,96 +278,113 @@ export function drawRunShareFrame(ctx, {
   logoImage = null,
 }) {
   const t = clamp(progress, 0, 1);
-  const mapReveal = easeInOut(clamp((t - 0.05) / 0.7, 0, 1));
-  const statsReveal = easeOutCubic(clamp((t - 0.2) / 0.4, 0, 1));
-  const brandPulse = 0.55 + Math.sin(t * Math.PI * 5) * 0.1;
+  const mapReveal = easeInOut(clamp((t - 0.04) / 0.72, 0, 1));
+  const statsReveal = easeOutCubic(clamp((t - 0.18) / 0.45, 0, 1));
   const s = Math.max(0.45, width / 1080);
 
-  // Space background
-  const bg = ctx.createLinearGradient(0, 0, width, height);
-  bg.addColorStop(0, '#020617');
-  bg.addColorStop(0.5, '#0b1226');
-  bg.addColorStop(1, '#111827');
+  const distance = Number(summary.distanceKm || summary.distance || 0);
+  const minutes = Number(summary.minutes || 0);
+  const pace = Number(summary.paceMinPerKm || (distance > 0 && minutes > 0 ? minutes / distance : 0));
+  const runName = String(summary.name || 'Morning Run').slice(0, 42);
+  const place = String(summary.locationCity || '').slice(0, 28);
+  const dateLabel = fmtRunDate(summary.date || summary.startDate);
+  const athlete = String(athleteName || '').trim();
+
+  // Clean dark field (less “space poster”, more race card)
+  const bg = ctx.createLinearGradient(0, 0, 0, height);
+  bg.addColorStop(0, '#07111f');
+  bg.addColorStop(0.55, '#0b1526');
+  bg.addColorStop(1, '#050b14');
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, width, height);
 
-  const blobA = ctx.createRadialGradient(width * 0.18, height * 0.12, 10, width * 0.18, height * 0.12, width * 0.5);
-  blobA.addColorStop(0, `rgba(249,115,22,${0.16 * brandPulse})`);
-  blobA.addColorStop(1, 'rgba(249,115,22,0)');
-  ctx.fillStyle = blobA;
+  // Soft side glow only
+  const glow = ctx.createRadialGradient(width * 0.85, height * 0.18, 10, width * 0.85, height * 0.18, width * 0.55);
+  glow.addColorStop(0, 'rgba(56,189,248,0.12)');
+  glow.addColorStop(1, 'rgba(56,189,248,0)');
+  ctx.fillStyle = glow;
   ctx.fillRect(0, 0, width, height);
 
-  const blobB = ctx.createRadialGradient(width * 0.88, height * 0.42, 10, width * 0.88, height * 0.42, width * 0.48);
-  blobB.addColorStop(0, 'rgba(56,189,248,0.14)');
-  blobB.addColorStop(1, 'rgba(56,189,248,0)');
-  ctx.fillStyle = blobB;
-  ctx.fillRect(0, 0, width, height);
+  // Top meta row: date / place left, subtle logo mark right
+  ctx.fillStyle = 'rgba(148,163,184,0.9)';
+  ctx.font = `700 ${18 * s}px system-ui, sans-serif`;
+  const meta = [dateLabel, place].filter(Boolean).join('  ·  ') || 'Outdoor run';
+  ctx.fillText(meta, 48 * s, 56 * s);
 
-  // Soft stars
-  ctx.fillStyle = 'rgba(226,232,240,0.35)';
-  for (let i = 0; i < 28; i += 1) {
-    const sx = (i * 97) % width;
-    const sy = (i * 53 + Math.sin(t * 8 + i) * 4) % (height * 0.55);
-    ctx.beginPath();
-    ctx.arc(sx, sy, i % 5 === 0 ? 2.2 * s : 1.2 * s, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Header: logo + Cosmix name
-  const logoSize = 72 * s;
-  const logoX = 56 * s;
-  const logoY = 52 * s;
+  const markSize = 40 * s;
+  const markX = width - 48 * s - markSize;
+  const markY = 28 * s;
+  ctx.globalAlpha = 0.9;
   if (logoImage) {
-    drawRoundedRect(ctx, logoX, logoY, logoSize, logoSize, 18 * s);
+    drawRoundedRect(ctx, markX, markY, markSize, markSize, 12 * s);
     ctx.save();
     ctx.clip();
-    ctx.drawImage(logoImage, logoX, logoY, logoSize, logoSize);
+    ctx.drawImage(logoImage, markX, markY, markSize, markSize);
     ctx.restore();
-    ctx.strokeStyle = 'rgba(103,232,249,0.35)';
-    ctx.lineWidth = 2 * s;
-    drawRoundedRect(ctx, logoX, logoY, logoSize, logoSize, 18 * s);
-    ctx.stroke();
   } else {
-    drawUniverseMark(ctx, logoX, logoY, logoSize);
+    drawUniverseMark(ctx, markX, markY, markSize);
   }
+  ctx.globalAlpha = 1;
 
+  // Athlete + run title
+  if (athlete) {
+    ctx.fillStyle = 'rgba(226,232,240,0.72)';
+    ctx.font = `600 ${20 * s}px system-ui, sans-serif`;
+    ctx.fillText(athlete, 48 * s, 96 * s);
+  }
   ctx.fillStyle = '#f8fafc';
-  ctx.font = `900 ${42 * s}px system-ui, sans-serif`;
-  ctx.fillText('COSMIX', logoX + logoSize + 18 * s, logoY + 42 * s);
-  ctx.fillStyle = 'rgba(148,163,184,0.95)';
-  ctx.font = `600 ${22 * s}px system-ui, sans-serif`;
-  const sub = athleteName ? `${athleteName}'s run replay` : 'Universe of your run';
-  ctx.fillText(sub, logoX + logoSize + 18 * s, logoY + 72 * s);
+  ctx.font = `900 ${44 * s}px system-ui, sans-serif`;
+  ctx.fillText(runName, 48 * s, athlete ? 148 * s : 118 * s);
 
-  // Map stage — larger, centered route
+  // Hero race numbers — distance dominant
+  const heroY = athlete ? 190 * s : 160 * s;
+  ctx.fillStyle = '#f8fafc';
+  ctx.font = `900 ${110 * s}px system-ui, sans-serif`;
+  const distText = distance ? distance.toFixed(2) : '--';
+  ctx.fillText(distText, 48 * s, heroY + 100 * s);
+  const distWidth = ctx.measureText(distText).width;
+  ctx.fillStyle = '#fdba74';
+  ctx.font = `800 ${34 * s}px system-ui, sans-serif`;
+  ctx.fillText('km', 48 * s + distWidth + 14 * s, heroY + 100 * s);
+
+  // Pace + time under hero
+  const chipY = heroY + 130 * s;
+  const chips = [
+    { label: 'PACE', value: pace ? `${fmtPace(pace)} /km` : '--' },
+    { label: 'TIME', value: minutes ? fmtMins(minutes) : '--' },
+  ];
+  let chipX = 48 * s;
+  chips.forEach((chip) => {
+    drawRoundedRect(ctx, chipX, chipY, 250 * s, 64 * s, 16 * s);
+    ctx.fillStyle = 'rgba(15,23,42,0.72)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(148,163,184,0.22)';
+    ctx.lineWidth = 1.5 * s;
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(148,163,184,0.9)';
+    ctx.font = `800 ${14 * s}px system-ui, sans-serif`;
+    ctx.fillText(chip.label, chipX + 18 * s, chipY + 24 * s);
+    ctx.fillStyle = '#f1f5f9';
+    ctx.font = `800 ${26 * s}px system-ui, sans-serif`;
+    ctx.fillText(chip.value, chipX + 18 * s, chipY + 50 * s);
+    chipX += 270 * s;
+  });
+
+  // Map stage
   const cardX = 40 * s;
-  const cardY = 150 * s;
+  const cardY = chipY + 90 * s;
   const cardW = width - 80 * s;
-  const cardH = Math.round(height * 0.46);
+  const cardH = Math.round(height * 0.34);
   ctx.save();
-  drawRoundedRect(ctx, cardX, cardY, cardW, cardH, 32 * s);
-  ctx.fillStyle = 'rgba(8,15,30,0.92)';
+  drawRoundedRect(ctx, cardX, cardY, cardW, cardH, 28 * s);
+  ctx.fillStyle = 'rgba(8,15,30,0.94)';
   ctx.fill();
-  ctx.strokeStyle = 'rgba(125,211,252,0.28)';
-  ctx.lineWidth = 2 * s;
+  ctx.strokeStyle = 'rgba(125,211,252,0.2)';
+  ctx.lineWidth = 1.5 * s;
   ctx.stroke();
   ctx.clip();
 
-  // Map vignette
-  const mapGlow = ctx.createRadialGradient(
-    cardX + cardW / 2,
-    cardY + cardH / 2,
-    40 * s,
-    cardX + cardW / 2,
-    cardY + cardH / 2,
-    cardW * 0.55,
-  );
-  mapGlow.addColorStop(0, 'rgba(56,189,248,0.1)');
-  mapGlow.addColorStop(1, 'rgba(2,6,23,0)');
-  ctx.fillStyle = mapGlow;
-  ctx.fillRect(cardX, cardY, cardW, cardH);
-
-  const route = projectPolyline(polyline, cardW, cardH, 56 * s).map((p) => ({
+  const route = projectPolyline(polyline, cardW, cardH, 48 * s).map((p) => ({
     x: p.x + cardX,
     y: p.y + cardY,
     lat: p.lat,
@@ -380,19 +396,17 @@ export function drawRunShareFrame(ctx, {
     let drawn = 0;
     const target = mapReveal * fullLen;
 
-    // Ghost full route (always show complete shape faintly)
     ctx.beginPath();
     route.forEach((p, i) => {
       if (i === 0) ctx.moveTo(p.x, p.y);
       else ctx.lineTo(p.x, p.y);
     });
-    ctx.strokeStyle = 'rgba(148,163,184,0.28)';
-    ctx.lineWidth = 8 * s;
+    ctx.strokeStyle = 'rgba(148,163,184,0.22)';
+    ctx.lineWidth = 7 * s;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.stroke();
 
-    // Progressive glow trail
     ctx.beginPath();
     ctx.moveTo(route[0].x, route[0].y);
     for (let i = 1; i < route.length; i += 1) {
@@ -411,136 +425,100 @@ export function drawRunShareFrame(ctx, {
     }
     ctx.strokeStyle = '#f97316';
     ctx.shadowColor = '#fb923c';
-    ctx.shadowBlur = 20 * s;
-    ctx.lineWidth = 10 * s;
+    ctx.shadowBlur = 16 * s;
+    ctx.lineWidth = 9 * s;
     ctx.stroke();
     ctx.shadowBlur = 0;
     ctx.strokeStyle = '#fdba74';
-    ctx.lineWidth = 3.5 * s;
+    ctx.lineWidth = 3 * s;
     ctx.stroke();
 
-    // Start / finish
     const start = route[0];
     const end = route[route.length - 1];
     ctx.beginPath();
-    ctx.arc(start.x, start.y, 10 * s, 0, Math.PI * 2);
+    ctx.arc(start.x, start.y, 9 * s, 0, Math.PI * 2);
     ctx.fillStyle = '#86efac';
     ctx.fill();
     ctx.beginPath();
-    ctx.arc(end.x, end.y, 10 * s, 0, Math.PI * 2);
+    ctx.arc(end.x, end.y, 9 * s, 0, Math.PI * 2);
     ctx.fillStyle = mapReveal > 0.92 ? '#38bdf8' : 'rgba(56,189,248,0.35)';
     ctx.fill();
 
     const runner = pointAlong(route, mapReveal);
     if (runner) {
-      for (let star = 0; star < 8; star += 1) {
-        const ang = (star / 8) * Math.PI * 2 + t * 12;
-        const rad = (16 + (star % 3) * 7) * s;
-        ctx.beginPath();
-        ctx.arc(runner.x + Math.cos(ang) * rad, runner.y + Math.sin(ang) * rad, 2 * s, 0, Math.PI * 2);
-        ctx.fillStyle = star % 2 === 0 ? 'rgba(125,211,252,0.85)' : 'rgba(253,186,116,0.8)';
-        ctx.fill();
-      }
-      for (let i = 3; i >= 1; i -= 1) {
-        ctx.beginPath();
-        ctx.arc(runner.x, runner.y, (11 + i * 10) * s, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(56,189,248,${0.18 / i})`;
-        ctx.lineWidth = 2 * s;
-        ctx.stroke();
-      }
-      const orb = ctx.createRadialGradient(runner.x - 4 * s, runner.y - 4 * s, 2 * s, runner.x, runner.y, 15 * s);
+      const orb = ctx.createRadialGradient(runner.x - 3 * s, runner.y - 3 * s, 1 * s, runner.x, runner.y, 12 * s);
       orb.addColorStop(0, '#ecfeff');
-      orb.addColorStop(0.45, '#7dd3fc');
+      orb.addColorStop(0.5, '#7dd3fc');
       orb.addColorStop(1, '#f97316');
       ctx.beginPath();
-      ctx.arc(runner.x, runner.y, 14 * s, 0, Math.PI * 2);
+      ctx.arc(runner.x, runner.y, 12 * s, 0, Math.PI * 2);
       ctx.fillStyle = orb;
       ctx.shadowColor = '#38bdf8';
-      ctx.shadowBlur = 22 * s;
+      ctx.shadowBlur = 16 * s;
       ctx.fill();
       ctx.shadowBlur = 0;
     }
-
-    // Location chip
-    const place = summary.locationCity || summary.name || '';
-    if (place) {
-      ctx.fillStyle = 'rgba(2,6,23,0.72)';
-      drawRoundedRect(ctx, cardX + 20 * s, cardY + cardH - 58 * s, Math.min(cardW - 40 * s, 420 * s), 38 * s, 12 * s);
-      ctx.fill();
-      ctx.fillStyle = '#e2e8f0';
-      ctx.font = `700 ${20 * s}px system-ui, sans-serif`;
-      ctx.fillText(String(place).slice(0, 34), cardX + 34 * s, cardY + cardH - 32 * s);
-    }
   } else {
     ctx.fillStyle = 'rgba(148,163,184,0.75)';
-    ctx.font = `600 ${28 * s}px system-ui, sans-serif`;
+    ctx.font = `600 ${24 * s}px system-ui, sans-serif`;
     ctx.textAlign = 'center';
     ctx.fillText('Route not available', width / 2, cardY + cardH / 2);
     ctx.textAlign = 'left';
   }
   ctx.restore();
 
-  // Analytics grid
-  const stats = buildAnalytics(summary, statsReveal);
-  const cols = Math.min(4, Math.max(2, Math.ceil(stats.length / 2)));
-  const rows = Math.ceil(stats.length / cols);
-  const gap = 14 * s;
+  // Detail stats grid
+  const stats = buildAnalytics(summary, statsReveal).filter((item) => !['DISTANCE', 'AVG PACE', 'TIME'].includes(item.label));
+  const cols = 3;
+  const gap = 12 * s;
   const gridX = 40 * s;
-  const gridY = cardY + cardH + 28 * s;
+  const gridY = cardY + cardH + 24 * s;
   const boxW = (width - 80 * s - gap * (cols - 1)) / cols;
-  const boxH = 112 * s;
+  const boxH = 92 * s;
+  const maxRows = 2;
 
-  stats.forEach((stat, i) => {
+  stats.slice(0, cols * maxRows).forEach((stat, i) => {
     const col = i % cols;
     const row = Math.floor(i / cols);
     const x = gridX + col * (boxW + gap);
     const y = gridY + row * (boxH + gap);
-    const lift = (1 - statsReveal) * 24 * s;
+    const lift = (1 - statsReveal) * 16 * s;
     ctx.save();
-    ctx.globalAlpha = 0.4 + statsReveal * 0.6;
-    drawRoundedRect(ctx, x, y + lift, boxW, boxH, 20 * s);
-    ctx.fillStyle = 'rgba(15,23,42,0.92)';
+    ctx.globalAlpha = 0.45 + statsReveal * 0.55;
+    drawRoundedRect(ctx, x, y + lift, boxW, boxH, 16 * s);
+    ctx.fillStyle = 'rgba(15,23,42,0.88)';
     ctx.fill();
-    ctx.strokeStyle = `${stat.color}55`;
-    ctx.lineWidth = 1.8 * s;
+    ctx.strokeStyle = `${stat.color}44`;
+    ctx.lineWidth = 1.4 * s;
     ctx.stroke();
     ctx.fillStyle = 'rgba(148,163,184,0.95)';
-    ctx.font = `700 ${15 * s}px "DM Mono", ui-monospace, monospace`;
-    ctx.fillText(stat.label, x + 16 * s, y + lift + 32 * s);
+    ctx.font = `700 ${13 * s}px system-ui, sans-serif`;
+    ctx.fillText(stat.label, x + 14 * s, y + lift + 28 * s);
     ctx.fillStyle = '#f8fafc';
-    ctx.font = `800 ${32 * s}px system-ui, sans-serif`;
-    ctx.fillText(stat.value, x + 16 * s, y + lift + 72 * s);
+    ctx.font = `800 ${28 * s}px system-ui, sans-serif`;
+    ctx.fillText(stat.value, x + 14 * s, y + lift + 62 * s);
     if (stat.unit) {
+      const vw = ctx.measureText(stat.value).width;
       ctx.fillStyle = stat.color;
-      ctx.font = `700 ${15 * s}px system-ui, sans-serif`;
-      ctx.fillText(stat.unit, x + 16 * s, y + lift + 96 * s);
+      ctx.font = `700 ${14 * s}px system-ui, sans-serif`;
+      ctx.fillText(stat.unit, x + 14 * s + vw + 8 * s, y + lift + 62 * s);
     }
     ctx.restore();
   });
 
-  // Bottom Cosmix brand bar
-  const barY = height - 130 * s;
-  drawRoundedRect(ctx, 40 * s, barY, width - 80 * s, 78 * s, 22 * s);
-  const barGrad = ctx.createLinearGradient(40 * s, barY, width - 40 * s, barY + 78 * s);
-  barGrad.addColorStop(0, 'rgba(249,115,22,0.92)');
-  barGrad.addColorStop(0.55, 'rgba(56,189,248,0.88)');
-  barGrad.addColorStop(1, 'rgba(129,140,248,0.9)');
-  ctx.fillStyle = barGrad;
-  ctx.fill();
-
+  // Subtle footer watermark — small mark + wordmark, not a loud banner
+  const footY = height - 56 * s;
+  ctx.globalAlpha = 0.55;
   if (logoImage) {
-    ctx.drawImage(logoImage, 58 * s, barY + 12 * s, 54 * s, 54 * s);
+    ctx.drawImage(logoImage, 48 * s, footY - 4 * s, 26 * s, 26 * s);
   } else {
-    drawUniverseMark(ctx, 58 * s, barY + 12 * s, 54 * s);
+    drawUniverseMark(ctx, 48 * s, footY - 4 * s, 26 * s);
   }
-  ctx.fillStyle = '#0f172a';
-  ctx.font = `900 ${34 * s}px system-ui, sans-serif`;
-  ctx.fillText('COSMIX', 128 * s, barY + 40 * s);
-  ctx.font = `700 ${18 * s}px system-ui, sans-serif`;
-  ctx.fillStyle = 'rgba(15,23,42,0.78)';
-  ctx.fillText('Train · Track · Share the universe', 128 * s, barY + 64 * s);
-
-  void rows;
+  ctx.globalAlpha = 0.7;
+  ctx.fillStyle = 'rgba(226,232,240,0.75)';
+  ctx.font = `700 ${16 * s}px system-ui, sans-serif`;
+  ctx.fillText('cosmix', 84 * s, footY + 16 * s);
+  ctx.globalAlpha = 1;
 }
 
 /**
@@ -551,7 +529,7 @@ export async function renderRunShareReel({
   polyline = [],
   summary = {},
   athleteName = '',
-  durationMs = 3200,
+  durationMs = 2800,
   width = 540,
   height = 960,
   fps = 24,
@@ -662,37 +640,53 @@ export async function shareOrDownloadRunReel(result, {
   title = 'My Cosmix run',
   text = 'Check out my run on Cosmix',
   filename,
-  preferPosterForShare = true,
+  preferPosterForShare = false,
+  forceImage = false,
 } = {}) {
   if (!result?.blob) throw new Error('Nothing to share');
 
   const candidates = [];
-  // Messaging apps often reject WebM — prefer PNG poster when present.
-  if (preferPosterForShare && result.poster?.blob) {
+  const pushVideo = () => {
+    if (result.isImage) return;
+    const ext = isLikelyShareableVideo(result.mimeType) ? 'mp4' : 'webm';
     candidates.push({
-      blob: result.poster.blob,
-      url: result.poster.url,
+      blob: result.blob,
+      url: result.url,
+      mimeType: result.mimeType || result.blob.type || `video/${ext}`,
+      isImage: false,
+      name: filename || `cosmix-run.${ext}`,
+    });
+  };
+  const pushImage = () => {
+    const poster = result.poster?.blob ? result.poster : (result.isImage ? result : null);
+    if (!poster?.blob) return;
+    candidates.push({
+      blob: poster.blob,
+      url: poster.url,
       mimeType: 'image/png',
       isImage: true,
       name: 'cosmix-run.png',
     });
-  }
-  if (result.isImage || isLikelyShareableVideo(result.mimeType)) {
-    const ext = result.isImage ? 'png' : 'mp4';
-    candidates.push({
-      blob: result.blob,
-      url: result.url,
-      mimeType: result.mimeType || result.blob.type,
-      isImage: Boolean(result.isImage),
-      name: filename || `cosmix-run.${ext}`,
-    });
+  };
+
+  if (forceImage) {
+    pushImage();
+  } else if (preferPosterForShare) {
+    pushImage();
+    pushVideo();
   } else {
+    // Prefer video for WhatsApp / Instagram status / reels.
+    pushVideo();
+    pushImage();
+  }
+
+  if (!candidates.length && result.blob) {
     candidates.push({
       blob: result.blob,
       url: result.url,
       mimeType: result.mimeType || result.blob.type,
       isImage: Boolean(result.isImage),
-      name: filename || 'cosmix-run.webm',
+      name: filename || (result.isImage ? 'cosmix-run.png' : 'cosmix-run.webm'),
     });
   }
 
@@ -704,6 +698,7 @@ export async function shareOrDownloadRunReel(result, {
   }
 
   const fallback = candidates[0];
+  if (!fallback) throw new Error('Nothing to share');
   const a = document.createElement('a');
   a.href = fallback.url;
   a.download = fallback.name;
@@ -711,6 +706,18 @@ export async function shareOrDownloadRunReel(result, {
   a.click();
   a.remove();
   return { method: 'download', sharedAs: fallback.isImage ? 'image' : 'video' };
+}
+
+export function yieldToUi() {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === 'undefined') {
+      setTimeout(resolve, 32);
+      return;
+    }
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => setTimeout(resolve, 16));
+    });
+  });
 }
 
 /** Fetch latest (or specific) run detail for sharing. */

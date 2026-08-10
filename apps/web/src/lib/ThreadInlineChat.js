@@ -96,6 +96,7 @@ export default function ThreadInlineChat({
   onClose,
 }) {
   const [messages, setMessages] = useState([]);
+  const [messagesLoading, setMessagesLoading] = useState(true);
   const [composerText, setComposerText] = useState('');
   const [connectionState, setConnectionState] = useState('connecting');
   const [roomReady, setRoomReady] = useState(false);
@@ -130,7 +131,7 @@ export default function ThreadInlineChat({
 
   useEffect(() => {
     if (!username) return;
-    void subscribeToWebPush(username);
+    void subscribeToWebPush(username, { requestPermission: false });
   }, [username]);
 
   useEffect(() => {
@@ -140,7 +141,12 @@ export default function ThreadInlineChat({
     let chatSocket = null;
     setRoomReady(false);
     setMessages([]);
+    setMessagesLoading(true);
     setError('');
+
+    const historyTimeout = window.setTimeout(() => {
+      if (active) setMessagesLoading(false);
+    }, 12000);
 
     const requestJoin = () => {
       if (!chatSocket || !active) return;
@@ -214,11 +220,13 @@ export default function ThreadInlineChat({
       chatSocket.on('history', (payload) => {
         if (!active) return;
         setMessages((previous) => mergeChatMessages(previous, payload?.messages || []));
+        setMessagesLoading(false);
         setRoomReady(true);
       });
 
       chatSocket.on('message', (payload) => {
         if (!active) return;
+        setMessagesLoading(false);
         setMessages((previous) => mergeChatMessages(previous, [payload]));
         setTypingUsers((prev) => prev.filter((u) => u !== payload?.user));
       });
@@ -237,6 +245,7 @@ export default function ThreadInlineChat({
 
     return () => {
       active = false;
+      window.clearTimeout(historyTimeout);
       if (typingClearRef.current) clearTimeout(typingClearRef.current);
       if (chatSocket) chatSocket.disconnect();
       socketRef.current = null;
@@ -758,6 +767,28 @@ export default function ThreadInlineChat({
           font-weight: 700;
           font-family: "Space Grotesk", sans-serif;
         }
+        .cx-chat-loading {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          width: 100%;
+          padding: 28px 12px;
+          font-size: 11px;
+          font-weight: 700;
+          letter-spacing: 0.04em;
+          color: rgba(148,163,184,0.92);
+          font-family: "Space Grotesk", sans-serif;
+        }
+        .cx-chat-loading-dot {
+          width: 8px;
+          height: 8px;
+          border-radius: 999px;
+          border: 1.5px solid rgba(148,163,184,0.35);
+          border-top-color: #67e8f9;
+          animation: cx-chat-spin 0.7s linear infinite;
+        }
+        @keyframes cx-chat-spin { to { transform: rotate(360deg); } }
       `}</style>
 
       <input
@@ -799,7 +830,12 @@ export default function ThreadInlineChat({
       )}
 
       <div className="cx-chat-feed">
-        {!visibleMessages.length ? (
+        {messagesLoading && !visibleMessages.length ? (
+          <div className="cx-chat-loading" role="status" aria-live="polite">
+            <span className="cx-chat-loading-dot" aria-hidden="true" />
+            Loading messages…
+          </div>
+        ) : !visibleMessages.length ? (
           <div style={{ textAlign: 'center', color: 'var(--cx-muted)', padding: '40px 16px', fontSize: 13, fontFamily: '"Space Grotesk", sans-serif' }}>
             Say hello — or tap + for GIF, camera, or photos.
           </div>

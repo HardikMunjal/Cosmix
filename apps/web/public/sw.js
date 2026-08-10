@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'cosmix-pwa-v1';
+const CACHE_VERSION = 'cosmix-pwa-v2';
 const OFFLINE_URL = '/offline.html';
 
 self.addEventListener('install', (event) => {
@@ -50,8 +50,11 @@ self.addEventListener('push', (event) => {
     self.registration.showNotification(title, {
       body,
       tag,
+      renotify: true,
+      silent: false,
+      vibrate: [120, 60, 120],
       data: { url },
-      badge: '/icons/cosmix-universe-logo.svg',
+      badge: '/icons/cosmix-universe-logo-192.png',
       icon: '/icons/cosmix-universe-logo.png',
     }),
   );

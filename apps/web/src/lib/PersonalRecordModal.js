@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { markRecordsSeen } from './personalRecords';
-import { fetchShareableRun, renderRunShareReel, shareOrDownloadRunReel } from './runShareReel';
+import { fetchShareableRun, renderRunShareReel, shareOrDownloadRunReel, yieldToUi } from './runShareReel';
 import { wellnessApiUrl } from './runningShoes';
 
 const KIND_ACCENT = {
@@ -20,6 +20,52 @@ function ShareIcon({ size = 16 }) {
       <path d="M8.2 13.1 15.8 17" />
       <path d="M15.8 7 8.2 10.9" />
     </svg>
+  );
+}
+
+function PreparingOverlay({ open, label = 'Preparing your reel…' }) {
+  if (!open) return null;
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 1600,
+        background: 'rgba(2,6,23,0.55)',
+        display: 'grid',
+        placeItems: 'center',
+        pointerEvents: 'all',
+      }}
+      role="status"
+      aria-live="polite"
+    >
+      <div
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 10,
+          borderRadius: 999,
+          border: '1px solid rgba(148,163,184,0.28)',
+          background: 'rgba(15,23,42,0.92)',
+          padding: '10px 14px',
+          boxShadow: '0 12px 30px rgba(0,0,0,0.35)',
+        }}
+      >
+        <span
+          style={{
+            width: 12,
+            height: 12,
+            borderRadius: 999,
+            border: '2px solid rgba(148,163,184,0.35)',
+            borderTopColor: '#67e8f9',
+            display: 'block',
+            animation: 'cosmix-share-spin 0.7s linear infinite',
+          }}
+        />
+        <span style={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0' }}>{label}</span>
+      </div>
+      <style>{`@keyframes cosmix-share-spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
   );
 }
 
@@ -46,7 +92,7 @@ export function RunSharePreviewModal({
 
   if (!open || !reel?.url) return null;
 
-  async function handleConfirmShare() {
+  async function handleConfirmShare({ forceImage = false } = {}) {
     if (sending) return;
     setSending(true);
     setMsg('');
@@ -54,15 +100,23 @@ export function RunSharePreviewModal({
       const result = await shareOrDownloadRunReel(reel, {
         title: shareTitle,
         text: shareText,
+        forceImage,
+        preferPosterForShare: forceImage,
       });
       if (result.method === 'cancelled') {
         setMsg('');
         return;
       }
-      setMsg(result.method === 'share' ? 'Opened share sheet' : 'Saved — open WhatsApp or Instagram');
+      if (result.method === 'share') {
+        setMsg(result.sharedAs === 'video' ? 'Shared as video' : 'Shared as photo');
+      } else {
+        setMsg(result.sharedAs === 'video'
+          ? 'Saved video — open WhatsApp or Instagram to post'
+          : 'Saved photo — open WhatsApp or Instagram to post');
+      }
       onShared?.(result);
       if (result.method === 'share') {
-        setTimeout(() => onClose?.(), 450);
+        setTimeout(() => onClose?.(), 500);
       }
     } catch (err) {
       setMsg(err?.message || 'Share failed');
@@ -107,7 +161,7 @@ export function RunSharePreviewModal({
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
           <div>
             <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase', color: theme?.textMuted || '#94a3b8' }}>
-              Cosmix reel
+              Run reel
             </div>
             <div style={{ fontSize: 16, fontWeight: 900, color: '#f8fafc', marginTop: 2 }}>{title}</div>
           </div>
@@ -150,47 +204,63 @@ export function RunSharePreviewModal({
 
         {msg ? <div style={{ fontSize: 12, color: theme?.textMuted || '#94a3b8', fontWeight: 600 }}>{msg}</div> : null}
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: 8 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: reel.isImage ? '1fr 1.2fr' : '1fr 1fr 1fr', gap: 8 }}>
           <button
             type="button"
             onClick={onClose}
             style={{
               appearance: 'none',
               borderRadius: 14,
-              padding: '13px 12px',
+              padding: '13px 10px',
               border: '1px solid rgba(148,163,184,0.3)',
               background: 'transparent',
               color: '#e2e8f0',
               fontWeight: 800,
-              fontSize: 13,
+              fontSize: 12,
               cursor: 'pointer',
             }}
           >
             Back
           </button>
+          {!reel.isImage ? (
+            <button
+              type="button"
+              disabled={sending}
+              onClick={() => handleConfirmShare({ forceImage: false })}
+              style={{
+                appearance: 'none',
+                border: 'none',
+                borderRadius: 14,
+                padding: '13px 10px',
+                background: 'linear-gradient(120deg, #f97316, #22d3ee)',
+                color: '#0f172a',
+                fontWeight: 900,
+                fontSize: 12,
+                cursor: sending ? 'wait' : 'pointer',
+                opacity: sending ? 0.8 : 1,
+              }}
+            >
+              {sending ? 'Opening…' : 'Share video'}
+            </button>
+          ) : null}
           <button
             type="button"
             disabled={sending}
-            onClick={handleConfirmShare}
+            onClick={() => handleConfirmShare({ forceImage: true })}
             style={{
               appearance: 'none',
-              border: 'none',
+              border: reel.isImage ? 'none' : '1px solid rgba(148,163,184,0.3)',
               borderRadius: 14,
-              padding: '13px 12px',
-              background: 'linear-gradient(120deg, #f97316, #22d3ee)',
-              color: '#0f172a',
+              padding: '13px 10px',
+              background: reel.isImage ? 'linear-gradient(120deg, #f97316, #22d3ee)' : 'rgba(15,23,42,0.7)',
+              color: reel.isImage ? '#0f172a' : '#e2e8f0',
               fontWeight: 900,
-              fontSize: 13,
+              fontSize: 12,
               cursor: sending ? 'wait' : 'pointer',
               opacity: sending ? 0.8 : 1,
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 8,
             }}
           >
-            <ShareIcon size={14} />
-            {sending ? 'Opening…' : 'Share'}
+            {sending ? 'Opening…' : (reel.isImage ? 'Share' : 'Share photo')}
           </button>
         </div>
       </div>
@@ -246,13 +316,15 @@ export function PersonalRecordModal({
   async function handleBuildPreview() {
     if (!userId || building) return;
     setBuilding(true);
-    setShareMsg('Building quick preview…');
+    setShareMsg('');
+    await yieldToUi();
     try {
       const run = await fetchShareableRun(userId, record.activityId, wellnessApiUrl);
       if (!run?.polyline?.length) {
         setShareMsg('Map not ready yet — open the run once, then share.');
         return;
       }
+      await yieldToUi();
       const next = await renderRunShareReel({
         polyline: run.polyline,
         summary: run.summary,
@@ -274,6 +346,7 @@ export function PersonalRecordModal({
 
   return (
     <>
+      <PreparingOverlay open={building} label="Preparing your reel…" />
       <div
         style={{
           position: 'fixed',
@@ -501,6 +574,7 @@ export function ShareRunButton({
     if (!userId || busy) return;
     setBusy(true);
     setMsg('');
+    await yieldToUi();
     try {
       let poly = polyline;
       let sum = summary;
@@ -513,6 +587,7 @@ export function ShareRunButton({
         poly = run.polyline;
         sum = run.summary;
       }
+      await yieldToUi();
       const next = await renderRunShareReel({
         polyline: poly,
         summary: sum,
@@ -537,6 +612,7 @@ export function ShareRunButton({
 
   return (
     <>
+      <PreparingOverlay open={busy} label="Preparing your reel…" />
       {compact ? (
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
           <button
