@@ -95,24 +95,43 @@ export function buildBodyReadiness({ runRows = [] } = {}) {
 
   percent = Math.max(28, Math.min(98, Math.round(percent)));
 
+  const color = (() => {
+    const stops = [
+      { at: 28, color: '#fb7185' },
+      { at: 48, color: '#fb923c' },
+      { at: 58, color: '#fbbf24' },
+      { at: 68, color: '#38bdf8' },
+      { at: 78, color: '#2dd4bf' },
+      { at: 88, color: '#34d399' },
+      { at: 98, color: '#22c55e' },
+    ];
+    const p = percent;
+    if (p <= stops[0].at) return stops[0].color;
+    if (p >= stops[stops.length - 1].at) return stops[stops.length - 1].color;
+    for (let i = 0; i < stops.length - 1; i += 1) {
+      const a = stops[i];
+      const b = stops[i + 1];
+      if (p >= a.at && p <= b.at) {
+        const t = (p - a.at) / (b.at - a.at);
+        const parse = (hex) => {
+          const h = hex.slice(1);
+          return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+        };
+        const [ar, ag, ab] = parse(a.color);
+        const [br, bg, bb] = parse(b.color);
+        const toHex = (n) => n.toString(16).padStart(2, '0');
+        return `#${toHex(Math.round(ar + (br - ar) * t))}${toHex(Math.round(ag + (bg - ag) * t))}${toHex(Math.round(ab + (bb - ab) * t))}`;
+      }
+    }
+    return '#34d399';
+  })();
+
   let label = 'Building';
-  let color = '#f59e0b';
-  if (percent >= 88) {
-    label = 'Prime';
-    color = '#22c55e';
-  } else if (percent >= 78) {
-    label = 'Ready';
-    color = '#34d399';
-  } else if (percent >= 65) {
-    label = 'Good';
-    color = '#38bdf8';
-  } else if (percent >= 50) {
-    label = 'Recovering';
-    color = '#fbbf24';
-  } else {
-    label = 'Rest first';
-    color = '#fb7185';
-  }
+  if (percent >= 88) label = 'Prime';
+  else if (percent >= 78) label = 'Ready';
+  else if (percent >= 65) label = 'Good';
+  else if (percent >= 50) label = 'Recovering';
+  else label = 'Rest first';
 
   const why = daysSinceLast === 0
     ? (hardLoad

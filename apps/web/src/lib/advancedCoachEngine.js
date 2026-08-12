@@ -36,6 +36,7 @@ function summarizeRuns(runRows = []) {
       maxHr: Number(r.maxHeartrate || r.maxHeartRate || 0) || null,
       hour: hourFromRun(r),
       bestSplitPace: Number(r.bestSplitPaceMinPerKm || 0) || null,
+      name: r.name || 'Run',
     }))
     .sort((a, b) => String(b.date).localeCompare(String(a.date)));
 
@@ -154,6 +155,16 @@ function morningFuelPlan(hour) {
 
 function detectFocus(ask = '') {
   const askLower = String(ask || '').toLowerCase();
+  if (
+    askLower.includes('last run')
+    || askLower.includes('my last')
+    || askLower.includes('how was')
+    || askLower.includes('how did')
+    || askLower.includes('yesterday')
+    || (askLower.includes('improve') && (askLower.includes('run') || askLower.includes('pace')))
+    || askLower.includes('could i pace')
+    || askLower.includes('slow down')
+  ) return 'lastrun';
   if (askLower.includes('fat') || askLower.includes('burn') || askLower.includes('zone') || askLower.includes('aerobic')) return 'fat';
   if (askLower.includes('eat') || askLower.includes('food') || askLower.includes('fuel') || askLower.includes('breakfast')) return 'fuel';
   if (askLower.includes('speed') || askLower.includes('pace') || askLower.includes('fast') || askLower.includes('split')) return 'speed';
@@ -162,10 +173,100 @@ function detectFocus(ask = '') {
   return null;
 }
 
+function buildLastRunDeepReview(s) {
+  const last = s.lastRun;
+  if (!last) {
+    return {
+      id: 'lastrun',
+      title: 'Your last run',
+      body: 'No recent run logged yet. Sync Strava or log a run, then ask again — Cosmix will compare pace, HR, and volume to your history.',
+    };
+  }
+
+  const vsAvgPace = s.avgPace ? last.pace - s.avgPace : null;
+  const prior3 = s.last30.slice(1, 4);
+  const priorPace = prior3.length ? prior3.reduce((sum, r) => sum + r.pace, 0) / prior3.length : null;
+
+  const paceNote = vsAvgPace != null
+    ? (vsAvgPace > 0.2
+      ? `${last.distance.toFixed(1)} km at ${fmtPace(last.pace)}/km — about ${fmtPace(Math.abs(vsAvgPace))} slower than your 30-day avg (${fmtPace(s.avgPace)}/km). Good if this was recovery; if not intentional, start 15–20 sec/km slower next time.`
+      : vsAvgPace < -0.2
+        ? `${last.distance.toFixed(1)} km at ${fmtPace(last.pace)}/km — ${fmtPace(Math.abs(vsAvgPace))} faster than 30-day avg. Strong day; follow with easy Z2 or rest.`
+        : `${last.distance.toFixed(1)} km at ${fmtPace(last.pace)}/km — matches your recent average pace.`)
+    : `${last.distance.toFixed(1)} km in ${Math.round(last.minutes)} min (${fmtPace(last.pace)}/km).`;
+
+  const hrNote = last.avgHr
+    ? (last.avgHr >= s.z3Max
+      ? `Avg HR ${last.avgHr} bpm — mostly aerobic/threshold (above fat-burn Z2 ${s.z2Min}–${s.z2Max}). For base work, slow until HR sits in Z2 for the first 70% of the run.`
+      : last.avgHr >= s.z2Max
+        ? `Avg HR ${last.avgHr} bpm — upper easy/aerobic. OK for moderate days; for fat-burn focus, cap effort so HR stays ${s.z2Min}–${s.z2Max}.`
+        : `Avg HR ${last.avgHr} bpm — solid easy-zone work${s.avgHr ? ` (30d avg ${s.avgHr} bpm)` : ''}.`)
+    : 'No HR on this run — enable watch/Strava sync for pace-vs-HR advice.';
+
+  const whenSlow = [];
+  if (last.avgHr && last.avgHr > s.z2Max) {
+    whenSlow.push(`From km 1: you averaged ${last.avgHr} bpm — aim ${s.z2Min}–${s.z2Max} bpm for the first 2–3 km next time.`);
+  }
+  if (priorPace && last.pace < priorPace - 0.2) {
+    whenSlow.push(`You went out faster than your prior 3 runs (${fmtPace(priorPace)}/km avg) — hold km 1–2 back by 20–30 sec/km.`);
+  }
+  if (last.maxHr && last.avgHr && last.maxHr - last.avgHr >= 20) {
+    whenSlow.push(`HR peaked ${last.maxHr - last.avgHr} bpm above average — walk 60s whenever HR jumps >10 bpm in a minute (hills, heat, caffeine).`);
+  }
+  if (last.distance >= 8 && last.avgHr && s.avgHr && last.avgHr > s.avgHr + 5) {
+    whenSlow.push(`On runs ≥8 km, if avg HR exceeds ${s.z2Max} bpm before halfway, drop pace 15–20 sec/km.`);
+  }
+
+  const whenPush = [];
+  if (last.avgHr && last.avgHr <= s.z2Max && vsAvgPace != null && vsAvgPace > 0.15) {
+    whenPush.push(`HR had room (${last.avgHr} bpm in Z2) but pace was conservative — last 1–2 km could be 10–15 sec/km quicker if legs felt good.`);
+  }
+  if (last.bestSplitPace && last.pace && last.bestSplitPace < last.pace - 0.3) {
+    whenPush.push(`Best km was ${fmtPace(last.bestSplitPace)}/km vs ${fmtPace(last.pace)}/km avg — use that split for intervals, not the whole run.`);
+  }
+  if (last.avgHr && last.avgHr < s.z2Min && last.pace > (s.avgPace || last.pace) + 0.1) {
+    whenPush.push(`HR was very low (${last.avgHr} bpm) with slow pace — you could add 4×20s strides at the end if the run felt too easy.`);
+  }
+
+  let trendNote = '';
+  if (priorPace) {
+    trendNote = last.pace > priorPace + 0.1
+      ? ` Compared to your prior 3 runs (${fmtPace(priorPace)}/km), this was a slower day — good for recovery.`
+      : last.pace < priorPace - 0.1
+        ? ` Compared to prior 3 runs, this was faster — watch fatigue tomorrow.`
+        : ' Consistent with your last few runs.';
+  }
+
+  const nextNote = s.gapDays === 0
+    ? 'You ran today — tomorrow should be rest or very easy 20–30 min Z2.'
+    : s.gapDays != null && s.gapDays <= 2
+      ? 'Next run: easy Z2 unless legs feel fresh.'
+      : 'Next run: resume your normal plan if recovery felt good.';
+
+  return {
+    id: 'lastrun',
+    title: `Last run · ${last.date} · ${last.distance.toFixed(1)} km`,
+    body: [
+      paceNote + trendNote,
+      hrNote,
+      whenSlow.length ? `When to slow down: ${whenSlow.join(' ')}` : null,
+      whenPush.length ? `When you could push: ${whenPush.join(' ')}` : null,
+      last.bestSplitPace ? `Fastest km in that run: ${fmtPace(last.bestSplitPace)}/km.` : null,
+      nextNote,
+    ].filter(Boolean).join('\n\n'),
+  };
+}
+
 export function buildAdvancedCoachPayload({ runRows = [], ask = '', tip = null } = {}) {
   const s = summarizeRuns(runRows);
   const fuel = morningFuelPlan(s.typicalHour);
   const sections = [];
+  const focus = detectFocus(ask);
+  const userAsk = String(ask || '').trim() || 'Give a full data-based coaching briefing.';
+
+  if (focus === 'lastrun' || !ask) {
+    sections.push(buildLastRunDeepReview(s));
+  }
 
   sections.push({
     id: 'schedule',
@@ -239,26 +340,32 @@ export function buildAdvancedCoachPayload({ runRows = [], ask = '', tip = null }
     });
   }
 
-  const focus = detectFocus(ask);
-  const ordered = focus
-    ? [...sections.filter((sct) => sct.id === focus), ...sections.filter((sct) => sct.id !== focus)]
+  const focusResolved = focus;
+  const ordered = focusResolved
+    ? [...sections.filter((sct) => sct.id === focusResolved), ...sections.filter((sct) => sct.id !== focusResolved)]
     : sections;
 
-  const headline = focus === 'fuel'
+  const headline = focusResolved === 'lastrun'
+    ? `Last run analysis · ${s.lastRun ? `${s.lastRun.distance.toFixed(1)} km` : 'sync a run'}`
+    : focusResolved === 'fuel'
     ? `Fuel plan for ~${String(s.typicalHour).padStart(2, '0')}:00 runs`
-    : focus === 'fat'
+    : focusResolved === 'fat'
       ? 'Fat-burning zone guide'
-      : focus === 'speed'
+      : focusResolved === 'speed'
         ? 'Speed protocol from your splits'
-        : focus === 'hr' || focus === 'spike'
+        : focusResolved === 'hr' || focusResolved === 'spike'
           ? 'Heart-rate control playbook'
-          : 'Data-based Cosmix briefing';
+          : s.lastRun
+            ? `Coaching · last run ${s.lastRun.date}`
+            : 'Data-based Cosmix briefing';
+
+  const lastRunAnalysis = buildLastRunDeepReview(s);
 
   return {
     mode: 'advanced',
     engine: 'cosmix-local',
     headline,
-    focus,
+    focus: focusResolved,
     summary: {
       typicalHour: s.typicalHour,
       morningBias: s.morningBias,
@@ -278,6 +385,8 @@ export function buildAdvancedCoachPayload({ runRows = [], ask = '', tip = null }
     sections: ordered,
     ask: ask || null,
     contextForLlm: {
+      userQuestion: userAsk,
+      lastRunDeepReview: lastRunAnalysis.body,
       typicalHour: s.typicalHour,
       morningBias: s.morningBias,
       weekKm: s.weekKm,
@@ -298,7 +407,15 @@ export function buildAdvancedCoachPayload({ runRows = [], ask = '', tip = null }
       spikeRunCount: s.spikeRuns.length,
       highAvgHrRunCount: s.highAvgRuns.length,
       gapDays: s.gapDays,
-      lastRun: s.lastRun ? { date: s.lastRun.date, km: s.lastRun.distance, pace: s.lastRun.pace, avgHr: s.lastRun.avgHr } : null,
+      lastRun: s.lastRun ? {
+        date: s.lastRun.date,
+        km: s.lastRun.distance,
+        minutes: s.lastRun.minutes,
+        pace: s.lastRun.pace,
+        avgHr: s.lastRun.avgHr,
+        maxHr: s.lastRun.maxHr,
+        bestSplitPace: s.lastRun.bestSplitPace,
+      } : null,
       recentRuns: s.last30.slice(0, 16).map((r) => ({
         date: r.date,
         km: Number(r.distance.toFixed(1)),
@@ -309,7 +426,7 @@ export function buildAdvancedCoachPayload({ runRows = [], ask = '', tip = null }
         bestSplitPace: r.bestSplitPace,
       })),
       tipAction: tip?.action || null,
-      userAsk: ask || 'Give a full data-based coaching briefing.',
+      userAsk,
     },
   };
 }

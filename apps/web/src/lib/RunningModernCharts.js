@@ -1,14 +1,24 @@
 import { useMemo } from 'react';
-import { hrEffortColor, hrZoneForBpm, hrZoneLegend, buildSmoothColorSegments, smoothAreaPath, smoothLinePath } from './hrZones';
+import { hrZoneForBpm } from './hrZones';
 import { getShoeColor } from './runningShoes';
 
-/** Soft legend colors — readable, not neon. */
+/** Soft chart palette — matches shoe graph tones, not neon. */
+export const CHART_SOFT = {
+  blue: '#6eb8c9',
+  green: '#6fbf8a',
+  cyan: '#7ab8c4',
+  hr: '#d48a96',
+  hrAlt: '#c9a0a8',
+  orange: '#d4b86a',
+  muted: '#94a3b8',
+};
+
 const LEGEND_SOFT = {
-  recovery: '#94a3b8',
-  fat: '#6fbf8a',
-  aerobic: '#6eb8c9',
-  threshold: '#d4b86a',
-  max: '#d48a96',
+  recovery: CHART_SOFT.muted,
+  fat: CHART_SOFT.green,
+  aerobic: CHART_SOFT.blue,
+  threshold: CHART_SOFT.orange,
+  max: CHART_SOFT.hr,
 };
 
 /**
@@ -266,58 +276,307 @@ export function DepthHBars({ title, items = [], theme, accent, unit = '' }) {
 }
 
 /** Smooth area polyline with glow. Pass point.hr for gradual green→red effort color. */
-export function GlowTrend({
+/** Build time-bucketed trend points from run rows. */
+export function buildRunTrendBuckets(rows = [], valueFn) {
+  const valid = (rows || [])
+    .map((row) => ({
+      date: String(row.date || '').slice(0, 10),
+      value: Number(valueFn(row)),
+    }))
+    .filter((row) => /^\d{4}-\d{2}-\d{2}$/.test(row.date) && row.value > 0)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  if (!valid.length) {
+    return { points: [], overallAvg: null, last10Avg: null, bucketUnit: 'run', spanDays: 0 };
+  }
+
+  const spanMs = new Date(`${valid[valid.length - 1].date}T12:00:00`).getTime()
+    - new Date(`${valid[0].date}T12:00:00`).getTime();
+  const spanDays = Math.max(1, Math.round(spanMs / 86400000) + 1);
+
+  let points = [];
+  let bucketUnit = 'run';
+
+  if (spanDays > 31) {
+    bucketUnit = 'week';
+    const weekMap = new Map();
+    valid.forEach((row) => {
+      const d = new Date(`${row.date}T12:00:00`);
+      const day = d.getDay();
+      const monday = new Date(d);
+      monday.setDate(d.getDate() - ((day + 6) % 7));
+      const key = monday.toISOString().slice(0, 10);
+      if (!weekMap.has(key)) weekMap.set(key, []);
+      weekMap.get(key).push(row.value);
+    });
+    points = [...weekMap.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([week, vals]) => ({
+        date: week,
+        label: week.slice(5),
+        y: vals.reduce((sum, v) => sum + v, 0) / vals.length,
+      }));
+  } else if (valid.length > 10) {
+    bucketUnit = 'day';
+    const dayMap = new Map();
+    valid.forEach((row) => {
+      if (!dayMap.has(row.date)) dayMap.set(row.date, []);
+      dayMap.get(row.date).push(row.value);
+    });
+    points = [...dayMap.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([date, vals]) => ({
+        date,
+        label: date.slice(5),
+        y: vals.reduce((sum, v) => sum + v, 0) / vals.length,
+      }));
+  } else {
+    points = valid.map((row) => ({
+      date: row.date,
+      label: row.date.slice(5),
+      y: row.value,
+    }));
+  }
+
+  const maxPoints = 24;
+  if (points.length > maxPoints) points = points.slice(-maxPoints);
+
+  const overallAvg = valid.reduce((sum, row) => sum + row.value, 0) / valid.length;
+
+  const today = new Date();
+  const start10 = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 9);
+  const start10Str = start10.toISOString().slice(0, 10);
+  const last10Vals = valid.filter((row) => row.date >= start10Str).map((row) => row.value);
+  const last10Avg = last10Vals.length
+    ? last10Vals.reduce((sum, v) => sum + v, 0) / last10Vals.length
+    : null;
+
+  return { points, overallAvg, last10Avg, bucketUnit, spanDays };
+}
+
+/**
+ * Fixed-size run trend — smooth line + area, no dots.
+ * Shows overall average and last-10-day average as reference lines.
+ */
+export function RunTrendChart({
   title,
   subtitle,
   points = [],
+  overallAvg = null,
+  last10Avg = null,
   theme,
   accent,
   valueFmt,
-  maxHr,
-  showHrZones = false,
+  invertY = false,
+  lowerIsBetter = false,
+  unitLabel = '',
 }) {
-  const series = useMemo(() => points.filter((p) => Number(p.y) > 0), [points]);
-  const hasHr = showHrZones || series.some((p) => Number(p.hr) > 0);
-  const ceiling = Number(maxHr) || Math.max(...series.map((p) => Number(p.maxHr) || 0), 190);
-  const legend = hasHr ? hrZoneLegend(ceiling) : [];
+  const series = useMemo(() => (points || []).filter((p) => Number(p.y) > 0), [points]);
+  const fmt = (v) => (valueFmt ? valueFmt(v) : Number(v).toFixed(1));
+
+  const cardStyle = {
+    padding: 14,
+    borderRadius: 20,
+    background: theme.cardBg,
+    border: `1px solid ${theme.cardBorder}`,
+    boxShadow: theme.chartDepth,
+    overflow: 'hidden',
+    minWidth: 0,
+    display: 'grid',
+    gap: 8,
+  };
 
   if (series.length < 2) {
     return (
-      <div style={{ padding: 14, borderRadius: 20, border: `1px dashed ${theme.cardBorder}`, color: theme.textMuted, fontSize: 12 }}>
-        {title}: not enough points yet
+      <div style={cardStyle}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>{title}</div>
+        {subtitle ? (
+          <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 3, lineHeight: 1.4 }}>{subtitle}</div>
+        ) : null}
+        <div style={{ fontSize: 12, color: theme.textMuted }}>Need at least 2 data points.</div>
       </div>
     );
   }
+
   const w = 360;
-  const h = 140;
-  const pad = 14;
-  const ys = series.map((p) => Number(p.y));
+  const h = 132;
+  const pad = { t: 12, r: 10, b: 22, l: 10 };
+  const plotW = w - pad.l - pad.r;
+  const plotH = h - pad.t - pad.b;
+
+  const refLines = [overallAvg, last10Avg].filter((v) => Number(v) > 0);
+  const ys = [...series.map((p) => Number(p.y)), ...refLines];
   const min = Math.min(...ys);
   const max = Math.max(...ys);
   const span = Math.max(0.001, max - min);
-  const baseY = h - pad;
-  const coords = series.map((p, i) => {
-    const x = pad + (i / (series.length - 1)) * (w - pad * 2);
-    const y = h - pad - ((Number(p.y) - min) / span) * (h - pad * 2);
-    const color = Number(p.hr) > 0
-      ? hrEffortColor(p.hr, p.maxHr || ceiling, accent)
-      : accent;
-    return {
-      x,
-      y,
-      color,
-      zone: Number(p.hr) > 0 ? hrZoneForBpm(p.hr, p.maxHr || ceiling) : null,
-      hr: Number(p.hr) || null,
-    };
-  });
-  const line = smoothLinePath(coords, 14);
-  const area = smoothAreaPath(coords, baseY, 14);
-  const latest = series[series.length - 1];
-  const first = series[0];
-  const delta = Number(latest.y) - Number(first.y);
-  const gid = `glow-${String(accent).replace('#', '')}-${title.replace(/\W/g, '').slice(0, 12)}`;
-  const midColor = coords[Math.floor(coords.length / 2)]?.color || accent;
-  const smoothSegs = hasHr ? buildSmoothColorSegments(coords, 14) : [];
+  const yPad = span * 0.12;
+  const yMin = min - yPad;
+  const yMax = max + yPad;
+  const ySpan = Math.max(0.001, yMax - yMin);
+
+  const yFor = (v) => {
+    const ratio = (Number(v) - yMin) / ySpan;
+    return invertY
+      ? pad.t + ratio * plotH
+      : pad.t + plotH - ratio * plotH;
+  };
+
+  const coords = series.map((p, i) => ({
+    x: pad.l + (i / (series.length - 1)) * plotW,
+    y: yFor(p.y),
+    label: p.label,
+    yVal: p.y,
+  }));
+
+  const linePath = coords.map((c, i) => `${i === 0 ? 'M' : 'L'}${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' ');
+  const areaPath = `${linePath} L${coords[coords.length - 1].x.toFixed(1)},${(pad.t + plotH).toFixed(1)} L${coords[0].x.toFixed(1)},${(pad.t + plotH).toFixed(1)} Z`;
+  const gid = `run-trend-${String(accent).replace('#', '')}-${title.replace(/\W/g, '').slice(0, 8)}`;
+
+  const compareNote = (() => {
+    if (overallAvg == null || last10Avg == null) return null;
+    const delta = last10Avg - overallAvg;
+    if (Math.abs(delta) < 0.02) return 'Last 10 days matches your overall average';
+    const better = lowerIsBetter ? delta < 0 : delta > 0;
+    const size = fmt(Math.abs(delta));
+    if (lowerIsBetter) return better ? `Last 10 days ${size} faster than overall` : `Last 10 days ${size} slower than overall`;
+    return better ? `Last 10 days ${size} lower than overall` : `Last 10 days ${size} higher than overall`;
+  })();
+
+  const compareColor = (() => {
+    if (overallAvg == null || last10Avg == null) return theme.textMuted;
+    const delta = last10Avg - overallAvg;
+    if (Math.abs(delta) < 0.02) return theme.textMuted;
+    const better = lowerIsBetter ? delta < 0 : delta > 0;
+    return better ? theme.green : theme.orange;
+  })();
+
+  return (
+    <div style={cardStyle}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>{title}</div>
+          {subtitle ? (
+            <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 3, lineHeight: 1.4 }}>{subtitle}</div>
+          ) : null}
+        </div>
+      </div>
+      <div style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: '6px 14px',
+        fontSize: 11,
+        color: theme.textSecondary || theme.textHeading,
+      }}
+      >
+        {overallAvg != null ? (
+          <span>
+            <span style={{ color: theme.textMuted }}>All runs avg </span>
+            <strong style={{ color: accent }}>{fmt(overallAvg)}{unitLabel}</strong>
+          </span>
+        ) : null}
+        {last10Avg != null ? (
+          <span>
+            <span style={{ color: theme.textMuted }}>Last 10 days </span>
+            <strong style={{ color: accent }}>{fmt(last10Avg)}{unitLabel}</strong>
+          </span>
+        ) : null}
+      </div>
+      {compareNote ? (
+        <div style={{ fontSize: 10, color: compareColor, fontWeight: 700, lineHeight: 1.35 }}>{compareNote}</div>
+      ) : null}
+      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 132, display: 'block' }}>
+        <defs>
+          <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={accent} stopOpacity="0.28" />
+            <stop offset="100%" stopColor={accent} stopOpacity="0.02" />
+          </linearGradient>
+        </defs>
+        {overallAvg != null ? (
+          <line
+            x1={pad.l}
+            y1={yFor(overallAvg)}
+            x2={w - pad.r}
+            y2={yFor(overallAvg)}
+            stroke={theme.textMuted || '#64748b'}
+            strokeWidth="1"
+            strokeDasharray="5 4"
+            opacity={0.55}
+          />
+        ) : null}
+        {last10Avg != null ? (
+          <line
+            x1={pad.l}
+            y1={yFor(last10Avg)}
+            x2={w - pad.r}
+            y2={yFor(last10Avg)}
+            stroke={accent}
+            strokeWidth="1.2"
+            strokeDasharray="3 3"
+            opacity={0.75}
+          />
+        ) : null}
+        <path d={areaPath} fill={`url(#${gid})`} />
+        <path
+          d={linePath}
+          fill="none"
+          stroke={accent}
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        fontSize: 10,
+        color: theme.textMuted,
+        flexWrap: 'wrap',
+        gap: 6,
+      }}
+      >
+        <span>{series[0]?.label || ''}</span>
+        <span style={{ display: 'inline-flex', gap: 10, flexWrap: 'wrap' }}>
+          <span>— all runs avg</span>
+          <span style={{ color: accent }}>- - last 10 days</span>
+        </span>
+        <span>{series[series.length - 1]?.label || ''}</span>
+      </div>
+    </div>
+  );
+}
+
+export function RunLeaderboard({
+  title,
+  subtitle,
+  rows = [],
+  theme,
+  accent,
+  metricKey,
+  metricFmt,
+  emptyText = 'No runs yet.',
+  limit = 5,
+}) {
+  const list = (rows || []).slice(0, limit);
+  const values = list.map((row) => Math.abs(Number(row[metricKey]) || 0));
+  const max = Math.max(...values, 0.01);
+
+  if (!list.length) {
+    return (
+      <div style={{
+        padding: 14,
+        borderRadius: 20,
+        background: theme.cardBg,
+        border: `1px solid ${theme.cardBorder}`,
+        color: theme.textMuted,
+        fontSize: 12,
+      }}
+      >
+        <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading, marginBottom: 4 }}>{title}</div>
+        {emptyText}
+      </div>
+    );
+  }
 
   return (
     <div style={{
@@ -329,75 +588,304 @@ export function GlowTrend({
       overflow: 'hidden',
       minWidth: 0,
       display: 'grid',
-      gap: 10,
+      gap: 8,
     }}
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-        <div>
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>{title}</div>
+        {subtitle ? (
+          <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 3, lineHeight: 1.4 }}>{subtitle}</div>
+        ) : null}
+      </div>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: '22px 1fr 52px 44px 44px minmax(0, 1fr)',
+        gap: '6px 8px',
+        padding: '0 2px 4px',
+        fontSize: 9,
+        fontWeight: 800,
+        textTransform: 'uppercase',
+        letterSpacing: '0.06em',
+        color: theme.textMuted,
+      }}
+      >
+        <span />
+        <span>Run</span>
+        <span>Speed</span>
+        <span>HR</span>
+        <span>Km</span>
+        <span>Shoe</span>
+      </div>
+      <div style={{ display: 'grid', gap: 6 }}>
+        {list.map((row, index) => {
+          const metric = Number(row[metricKey]) || 0;
+          const barW = Math.max(8, (Math.abs(metric) / max) * 100);
+          const dateLabel = String(row.date || '').slice(5) || '--';
+          return (
+            <div
+              key={row.id || `${row.date}-${index}`}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '22px 1fr 52px 44px 44px minmax(0, 1fr)',
+                gap: '6px 8px',
+                alignItems: 'center',
+                fontSize: 11,
+              }}
+            >
+              <span style={{ fontWeight: 800, color: theme.textMuted }}>{index + 1}</span>
+              <div style={{ minWidth: 0 }}>
+                <div style={{
+                  height: 8,
+                  borderRadius: 999,
+                  background: 'rgba(148,163,184,0.12)',
+                  overflow: 'hidden',
+                  marginBottom: 4,
+                }}
+                >
+                  <div style={{
+                    width: `${barW}%`,
+                    minWidth: metric > 0 ? 8 : 0,
+                    height: '100%',
+                    borderRadius: 999,
+                  background: accent,
+                  opacity: 0.72,
+                  }}
+                  />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, alignItems: 'baseline' }}>
+                  <span style={{ fontWeight: 800, color: accent }}>
+                    {metricFmt ? metricFmt(metric) : metric}
+                  </span>
+                  <span style={{ fontSize: 9, color: theme.textMuted }}>{dateLabel}</span>
+                </div>
+              </div>
+              <span style={{ fontWeight: 700, color: CHART_SOFT.green }}>
+                {row.speed ? `${row.speed}` : '--'}
+              </span>
+              <span style={{ fontWeight: 700, color: CHART_SOFT.hr }}>
+                {row.avgHeartrate ? `${row.avgHeartrate}` : '--'}
+              </span>
+              <span style={{ fontWeight: 700, color: theme.textSecondary || theme.textHeading }}>
+                {row.distance ? Number(row.distance).toFixed(1) : '--'}
+              </span>
+              <span style={{
+                fontWeight: 700,
+                color: row.shoeColor || theme.textMuted,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                minWidth: 0,
+              }}
+              >
+                <span style={{
+                  width: 7,
+                  height: 7,
+                  borderRadius: '50%',
+                  background: row.shoeColor || theme.textMuted,
+                  flexShrink: 0,
+                }}
+                />
+                {row.shoeLabel || 'Untagged'}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+export function GlowTrend({
+  title,
+  subtitle,
+  points = [],
+  theme,
+  accent,
+  valueFmt,
+  maxHr,
+  showHrZones = false,
+  lowerIsBetter = false,
+  unitLabel = '',
+}) {
+  const series = useMemo(() => points.filter((p) => Number(p.y) > 0), [points]);
+  const hasHr = showHrZones || series.some((p) => Number(p.hr) > 0);
+  const ceiling = Number(maxHr) || Math.max(...series.map((p) => Number(p.maxHr) || 0), 190);
+
+  const cardStyle = {
+    padding: 14,
+    borderRadius: 20,
+    background: theme.cardBg,
+    border: `1px solid ${theme.cardBorder}`,
+    boxShadow: theme.chartDepth,
+    overflow: 'hidden',
+    minWidth: 0,
+    display: 'grid',
+    gap: 10,
+  };
+
+  if (series.length < 2) {
+    return (
+      <div style={cardStyle}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>{title}</div>
+        {subtitle ? (
+          <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 3, lineHeight: 1.4 }}>{subtitle}</div>
+        ) : null}
+        <div style={{ fontSize: 12, color: theme.textMuted }}>Need at least 2 runs to show a trend.</div>
+      </div>
+    );
+  }
+
+  const w = 360;
+  const h = 128;
+  const pad = { t: 10, r: 12, b: 22, l: 12 };
+  const plotW = w - pad.l - pad.r;
+  const plotH = h - pad.t - pad.b;
+
+  const ys = series.map((p) => Number(p.y));
+  const min = Math.min(...ys);
+  const max = Math.max(...ys);
+  const span = Math.max(0.001, max - min);
+  const yPad = span * 0.14;
+  const yMin = min - yPad;
+  const yMax = max + yPad;
+  const ySpan = Math.max(0.001, yMax - yMin);
+  const yFor = (v) => pad.t + plotH - ((v - yMin) / ySpan) * plotH;
+
+  const coords = series.map((p, i) => {
+    const x = pad.l + (i / (series.length - 1)) * plotW;
+    const y = yFor(Number(p.y));
+    const zone = Number(p.hr) > 0 ? hrZoneForBpm(p.hr, p.maxHr || ceiling) : null;
+    const color = zone ? (LEGEND_SOFT[zone.key] || zone.zoneColor || accent) : accent;
+    return {
+      x,
+      y,
+      color,
+      zone,
+      hr: Number(p.hr) || null,
+      label: p.label,
+      yVal: Number(p.y),
+      isLatest: i === series.length - 1,
+    };
+  });
+
+  const linePath = coords.map((c, i) => `${i === 0 ? 'M' : 'L'}${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' ');
+
+  const latest = series[series.length - 1];
+  const first = series[0];
+  const delta = Number(latest.y) - Number(first.y);
+  const fmt = (v) => (valueFmt ? valueFmt(v) : Number(v).toFixed(2));
+
+  const trendNote = (() => {
+    if (Math.abs(delta) < 0.02) return 'Steady vs oldest';
+    const better = lowerIsBetter ? delta < 0 : delta > 0;
+    const size = fmt(Math.abs(delta));
+    if (lowerIsBetter) return better ? `${size} faster vs oldest` : `${size} slower vs oldest`;
+    return better ? `${size} faster vs oldest` : `${size} slower vs oldest`;
+  })();
+
+  const trendColor = (() => {
+    if (Math.abs(delta) < 0.02) return theme.textMuted;
+    const better = lowerIsBetter ? delta < 0 : delta > 0;
+    return better ? theme.green : theme.orange;
+  })();
+
+  const zoneKeys = new Set(coords.filter((c) => c.zone).map((c) => c.zone.key));
+  const zoneShort = { fat: 'Z2', aerobic: 'Z3', threshold: 'Z4', max: 'Z5', recovery: 'Z1' };
+
+  return (
+    <div style={cardStyle}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+        <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>{title}</div>
           {subtitle ? (
             <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 3, lineHeight: 1.4 }}>{subtitle}</div>
           ) : null}
         </div>
-        <div style={{ fontSize: 11, color: delta <= 0 ? theme.green : theme.orange, fontWeight: 800, flexShrink: 0 }}>
-          {delta > 0 ? '+' : ''}{valueFmt ? valueFmt(delta) : delta.toFixed(2)}
+        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: accent, lineHeight: 1.1 }}>
+            {fmt(latest.y)}{unitLabel}
+          </div>
+          <div style={{ fontSize: 10, color: trendColor, fontWeight: 700, marginTop: 3, maxWidth: 120, lineHeight: 1.3 }}>
+            {trendNote}
+          </div>
         </div>
       </div>
-      {hasHr && !subtitle ? (
-        <div style={{ fontSize: 11, color: theme.textMuted, lineHeight: 1.4 }}>
-          Line color follows heart rate from easy to hard.
+      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 128, display: 'block' }}>
+        <line
+          x1={pad.l}
+          y1={pad.t + plotH}
+          x2={w - pad.r}
+          y2={pad.t + plotH}
+          stroke={theme.cardBorder || 'rgba(148,163,184,0.25)'}
+          strokeWidth="1"
+        />
+        <path
+          d={linePath}
+          fill="none"
+          stroke={theme.textMuted || '#64748b'}
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          opacity={0.5}
+        />
+        {coords.map((c, i) => (
+          <g key={`pt-${i}`}>
+            <circle
+              cx={c.x}
+              cy={c.y}
+              r={c.isLatest ? 6.5 : 5}
+              fill={c.color}
+              opacity={c.isLatest ? 1 : 0.88}
+            />
+            {c.isLatest ? (
+              <circle
+                cx={c.x}
+                cy={c.y}
+                r={6.5}
+                fill="none"
+                stroke="rgba(255,255,255,0.45)"
+                strokeWidth="1.2"
+              />
+            ) : null}
+            <title>
+              {`${c.label || `Run ${i + 1}`} · ${fmt(c.yVal)}${unitLabel}${c.hr ? ` · ${c.hr} bpm` : ''}${c.zone ? ` · ${c.zone.short}` : ''}`}
+            </title>
+          </g>
+        ))}
+      </svg>
+      {hasHr && zoneKeys.size ? (
+        <div style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '6px 12px',
+          fontSize: 10,
+          color: theme.textMuted,
+          alignItems: 'center',
+        }}
+        >
+          <span>Each dot = avg HR zone for that run</span>
+          {[...zoneKeys].map((key) => (
+            <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <span style={{
+                width: 7,
+                height: 7,
+                borderRadius: '50%',
+                background: LEGEND_SOFT[key] || accent,
+                flexShrink: 0,
+              }}
+              />
+              {zoneShort[key] || key}
+            </span>
+          ))}
         </div>
       ) : null}
-      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 140, display: 'block' }}>
-        <defs>
-          <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={hasHr ? midColor : accent} stopOpacity="0.42" />
-            <stop offset="100%" stopColor={hasHr ? midColor : accent} stopOpacity="0.02" />
-          </linearGradient>
-          {hasHr ? (
-            <linearGradient id={`${gid}-h`} x1="0" y1="0" x2="1" y2="0">
-              {coords.map((c, i) => (
-                <stop
-                  key={`hs-${i}`}
-                  offset={`${(i / Math.max(1, coords.length - 1)) * 100}%`}
-                  stopColor={c.color}
-                  stopOpacity="0.2"
-                />
-              ))}
-            </linearGradient>
-          ) : null}
-          <filter id={`${gid}-blur`}>
-            <feGaussianBlur stdDeviation="2.2" />
-          </filter>
-        </defs>
-        <path d={area} fill={`url(#${gid})`} />
-        {hasHr ? <path d={area} fill={`url(#${gid}-h)`} /> : null}
-        {hasHr ? (
-          smoothSegs.map((seg, i) => (
-            <path
-              key={`seg-${i}`}
-              d={seg.d}
-              fill="none"
-              stroke={seg.color}
-              strokeWidth="3"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          ))
-        ) : (
-          <>
-            <path d={line} fill="none" stroke={accent} strokeWidth="4" opacity="0.3" filter={`url(#${gid}-blur)`} />
-            <path d={line} fill="none" stroke={accent} strokeWidth="2.6" strokeLinejoin="round" strokeLinecap="round" />
-          </>
-        )}
-      </svg>
-      {hasHr ? (
-        <HrEffortLegend theme={theme} legend={legend} />
-      ) : null}
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: theme.textMuted }}>
-        <span>{first.label || ''}</span>
-        <span>{valueFmt ? valueFmt(latest.y) : latest.y} now</span>
-        <span>{latest.label || ''}</span>
+        <span>{first.label || 'Oldest'}</span>
+        <span style={{ opacity: 0.85 }}>Latest run →</span>
+        <span>{latest.label || 'Newest'}</span>
       </div>
     </div>
   );
@@ -409,7 +897,7 @@ export function ShoeDonutShare({ shoeStats = [], theme, title = 'Distance share'
   if (!rows.length) {
     return <div style={{ padding: 14, color: theme.textMuted, fontSize: 12 }}>Tag runs with shoes to unlock wear charts.</div>;
   }
-  const r = 54;
+  const r = 48;
   const c = 2 * Math.PI * r;
   let offset = 0;
   const arcs = rows.map((row) => {
@@ -423,37 +911,72 @@ export function ShoeDonutShare({ shoeStats = [], theme, title = 'Distance share'
   });
 
   return (
-    <div style={{ padding: 14, borderRadius: 20, background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, display: 'grid', gap: 12 }}>
+    <div style={{
+      padding: 14,
+      borderRadius: 20,
+      background: theme.cardBg,
+      border: `1px solid ${theme.cardBorder}`,
+      display: 'grid',
+      gap: 12,
+      overflow: 'hidden',
+      minWidth: 0,
+    }}
+    >
       <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>{title}</div>
-      <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: 12, alignItems: 'center' }}>
-        <svg viewBox="0 0 140 140" style={{ width: 140, height: 140 }}>
-          <circle cx="70" cy="70" r={r} fill="none" stroke={theme.cardBorder} strokeWidth="16" />
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 14,
+        minWidth: 0,
+        width: '100%',
+      }}
+      >
+        <svg viewBox="0 0 120 120" style={{ width: 120, height: 120, flexShrink: 0, display: 'block' }}>
+          <circle cx="60" cy="60" r={r} fill="none" stroke={theme.cardBorder} strokeWidth="14" />
           {arcs.map((arc) => (
             <circle
               key={arc.shoeId || arc.label}
-              cx="70"
-              cy="70"
+              cx="60"
+              cy="60"
               r={r}
               fill="none"
               stroke={arc.color}
-              strokeWidth="16"
+              strokeWidth="14"
               strokeDasharray={arc.dash}
               strokeDashoffset={-arc.offset}
-              transform="rotate(-90 70 70)"
+              transform="rotate(-90 60 60)"
               strokeLinecap="butt"
             />
           ))}
-          <text x="70" y="68" textAnchor="middle" fill={theme.textHeading} fontSize="16" fontWeight="800">{total.toFixed(0)}</text>
-          <text x="70" y="86" textAnchor="middle" fill={theme.textMuted} fontSize="10">km</text>
+          <text x="60" y="58" textAnchor="middle" fill={theme.textHeading} fontSize="15" fontWeight="800">{total.toFixed(0)}</text>
+          <text x="60" y="74" textAnchor="middle" fill={theme.textMuted} fontSize="9">km</text>
         </svg>
-        <div style={{ display: 'grid', gap: 8 }}>
+        <div style={{ display: 'grid', gap: 8, width: '100%', minWidth: 0 }}>
           {arcs.map((arc) => (
-            <div key={arc.shoeId || arc.label} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 12 }}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: theme.textSecondary, fontWeight: 700, minWidth: 0 }}>
+            <div key={arc.shoeId || arc.label} style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0, 1fr) auto',
+              gap: 8,
+              alignItems: 'center',
+              fontSize: 12,
+              minWidth: 0,
+            }}
+            >
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                color: theme.textSecondary,
+                fontWeight: 700,
+                minWidth: 0,
+                overflow: 'hidden',
+              }}
+              >
                 <span style={{ width: 8, height: 8, borderRadius: 999, background: arc.color, flexShrink: 0 }} />
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{arc.label}</span>
               </span>
-              <span style={{ color: arc.color, fontWeight: 800, flexShrink: 0, textAlign: 'right' }}>
+              <span style={{ color: arc.color, fontWeight: 800, flexShrink: 0, textAlign: 'right', whiteSpace: 'nowrap' }}>
                 {arc.pct}%
                 <span style={{ display: 'block', fontSize: 10, color: theme.textMuted, fontWeight: 700 }}>
                   {Number(arc.totalKm).toFixed(1)} km
@@ -462,6 +985,113 @@ export function ShoeDonutShare({ shoeStats = [], theme, title = 'Distance share'
             </div>
           ))}
         </div>
+      </div>
+    </div>
+  );
+}
+
+export function TopDistanceRuns({ title, rows = [], theme, limit = 5 }) {
+  const list = (rows || []).slice(0, limit);
+  if (!list.length) {
+    return (
+      <div style={{ padding: 14, borderRadius: 20, border: `1px solid ${theme.cardBorder}`, color: theme.textMuted, fontSize: 12 }}>
+        {title}: no runs yet.
+      </div>
+    );
+  }
+  const maxKm = Math.max(...list.map((r) => Number(r.distance) || 0), 0.01);
+
+  return (
+    <div style={{
+      padding: 14,
+      borderRadius: 20,
+      background: theme.cardBg,
+      border: `1px solid ${theme.cardBorder}`,
+      boxShadow: theme.chartDepth,
+      overflow: 'hidden',
+      minWidth: 0,
+      display: 'grid',
+      gap: 8,
+    }}
+    >
+      <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>{title}</div>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: '20px 1fr 44px 40px minmax(0, 1fr)',
+        gap: '6px 8px',
+        fontSize: 9,
+        fontWeight: 800,
+        textTransform: 'uppercase',
+        letterSpacing: '0.06em',
+        color: theme.textMuted,
+      }}
+      >
+        <span />
+        <span>Run</span>
+        <span>Speed</span>
+        <span>HR</span>
+        <span>Shoe</span>
+      </div>
+      <div style={{ display: 'grid', gap: 8 }}>
+        {list.map((row, index) => {
+          const km = Number(row.distance) || 0;
+          const barW = Math.max(10, (km / maxKm) * 100);
+          const color = row.shoeColor || CHART_SOFT.blue;
+          return (
+            <div
+              key={row.id || `${row.date}-${index}`}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '20px 1fr 44px 40px minmax(0, 1fr)',
+                gap: '6px 8px',
+                alignItems: 'center',
+                fontSize: 11,
+                minWidth: 0,
+              }}
+            >
+              <span style={{ fontWeight: 800, color: theme.textMuted }}>{index + 1}</span>
+              <div style={{ minWidth: 0 }}>
+                <div style={{
+                  height: 7,
+                  borderRadius: 999,
+                  background: 'rgba(148,163,184,0.12)',
+                  overflow: 'hidden',
+                  marginBottom: 4,
+                }}
+                >
+                  <div style={{ width: `${barW}%`, height: '100%', borderRadius: 999, background: color, opacity: 0.75 }} />
+                </div>
+                <div style={{ fontWeight: 800, color: CHART_SOFT.blue }}>
+                  {km.toFixed(1)} km
+                  <span style={{ fontWeight: 600, color: theme.textMuted, fontSize: 10, marginLeft: 6 }}>
+                    {String(row.date || '').slice(5)}
+                  </span>
+                </div>
+              </div>
+              <span style={{ fontWeight: 700, color: CHART_SOFT.green, whiteSpace: 'nowrap' }}>
+                {row.speed ? row.speed : '--'}
+              </span>
+              <span style={{ fontWeight: 700, color: CHART_SOFT.hr, whiteSpace: 'nowrap' }}>
+                {row.avgHeartrate ? row.avgHeartrate : '--'}
+              </span>
+              <span style={{
+                fontWeight: 700,
+                color,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                minWidth: 0,
+              }}
+              >
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0 }} />
+                {row.shoeLabel || 'Untagged'}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -476,11 +1106,11 @@ export function ShoeLollipopChart({
   valueFmt,
   invert = false,
 }) {
-  const rows = (items || []).slice(0, 8);
+  const rows = (items || []).slice(0, 10);
   if (!rows.length) {
     return (
       <div style={{ padding: 12, borderRadius: 14, border: `1px solid ${theme.cardBorder}`, color: theme.textMuted, fontSize: 12 }}>
-        {title}: not enough tagged runs yet.
+        {title}: not enough runs yet.
       </div>
     );
   }
@@ -488,7 +1118,8 @@ export function ShoeLollipopChart({
   const max = Math.max(...values, 0.01);
   const min = Math.min(...values);
   const w = 340;
-  const rowH = 30;
+  const hasMeta = rows.some((item) => item.sub);
+  const rowH = hasMeta ? 38 : 30;
   const h = rows.length * rowH + 28;
   const left = 8;
   const right = w - 78;
@@ -506,7 +1137,17 @@ export function ShoeLollipopChart({
   });
 
   return (
-    <div style={{ padding: 14, borderRadius: 20, background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, display: 'grid', gap: 8 }}>
+    <div style={{
+      padding: 14,
+      borderRadius: 20,
+      background: theme.cardBg,
+      border: `1px solid ${theme.cardBorder}`,
+      display: 'grid',
+      gap: 8,
+      overflow: 'hidden',
+      minWidth: 0,
+    }}
+    >
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>{title}</div>
         {legendShoes.length ? (
@@ -520,7 +1161,7 @@ export function ShoeLollipopChart({
           </div>
         ) : null}
       </div>
-      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: h, display: 'block' }}>
+      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: h, display: 'block', maxWidth: '100%' }}>
         {rows.map((item, i) => {
           const color = getShoeColor(item.shoeId, accent || theme.blue);
           const y = 18 + i * rowH;
@@ -534,10 +1175,15 @@ export function ShoeLollipopChart({
               <line x1={left} x2={right} y1={y} y2={y} stroke={theme.cardBorder} strokeWidth="2" />
               <line x1={left} x2={x} y1={y} y2={y} stroke={color} strokeWidth="2.8" />
               <circle cx={x} cy={y} r="6.5" fill={color} stroke={theme.cardBg} strokeWidth="2" />
-              <text x={left} y={y - 9} fill={theme.textHeading} fontSize="10" fontWeight="700">
-                {String(item.label || '').slice(0, 28)}
+              <text x={left} y={y - (item.sub ? 10 : 9)} fill={theme.textHeading} fontSize="10" fontWeight="700">
+                {String(item.label || '').slice(0, 32)}
               </text>
-              <text x={right + 8} y={y + 3} fill={color} fontSize="11" fontWeight="800">
+              {item.sub ? (
+                <text x={left} y={y + 2} fill={theme.textMuted} fontSize="9" fontWeight="600">
+                  {String(item.sub).slice(0, 36)}
+                </text>
+              ) : null}
+              <text x={right + 8} y={y + (item.sub ? 2 : 3)} fill={color} fontSize="11" fontWeight="800">
                 {valueFmt ? valueFmt(item.value) : item.value}
               </text>
             </g>

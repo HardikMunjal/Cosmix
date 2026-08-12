@@ -6,6 +6,7 @@ import { useTheme } from '../../lib/ThemePicker';
 import { RunRouteMap } from '../../lib/RunRouteMap';
 import { isWellnessApiReady, wellnessApiUrl } from '../../lib/runningShoes';
 import { ShareRunButton } from '../../lib/PersonalRecordModal';
+import { hrEffortColor, hrZoneForBpm } from '../../lib/hrZones';
 
 function fmtDate(dateStr) {
   if (!dateStr) return '--';
@@ -28,17 +29,19 @@ function fmtMins(mins) {
   return h > 0 ? `${h}h ${m}m` : `${m} min`;
 }
 
-/** Light red → deep red by effort vs max HR (or absolute bpm). */
+function resolveAthleteMaxHr(activityMaxHr) {
+  const peak = Number(activityMaxHr) || 0;
+  if (peak >= 185) return peak;
+  return Math.max(190, peak);
+}
+
+function hrZoneGifSrc(zone) {
+  const id = Math.max(1, Math.min(5, Number(zone?.id) || 1));
+  return `/icons/hr-zones/z${id}.gif`;
+}
+
 function hrColor(bpm, maxHr = 190) {
-  const value = Number(bpm) || 0;
-  if (value <= 0) return '#94a3b8';
-  const ceiling = Math.max(140, Number(maxHr) || 190);
-  const ratio = Math.min(1, Math.max(0, value / ceiling));
-  if (ratio < 0.6) return '#fda4af';
-  if (ratio < 0.7) return '#fb7185';
-  if (ratio < 0.8) return '#f43f5e';
-  if (ratio < 0.9) return '#e11d48';
-  return '#9f1239';
+  return hrEffortColor(bpm, resolveAthleteMaxHr(maxHr));
 }
 
 function weatherTheme(code) {
@@ -330,7 +333,7 @@ export default function RunDetailPage() {
   const splits = detail?.splits || [];
   const zones = detail?.heartrateZones || summary.heartrateZones || [];
   const fuelBurn = detail?.fuelBurn || summary.fuelBurn || null;
-  const maxHrRef = summary.maxHeartrate || 190;
+  const maxHrRef = resolveAthleteMaxHr(summary.maxHeartrate || 0);
 
   useEffect(() => {
     let cancelled = false;
@@ -590,45 +593,73 @@ export default function RunDetailPage() {
                 <div>
                   <div style={{
                     display: 'grid',
-                    gridTemplateColumns: '40px 1fr 1fr 1fr',
-                    gap: 8,
+                    gridTemplateColumns: '28px 0.85fr 1.1fr 1fr 1.15fr',
+                    gap: 6,
                     padding: '8px 16px',
                     fontSize: 10,
                     fontWeight: 800,
                     textTransform: 'uppercase',
-                    letterSpacing: '0.08em',
+                    letterSpacing: '0.06em',
                     color: theme.textMuted,
                   }}
                   >
-                    <span>Km</span>
-                    <span>Pace</span>
+                    <span />
                     <span>Time</span>
-                    <span>Avg HR</span>
+                    <span>Pace</span>
+                    <span>Heart Rate</span>
+                    <span>Zone</span>
                   </div>
-                  {splits.map((split) => (
-                    <div
-                      key={split.km}
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: '40px 1fr 1fr 1fr',
-                        gap: 8,
-                        padding: '11px 16px',
-                        borderTop: `1px solid ${theme.cardBorder}`,
-                        fontSize: 13,
-                        alignItems: 'center',
-                        background: summary?.bestSplitKm === split.km && summary?.bestSplitPaceMinPerKm === split.paceMinPerKm
-                          ? `${theme.cyan}14`
-                          : 'transparent',
-                      }}
-                    >
-                      <span style={{ fontWeight: 800, color: theme.orange }}>{split.km}</span>
-                      <span style={{ fontWeight: 700, color: theme.cyan }}>{fmtPace(split.paceMinPerKm)}</span>
-                      <span style={{ fontWeight: 700, color: theme.textHeading }}>
-                        {`${Math.floor((Number(split.seconds) || 0) / 60)}:${String(Math.round((Number(split.seconds) || 0) % 60)).padStart(2, '0')}`}
-                      </span>
-                      <span style={{ fontWeight: 800, color: hrColor(split.avgHeartrate, maxHrRef) }}>{split.avgHeartrate ? `${split.avgHeartrate}` : '--'}</span>
-                    </div>
-                  ))}
+                  {splits.map((split) => {
+                    const zone = Number(split.avgHeartrate) > 0
+                      ? hrZoneForBpm(split.avgHeartrate, maxHrRef)
+                      : null;
+                    return (
+                      <div
+                        key={split.km}
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: '28px 0.85fr 1.1fr 1fr 1.15fr',
+                          gap: 6,
+                          padding: '11px 16px',
+                          borderTop: `1px solid ${theme.cardBorder}`,
+                          fontSize: 13,
+                          alignItems: 'center',
+                          background: summary?.bestSplitKm === split.km && summary?.bestSplitPaceMinPerKm === split.paceMinPerKm
+                            ? `${theme.cyan}14`
+                            : 'transparent',
+                        }}
+                      >
+                        <span style={{ fontWeight: 700, color: '#94a3b8' }}>{split.km}</span>
+                        <span style={{ fontWeight: 700, color: '#d4b84a' }}>
+                          {`${Math.floor((Number(split.seconds) || 0) / 60)}:${String(Math.round((Number(split.seconds) || 0) % 60)).padStart(2, '0')}`}
+                        </span>
+                        <span style={{ fontWeight: 700, color: '#5ec8d4' }}>{fmtPace(split.paceMinPerKm)} /km</span>
+                        <span style={{
+                          fontWeight: 800,
+                          color: '#e07a5a',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 6,
+                        }}
+                        >
+                          {zone ? (
+                            <img
+                              src={hrZoneGifSrc(zone)}
+                              alt={zone.label}
+                              title={`${zone.short} · ${zone.label}`}
+                              width={18}
+                              height={18}
+                              style={{ display: 'block', flexShrink: 0 }}
+                            />
+                          ) : null}
+                          {split.avgHeartrate ? `${split.avgHeartrate} bpm` : '--'}
+                        </span>
+                        <span style={{ fontWeight: 700, color: '#86efac', fontSize: 12, lineHeight: 1.25 }}>
+                          {zone ? `${zone.short} · ${zone.label}` : '--'}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               ) : (
                 <div style={{ padding: 16, color: theme.textMuted, fontSize: 13 }}>

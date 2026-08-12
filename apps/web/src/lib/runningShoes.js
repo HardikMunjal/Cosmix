@@ -246,111 +246,91 @@ export function computeShoeStats(entries = [], shoes = []) {
     });
 }
 
-function raceBand(distanceKm) {
-  const d = Number(distanceKm || 0);
-  if (d >= 4.5 && d < 7.5) return '5km';
-  if (d >= 8.5 && d < 12.5) return '10km';
-  if (d >= 18 && d < 23) return '20km';
-  return null;
+function shoeLabelForRow(row, shoeMap) {
+  if (!row.shoeId) return 'Untagged';
+  const shoe = shoeMap.get(row.shoeId);
+  return shoe ? getRunningShoeLabel(shoe) : 'Unknown shoe';
 }
 
-/** Top individual runs for shoe charts (same shoe can appear many times). Untagged excluded. */
-export function computeShoeLeaderboards(entries = [], shoes = []) {
+function mapRunRow(row, shoeMap) {
+  const shoeId = String(row.shoeId || '').trim();
+  const avgSpeed = Number(row.avgSpeedKmh || 0)
+    || (row.minutes > 0 ? row.distance / (row.minutes / 60) : 0);
+  const hr = Number(row.avgHeartrate || 0) || null;
+  return {
+    id: row.stravaId || `${row.date}-${row.distance}-${shoeId}`,
+    date: row.date,
+    distance: Number(row.distance),
+    speed: Number(Number(avgSpeed).toFixed(2)),
+    avgHeartrate: hr,
+    shoeId,
+    shoeLabel: shoeLabelForRow({ shoeId }, shoeMap),
+    shoeColor: shoeId ? getShoeColor(shoeId, '#94a3b8') : '#64748b',
+  };
+}
+
+/** Top-10 run boards — distance, HR and speed bands at 5 km+ / 10 km+. */
+export function computeRunLeaderboards(entries = [], shoes = [], limit = 5) {
   const shoeMap = new Map((shoes || []).map((shoe) => [shoe.id, shoe]));
   const rows = buildRunningRows(entries)
-    .filter((row) => row.shoeId && shoeMap.has(row.shoeId) && Number(row.distance || 0) > 0)
-    .map((row) => {
-      const shoe = shoeMap.get(row.shoeId);
-      const label = getRunningShoeLabel(shoe);
-      // Prefer true 1 km split speed over GPS max/avg spikes.
-      const splitSpeed = Number(row.bestSplitPaceMinPerKm) > 0
-        ? Number((60 / Number(row.bestSplitPaceMinPerKm)).toFixed(2))
-        : null;
-      const speed = splitSpeed
-        || Number(row.avgSpeedKmh || 0)
-        || (row.minutes > 0 ? (row.distance / (row.minutes / 60)) : 0);
-      const avgSpeed = Number(row.avgSpeedKmh || 0) || (row.minutes > 0 ? (row.distance / (row.minutes / 60)) : 0);
-      return {
-        id: row.stravaId || `${row.date}-${row.distance}-${row.shoeId}`,
-        date: row.date,
-        shoeId: row.shoeId,
-        shoeLabel: label,
-        label: `${Number(row.distance).toFixed(1)} km · ${label}`,
-        distance: Number(row.distance),
-        speed: Number(Number(speed).toFixed(2)),
-        splitSpeed,
-        avgSpeed: Number(avgSpeed.toFixed(2)),
-        avgHeartrate: row.avgHeartrate || null,
-        bestSplitPace: row.bestSplitPaceMinPerKm || null,
-        band: raceBand(row.distance),
-      };
-    });
+    .filter((row) => row.distance > 0 && row.minutes > 0)
+    .map((row) => mapRunRow(row, shoeMap));
 
-  const rank = (items, key, desc = true, limit = 8) => [...items]
+  const rank = (items, key, desc = true) => [...items]
     .filter((item) => item[key] != null && Number(item[key]) > 0)
     .sort((a, b) => (desc ? Number(b[key]) - Number(a[key]) : Number(a[key]) - Number(b[key])))
     .slice(0, limit);
 
-  const bandRows = (band) => rows.filter((row) => row.band === band);
-  const splitRows = rows.filter((row) => Number(row.bestSplitPace) > 0 || Number(row.splitSpeed) > 0);
+  const minDist = (km) => rows.filter((row) => row.distance >= km);
+  const withHr = (items) => items.filter((row) => Number(row.avgHeartrate) > 0);
 
   return {
-    topSpeed: rank(splitRows.length ? splitRows : rows, splitRows.length ? 'splitSpeed' : 'speed', true).map((r) => ({
-      ...r,
-      label: `${r.splitSpeed || r.speed} km/h · ${r.shoeLabel}`,
-      value: r.splitSpeed || r.speed,
-      sub: r.bestSplitPace
-        ? `Best 1 km · ${Math.floor(r.bestSplitPace)}:${String(Math.round((r.bestSplitPace % 1) * 60)).padStart(2, '0')} /km`
-        : `${r.distance.toFixed(1)} km avg`,
-    })),
-    topKm: rank(rows, 'distance', true).map((r) => ({
+    topDistance: rank(rows, 'distance', true),
+    bestHr5: rank(withHr(minDist(5)), 'avgHeartrate', false),
+    bestHr10: rank(withHr(minDist(10)), 'avgHeartrate', false),
+    bestSpeed5: rank(minDist(5), 'speed', true),
+    bestSpeed10: rank(minDist(10), 'speed', true),
+  };
+}
+
+/** @deprecated use computeRunLeaderboards */
+export function computeShoeLeaderboards(entries = [], shoes = []) {
+  const boards = computeRunLeaderboards(entries, shoes, 8);
+  return {
+    topKm: boards.topDistance.map((r) => ({
       ...r,
       label: `${r.distance.toFixed(1)} km · ${r.shoeLabel}`,
       value: r.distance,
       sub: r.avgHeartrate ? `${r.avgHeartrate} bpm` : (r.date || ''),
     })),
-    topSplit: rank(rows, 'bestSplitPace', false).map((r) => ({
-      ...r,
-      label: `${r.shoeLabel}`,
-      value: r.bestSplitPace,
-      sub: `${r.distance.toFixed(1)} km · ${r.date || ''}`,
-    })),
-    avgHr5: rank(bandRows('5km'), 'avgHeartrate', true).map((r) => ({
+    topSpeed: [],
+    topSplit: [],
+    avgHr5: boards.bestHr5.map((r) => ({
       ...r,
       label: `${r.distance.toFixed(1)} km · ${r.shoeLabel}`,
       value: r.avgHeartrate,
       sub: r.date,
     })),
-    avgHr10: rank(bandRows('10km'), 'avgHeartrate', true).map((r) => ({
+    avgHr10: boards.bestHr10.map((r) => ({
       ...r,
       label: `${r.distance.toFixed(1)} km · ${r.shoeLabel}`,
       value: r.avgHeartrate,
       sub: r.date,
     })),
-    avgHr20: rank(bandRows('20km'), 'avgHeartrate', true).map((r) => ({
+    avgHr20: [],
+    avgSpeed5: boards.bestSpeed5.map((r) => ({
       ...r,
       label: `${r.distance.toFixed(1)} km · ${r.shoeLabel}`,
-      value: r.avgHeartrate,
+      value: r.speed,
       sub: r.date,
     })),
-    avgSpeed5: rank(bandRows('5km'), 'avgSpeed', true).map((r) => ({
+    avgSpeed10: boards.bestSpeed10.map((r) => ({
       ...r,
       label: `${r.distance.toFixed(1)} km · ${r.shoeLabel}`,
-      value: r.avgSpeed,
+      value: r.speed,
       sub: r.date,
     })),
-    avgSpeed10: rank(bandRows('10km'), 'avgSpeed', true).map((r) => ({
-      ...r,
-      label: `${r.distance.toFixed(1)} km · ${r.shoeLabel}`,
-      value: r.avgSpeed,
-      sub: r.date,
-    })),
-    avgSpeed20: rank(bandRows('20km'), 'avgSpeed', true).map((r) => ({
-      ...r,
-      label: `${r.distance.toFixed(1)} km · ${r.shoeLabel}`,
-      value: r.avgSpeed,
-      sub: r.date,
-    })),
+    avgSpeed20: [],
   };
 }
 

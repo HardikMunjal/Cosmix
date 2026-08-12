@@ -1,34 +1,74 @@
 import { useEffect, useId, useMemo, useState } from 'react';
-import { buildQuickGuideFromEngine, parseMarkdownSections } from './advancedCoachEngine';
+import { buildQuickGuideFromEngine, buildAdvancedCoachPayload, parseMarkdownSections, localAdvancedReply } from './advancedCoachEngine';
+
+function readinessTone(percent) {
+  const p = Math.max(0, Math.min(100, Number(percent) || 0));
+  const stops = [
+    { at: 28, color: '#fb7185' },
+    { at: 48, color: '#fb923c' },
+    { at: 58, color: '#fbbf24' },
+    { at: 68, color: '#38bdf8' },
+    { at: 78, color: '#2dd4bf' },
+    { at: 88, color: '#34d399' },
+    { at: 98, color: '#22c55e' },
+  ];
+  if (p <= stops[0].at) return stops[0].color;
+  if (p >= stops[stops.length - 1].at) return stops[stops.length - 1].color;
+  for (let i = 0; i < stops.length - 1; i += 1) {
+    const a = stops[i];
+    const b = stops[i + 1];
+    if (p >= a.at && p <= b.at) {
+      const t = (p - a.at) / (b.at - a.at);
+      const parse = (hex) => {
+        const h = hex.slice(1);
+        return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+      };
+      const [ar, ag, ab] = parse(a.color);
+      const [br, bg, bb] = parse(b.color);
+      const toHex = (n) => n.toString(16).padStart(2, '0');
+      return `#${toHex(Math.round(ar + (br - ar) * t))}${toHex(Math.round(ag + (bg - ag) * t))}${toHex(Math.round(ab + (bb - ab) * t))}`;
+    }
+  }
+  return stops[stops.length - 1].color;
+}
+
+function readinessLabel(percent) {
+  if (percent >= 88) return 'Prime';
+  if (percent >= 78) return 'Ready';
+  if (percent >= 65) return 'Good';
+  if (percent >= 50) return 'Recovering';
+  return 'Rest first';
+}
 
 function BodyReadinessMeter({ readiness, fallbackPct = 70, gradId }) {
   const percent = Math.max(
     0,
     Math.min(100, Math.round(Number(readiness?.percent ?? fallbackPct) || 70)),
   );
-  const label = readiness?.label || (percent >= 85 ? 'Ready' : percent >= 65 ? 'Good' : 'Recovering');
-  const color = readiness?.color || '#34d399';
+  const label = readiness?.label || readinessLabel(percent);
+  const color = readiness?.color || readinessTone(percent);
+  const glow = readinessTone(Math.min(100, percent + 8));
   const why = readiness?.why || 'How ready your body is to train hard today.';
-  const radius = 52;
+  const radius = 46;
   const circ = 2 * Math.PI * radius;
   const offset = circ * (1 - percent / 100);
 
   return (
     <div
       className="coach-ready"
-      style={{ '--ready-color': color }}
+      style={{ '--ready-color': color, '--ready-glow': glow }}
       aria-label={`Body readiness ${percent} percent — ${label}`}
     >
       <div className="coach-ready-ring-wrap">
         <svg className="coach-ready-ring" viewBox="0 0 120 120" aria-hidden="true">
           <defs>
             <linearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stopColor={color} stopOpacity="0.35" />
+              <stop offset="0%" stopColor={color} stopOpacity="0.45" />
               <stop offset="55%" stopColor={color} />
-              <stop offset="100%" stopColor="#67e8f9" stopOpacity="0.85" />
+              <stop offset="100%" stopColor={glow} />
             </linearGradient>
-            <filter id={`${gradId}-glow`} x="-40%" y="-40%" width="180%" height="180%">
-              <feGaussianBlur stdDeviation="2.4" result="b" />
+            <filter id={`${gradId}-glow`} x="-25%" y="-25%" width="150%" height="150%">
+              <feGaussianBlur stdDeviation="1.6" result="b" />
               <feMerge>
                 <feMergeNode in="b" />
                 <feMergeNode in="SourceGraphic" />
@@ -48,8 +88,10 @@ function BodyReadinessMeter({ readiness, fallbackPct = 70, gradId }) {
           />
         </svg>
         <div className="coach-ready-core">
-          <strong className="coach-ready-num">{percent}</strong>
-          <span className="coach-ready-unit">%</span>
+          <div className="coach-ready-score">
+            <strong className="coach-ready-num">{percent}</strong>
+            <span className="coach-ready-unit">%</span>
+          </div>
         </div>
       </div>
       <div className="coach-ready-copy">
@@ -77,10 +119,10 @@ function ProtocolStep({ index, label, value }) {
 }
 
 const ASK_CHIPS = [
+  'How was my last run? How can I improve?',
+  'When should I slow down vs push pace?',
   'What should I eat before my 6am run?',
-  'How do I improve speed safely?',
   'My HR spikes mid-run — what do I do?',
-  'How do I stay in fat-burning zone?',
 ];
 
 function serializeRuns(runRows = []) {
@@ -133,15 +175,32 @@ function AdvancedCoachPanel({ tip, runRows = [] }) {
     });
   };
 
+  const runLocal = (prompt) => {
+    const payload = buildAdvancedCoachPayload({
+      runRows: serializeRuns(runRows),
+      ask: prompt,
+      tip,
+    });
+    applyResult({
+      ...payload,
+      provider: 'local',
+      reply: localAdvancedReply(payload),
+    });
+  };
+
   const run = async (prompt) => {
+    const question = String(prompt || ask || '').trim()
+      || 'How was my last run and how can I improve?';
+    setAsk(question);
     setLoading(true);
     setError('');
+    runLocal(question);
     try {
       const res = await fetch('/api/coach/advanced', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ask: prompt || ask,
+          ask: question,
           tip,
           runRows: serializeRuns(runRows),
         }),
@@ -150,7 +209,7 @@ function AdvancedCoachPanel({ tip, runRows = [] }) {
       if (!res.ok) throw new Error(data.error || 'Coach request failed');
       applyResult(data);
     } catch (err) {
-      setError(err.message || 'Could not load advanced coach');
+      setError(err.message || 'Could not reach coach API — showing local analysis.');
     } finally {
       setLoading(false);
     }
@@ -164,13 +223,18 @@ function AdvancedCoachPanel({ tip, runRows = [] }) {
   );
 
   useEffect(() => {
-    if (!runRows?.length) return undefined;
+    if (!runRows?.length) {
+      runLocal('How was my last run and how can I improve?');
+      return undefined;
+    }
     let cancelled = false;
     setLoading(true);
+    const question = 'How was my last run and how can I improve?';
+    runLocal(question);
     fetch('/api/coach/advanced', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ask: '', tip, runRows: serializeRuns(runRows) }),
+      body: JSON.stringify({ ask: question, tip, runRows: serializeRuns(runRows) }),
     })
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
@@ -200,7 +264,7 @@ function AdvancedCoachPanel({ tip, runRows = [] }) {
           className="coach-ask-input"
           value={ask}
           onChange={(e) => setAsk(e.target.value)}
-          placeholder="Ask anything — food, speed, HR spikes…"
+          placeholder="Ask anything — last run, pace, HR, food…"
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !loading) run(ask);
           }}
@@ -210,6 +274,9 @@ function AdvancedCoachPanel({ tip, runRows = [] }) {
         </button>
       </div>
       {error ? <div className="coach-advanced-error">{error}</div> : null}
+      {loading && !(result?.sections?.length) ? (
+        <div className="coach-advanced-intro">Analyzing your runs…</div>
+      ) : null}
       <CoachSections
         sections={result?.sections || []}
         provider={result?.provider}

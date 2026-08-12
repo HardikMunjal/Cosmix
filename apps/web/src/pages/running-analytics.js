@@ -8,7 +8,7 @@ import { computeRunningStats, computeWellnessStats, buildWellnessSummary } from 
 import { formatStravaSyncMessage, runStravaAutoSync } from '../lib/stravaAutoSync';
 import {
   buildRunningRows,
-  computeShoeLeaderboards,
+  computeRunLeaderboards,
   computeShoeStats,
   createRunningShoeId,
   getRunningShoeLabel,
@@ -20,7 +20,16 @@ import {
   syncRunningShoesToServer,
   wellnessApiUrl,
 } from '../lib/runningShoes';
-import { DepthMetric, GlowTrend, DepthBars, DepthHBars, ShoeMixChart, ShoeLollipopChart, ShoeHrLadder, ShoeSpeedColumns } from '../lib/RunningModernCharts';
+import {
+  DepthMetric,
+  RunTrendChart,
+  RunLeaderboard,
+  TopDistanceRuns,
+  buildRunTrendBuckets,
+  DepthHBars,
+  ShoeMixChart,
+  CHART_SOFT,
+} from '../lib/RunningModernCharts';
 import { loadRunningSurfaceId, saveRunningSurfaceId, mergeRunningSurface } from '../lib/runningThemes';
 import { buildMarathonReadiness, loadMarathonGoal } from '../lib/marathonReadiness';
 import { buildTrainingTip } from '../lib/trainingTip';
@@ -187,7 +196,6 @@ function HeartRateDashboard({ hrDashboard, theme, onOpenRun }) {
           theme={theme}
         />
       </div>
-      <HeartRateSparkline runs={hrDashboard.hrRuns} theme={theme} />
       {(hrDashboard.zones || []).length ? (
         <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 18, padding: 14, display: 'grid', gap: 10 }}>
           <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>Time in HR zones</div>
@@ -975,7 +983,7 @@ function ShoeLeaderBars({ title, items = [], theme, accent, valueFmt }) {
 
 function ShoeStatsSection({ entries, shoes, theme, onAssignShoes }) {
   const shoeStats = useMemo(() => computeShoeStats(entries, shoes), [entries, shoes]);
-  const boards = useMemo(() => computeShoeLeaderboards(entries, shoes), [entries, shoes]);
+  const topDistance = useMemo(() => computeRunLeaderboards(entries, shoes, 5).topDistance, [entries, shoes]);
   const untagged = shoeStats.filter((row) => !row.shoeId);
   const unknown = shoeStats.filter((row) => row.shoeId && !(shoes || []).some((shoe) => shoe.id === row.shoeId));
   if (!shoeStats.length) {
@@ -1025,48 +1033,12 @@ function ShoeStatsSection({ entries, shoes, theme, onAssignShoes }) {
         </div>
       ) : null}
       <ShoeMixChart shoeStats={shoeStats.filter((row) => row.shoeId)} theme={theme} />
-      <div style={{ display: 'grid', gap: 10 }}>
-        <ShoeLollipopChart
-          title="Top distance runs"
-          theme={theme}
-          items={boards.topKm}
-          valueFmt={(v) => `${Number(v).toFixed(1)} km`}
-        />
-        <ShoeLollipopChart
-          title="Top speed · best 1 km split"
-          theme={theme}
-          items={boards.topSpeed}
-          valueFmt={(v) => `${v} km/h`}
-        />
-        <ShoeLollipopChart
-          title="Fastest 1 km splits"
-          theme={theme}
-          items={boards.topSplit}
-          invert
-          valueFmt={(v) => fmtPace(v)}
-        />
-        <ShoeHrLadder
-          title="HR ladder · ~5 km races"
-          theme={theme}
-          items={boards.avgHr5}
-          valueFmt={(v) => `${Math.round(v)} bpm`}
-        />
-        <ShoeHrLadder
-          title="HR ladder · ~10 / 20 km"
-          theme={theme}
-          items={[...(boards.avgHr10 || []), ...(boards.avgHr20 || [])].slice(0, 8)}
-          valueFmt={(v) => `${Math.round(v)} bpm`}
-        />
-        <ShoeSpeedColumns
-          title="Avg speed by race band"
-          theme={theme}
-          bands={[
-            { label: '5 km', items: boards.avgSpeed5 || [] },
-            { label: '10 km', items: boards.avgSpeed10 || [] },
-            { label: '20 km', items: boards.avgSpeed20 || [] },
-          ]}
-        />
-      </div>
+      <TopDistanceRuns
+        title="Top distance runs"
+        rows={topDistance}
+        theme={theme}
+        limit={5}
+      />
       <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10, minWidth: 0 }}>
         <DepthHBars
           title="Runs per shoe"
@@ -1325,54 +1297,30 @@ function RunningTab({
     }
   };
 
-  const paceTrendPoints = useMemo(() => {
-    return [...(runRows || [])]
-      .filter((r) => r.distance > 0 && r.minutes > 0)
-      .sort((a, b) => String(a.date).localeCompare(String(b.date)))
-      .slice(-10)
-      .map((r) => ({
-        label: String(r.date).slice(5),
-        y: Number((r.minutes / r.distance).toFixed(2)),
-        hr: Number(r.avgHeartrate || r.avgHeartRate || 0) || null,
-        maxHr: Number(r.maxHeartrate || r.maxHeartRate || 0) || null,
-      }));
-  }, [runRows]);
+  const paceTrend = useMemo(() => buildRunTrendBuckets(runRows, (r) => (
+    r.distance > 0 && r.minutes > 0 ? r.minutes / r.distance : 0
+  )), [runRows]);
 
-  const speedTrendPoints = useMemo(() => {
-    return [...(runRows || [])]
-      .filter((r) => r.distance > 0 && r.minutes > 0)
-      .sort((a, b) => String(a.date).localeCompare(String(b.date)))
-      .slice(-10)
-      .map((r) => ({
-        label: String(r.date).slice(5),
-        y: Number((r.distance / (r.minutes / 60)).toFixed(2)),
-      }));
-  }, [runRows]);
+  const hrTrend = useMemo(() => buildRunTrendBuckets(runRows, (r) => (
+    Number(r.avgHeartrate || r.avgHeartRate || 0)
+  )), [runRows]);
 
-  const weeklyBars = useMemo(() => {
-    const weekMap = {};
-    (runRows || []).forEach((r) => {
-      const d = new Date(`${r.date}T00:00:00`);
-      const dayOfWeek = d.getDay();
-      const monday = new Date(d);
-      monday.setDate(d.getDate() - ((dayOfWeek + 6) % 7));
-      const key = monday.toISOString().slice(0, 10);
-      if (!weekMap[key]) weekMap[key] = 0;
-      weekMap[key] += Number(r.distance || 0);
-    });
-    return Object.entries(weekMap)
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .slice(-8)
-      .map(([week, km]) => ({ label: week.slice(5), value: Number(km.toFixed(1)) }));
-  }, [runRows]);
+  const paceTrendSubtitle = paceTrend.spanDays > 31
+    ? 'Weekly average · scales when over 1 month'
+    : paceTrend.bucketUnit === 'day'
+      ? 'Daily average · last runs'
+      : 'Per run';
 
-  const hrTrendPoints = useMemo(() => {
-    return (hrDashboard?.hrRuns || [])
-      .slice()
-      .reverse()
-      .slice(-10)
-      .map((r) => ({ label: String(r.date).slice(5), y: Number(r.avgHr) }));
-  }, [hrDashboard]);
+  const hrTrendSubtitle = hrTrend.spanDays > 31
+    ? 'Weekly average · scales when over 1 month'
+    : hrTrend.bucketUnit === 'day'
+      ? 'Daily average · last runs'
+      : 'Per run';
+
+  const runLeaderboards = useMemo(
+    () => computeRunLeaderboards(entries, runningShoes, 5),
+    [entries, runningShoes],
+  );
 
   return (
     <div style={{ display: 'grid', gap: '14px' }}>
@@ -1435,29 +1383,82 @@ function RunningTab({
       <CollapsibleBlock title="Trends" theme={theme} defaultOpen>
         <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
           <div className="run-dash-charts-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <GlowTrend
-              title="Recent runs · pace (min/km)"
-              subtitle="Last 10 runs overall · avg pace. Dot color = HR zone (not this-run splits)."
-              points={paceTrendPoints}
+            <RunTrendChart
+              title="Average pace"
+              subtitle={paceTrendSubtitle}
+              points={paceTrend.points}
+              overallAvg={paceTrend.overallAvg}
+              last10Avg={paceTrend.last10Avg}
               theme={theme}
-              accent={theme.cyan}
-              showHrZones
-              maxHr={hrDashboard?.maxHr}
-              valueFmt={(v) => fmtPace(Math.abs(v)).replace(' /km', '')}
+              accent={CHART_SOFT.cyan}
+              valueFmt={(v) => fmtPace(v).replace(' /km', '')}
+              invertY
+              lowerIsBetter
+              unitLabel="/km"
             />
-            <GlowTrend
-              title="Recent runs · speed (km/h)"
-              subtitle="Last 10 runs overall · avg speed."
-              points={speedTrendPoints}
+            <RunTrendChart
+              title="Average heart rate"
+              subtitle={hrTrendSubtitle}
+              points={hrTrend.points}
+              overallAvg={hrTrend.overallAvg}
+              last10Avg={hrTrend.last10Avg}
               theme={theme}
-              accent={theme.green}
-              valueFmt={(v) => `${Number(v).toFixed(2)}`}
+              accent={CHART_SOFT.hr}
+              valueFmt={(v) => `${Math.round(v)}`}
+              unitLabel=" bpm"
             />
           </div>
-          <DepthBars title="Weekly distance (km)" items={weeklyBars} theme={theme} accent={theme.orange} />
-          {hrTrendPoints.length >= 2 ? (
-            <GlowTrend title="Heart rate trend (avg bpm)" points={hrTrendPoints} theme={theme} accent="#f43f5e" valueFmt={(v) => `${Math.round(v)}`} />
-          ) : null}
+        </div>
+      </CollapsibleBlock>
+
+      <CollapsibleBlock title="Run rankings" theme={theme} defaultOpen>
+        <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
+          <div className="run-dash-charts-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <RunLeaderboard
+              title="Best HR · 5 km+"
+              subtitle="Lowest avg heart rate · runs ≥ 5 km"
+              rows={runLeaderboards.bestHr5}
+              theme={theme}
+              accent={CHART_SOFT.hr}
+              metricKey="avgHeartrate"
+              metricFmt={(v) => `${Math.round(v)} bpm`}
+              emptyText="Need runs ≥ 5 km with heart rate data."
+              limit={5}
+            />
+            <RunLeaderboard
+              title="Best HR · 10 km+"
+              subtitle="Lowest avg heart rate · runs ≥ 10 km"
+              rows={runLeaderboards.bestHr10}
+              theme={theme}
+              accent={CHART_SOFT.hrAlt}
+              metricKey="avgHeartrate"
+              metricFmt={(v) => `${Math.round(v)} bpm`}
+              emptyText="Need runs ≥ 10 km with heart rate data."
+              limit={5}
+            />
+            <RunLeaderboard
+              title="Best speed · 5 km+"
+              subtitle="Highest avg speed · runs ≥ 5 km"
+              rows={runLeaderboards.bestSpeed5}
+              theme={theme}
+              accent={CHART_SOFT.green}
+              metricKey="speed"
+              metricFmt={(v) => `${Number(v).toFixed(1)} km/h`}
+              emptyText="Need runs ≥ 5 km with pace data."
+              limit={5}
+            />
+            <RunLeaderboard
+              title="Best speed · 10 km+"
+              subtitle="Highest avg speed · runs ≥ 10 km"
+              rows={runLeaderboards.bestSpeed10}
+              theme={theme}
+              accent={CHART_SOFT.blue}
+              metricKey="speed"
+              metricFmt={(v) => `${Number(v).toFixed(1)} km/h`}
+              emptyText="Need runs ≥ 10 km with pace data."
+              limit={5}
+            />
+          </div>
         </div>
       </CollapsibleBlock>
 
