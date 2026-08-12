@@ -8,6 +8,7 @@ import {
   SAMPLE_EXECUTED_NIFTY_ORDERS,
   SAMPLE_POSITIONS_NIFTY,
 } from './zerodhaOrderImport';
+import { mergeLegsByContract, normalizeLotQty } from './strategyLegMath';
 
 const STRIKE_STEP = 50;
 const WING_DISTANCE = 500;
@@ -330,18 +331,23 @@ export function CreateStrategyWizard({
       const maps = refreshed?.maps || market?.maps || chainMap;
 
       nextLegIdRef.current = 1;
-      const built = parsed.legs.slice(0, MAX_LEGS).map((leg) => {
+      const builtRaw = parsed.legs.map((leg) => {
         const expiry = matchExpiryFromHint(leg.expiryHint, refreshed?.expiries || expiries) || refreshed?.expiry || selectedExpiry;
         const created = createLeg(getNextLegId(), leg.side, leg.optionType, leg.strike, maps, expiry);
         return {
           ...created,
-          quantity: Math.max(1, Number(leg.quantity) || 1),
+          quantity: normalizeLotQty(leg.quantity),
           premium: normalizePremium(leg.premium),
           marketPremium: normalizePremium(leg.premium),
           locked: true,
           expiry: expiry || null,
         };
       });
+      const built = mergeLegsByContract(builtRaw).slice(0, MAX_LEGS).map((leg, index) => ({
+        ...leg,
+        id: index + 1,
+      }));
+      nextLegIdRef.current = built.length + 1;
 
       setLegs(built);
       setTemplateId('broker-import');

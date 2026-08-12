@@ -19,6 +19,17 @@ import { LearningsTicker } from '../lib/LearningsTicker';
 import { MobileBottomNav } from '../lib/MobileNav';
 import { useTheme } from '../lib/ThemePicker';
 import { applyTheme } from '../lib/themes';
+import {
+  extractTextFromImage,
+  matchExpiryFromHint,
+  parseZerodhaOrdersText,
+} from '../lib/zerodhaOrderImport';
+import {
+  averagePremium,
+  mergeLegsByContract,
+  normalizeLotQty,
+  upsertLegIntoBook,
+} from '../lib/strategyLegMath';
 
 const FORMULA_BLEND_WEIGHTS = {
   blackScholes: 0.35,
@@ -510,7 +521,7 @@ function computeStrategyMetrics(legs = [], lotSize = 1, spotPrice = 0) {
     else lossZones.push(zone);
   }
 
-  const scenarioOffsets = [-2000, -1000, -500, 0, 500, 1000, 2000];
+  const scenarioOffsets = [-2000, -1000, -500, -200, -100, 0, 100, 200, 500, 1000, 2000];
   const scenarios = scenarioOffsets.map((offset) => {
     const spot = Math.max(0, Math.round((spotPrice || 0) + offset));
     const pnl = legs.reduce((sum, leg) => sum + legPayoffAtExpiry(leg, spot), 0) * lotSize;
@@ -1039,20 +1050,144 @@ function WhatIfScenarioGrid({ scenarios = [], styles, theme: t }) {
   );
 }
 
-function LegEditor({ draft, strategy, styles, theme: t, title, onFieldChange, onSave, onCancel }) {
+function LegEditor({
+  draft,
+  strategy,
+  styles,
+  theme: t,
+  title,
+  onFieldChange,
+  onSave,
+  onCancel,
+  onImportLegs = null,
+  importing = false,
+}) {
+  const fileInputRef = useRef(null);
+  const [importNote, setImportNote] = useState('');
+  const [importError, setImportError] = useState('');
   const strikeOptions = getLegCatalogOptions(strategy, draft.optionType);
   const selectedOption = getLegCatalogOption(strategy, draft.optionType, draft.strike, draft.expiry);
   const expiryOptions = getLegEditorExpiryOptions(strategy);
+  const lotSize = Number(strategy.lotSize) || 65;
+  const spot = Number(strategy.currentSpot || strategy.savedAtSpot || 0);
+
+  const preview = useMemo(() => {
+    const strike = Number(draft.strike);
+    const premium = Number(draft.premium);
+    const quantity = normalizeLotQty(draft.quantity);
+    const expiry = Number(draft.expiry || strategy.selectedExpiry || 0);
+    if (!strike || !premium) {
+      return {
+        metrics: computeStrategyMetrics(strategy.legs || [], lotSize, spot),
+        moveScenarios: [],
+        mergeHint: '',
+      };
+    }
+    const draftLeg = {
+      id: draft.legId != null ? draft.legId : 'preview',
+      side: draft.side,
+      optionType: draft.optionType,
+      expiry: Number.isFinite(expiry) && expiry > 0 ? expiry : null,
+      strike,
+      premium: normalizePremium(premium),
+      marketPremium: draft.marketPremium !== '' && draft.marketPremium != null
+        ? normalizePremium(draft.marketPremium)
+        : normalizePremium(premium),
+      quantity,
+      locked: false,
+    };
+    const { legs: nextLegs, merged } = upsertLegIntoBook(strategy.legs || [], draftLeg, {
+      editId: draft.legId,
+      fallbackExpiry: strategy.selectedExpiry,
+    });
+    const metrics = computeStrategyMetrics(nextLegs, lotSize, spot);
+    const highlightOffsets = [-200, -100, 0, 100, 200];
+    const moveScenarios = highlightOffsets.map((offset) => {
+      const moveSpot = Math.max(0, Math.round(spot + offset));
+      const value = nextLegs.reduce((sum, leg) => sum + legPayoffAtExpiry(leg, moveSpot), 0) * lotSize;
+      return { offset, spot: moveSpot, value: Number(value.toFixed(2)), isCurrent: offset === 0 };
+    });
+    let mergeHint = '';
+    if (draft.legId == null && merged) {
+      const match = (strategy.legs || []).find((leg) => (
+        String(leg.side).toUpperCase() === String(draft.side).toUpperCase()
+        && String(leg.optionType).toUpperCase() === String(draft.optionType).toUpperCase()
+        && Number(leg.strike) === strike
+        && Number(resolveLegExpiry(leg, strategy) || 0) === Number(expiry || 0)
+      ));
+      if (match) {
+        const oldQty = normalizeLotQty(match.quantity);
+        const avg = averagePremium(oldQty, match.premium, quantity, premium);
+        mergeHint = `Will merge into existing ${oldQty}L → ${oldQty + quantity}L @ avg ${avg.toFixed(2)}`;
+      }
+    }
+    return { metrics, moveScenarios, mergeHint };
+  }, [draft, strategy, lotSize, spot]);
+
+  const handleImportFile = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !onImportLegs) return;
+    setImportError('');
+    setImportNote('Reading screenshot…');
+    try {
+      const text = await extractTextFromImage(file);
+      if (!String(text || '').trim()) {
+        throw new Error('Could not read text from this image. Try a sharper crop or paste rows as text.');
+      }
+      const expiries = getLegEditorExpiryOptions(strategy);
+      const parsed = parseZerodhaOrdersText(text, { preferSymbol: 'NIFTY' });
+      if (!parsed.legs.length) {
+        throw new Error(parsed.warnings[0] || 'No Nifty positions or fills found in this screenshot.');
+      }
+      const built = parsed.legs.map((leg, index) => {
+        const expiry = matchExpiryFromHint(leg.expiryHint, expiries) || Number(strategy.selectedExpiry) || null;
+        return {
+          id: `import-${Date.now()}-${index}`,
+          side: leg.side,
+          optionType: leg.optionType,
+          strike: Number(leg.strike),
+          expiry,
+          quantity: normalizeLotQty(leg.quantity),
+          premium: normalizePremium(leg.premium),
+          marketPremium: normalizePremium(leg.premium),
+          locked: true,
+        };
+      });
+      await onImportLegs(built, parsed);
+      setImportNote(`Imported ${built.length} fill(s) and averaged matching contracts.`);
+    } catch (err) {
+      setImportError(err.message || 'Unable to import screenshot.');
+      setImportNote('');
+    }
+  };
 
   return (
     <div style={styles.legEditor} className="nifty-leg-editor">
       <div style={styles.legEditorHeaderRow}>
         <div>
           <div style={styles.legEditorTitle}>{title}</div>
-          <div style={styles.legEditorHint}>Choose from live strikes, then adjust the entry premium only if your fill was different.</div>
+          <div style={styles.legEditorHint}>
+            Same strike + side + expiry merges into one line with averaged entry. Partial closes supported on exit.
+          </div>
         </div>
-        <div style={styles.legEditorSpot}>Spot {Math.round(Number(strategy.currentSpot || strategy.savedAtSpot || 0)).toLocaleString('en-IN')}</div>
+        <div style={styles.legEditorSpot}>Spot {Math.round(spot).toLocaleString('en-IN')}</div>
       </div>
+      {onImportLegs ? (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importing}
+            style={{ ...styles.addLegInlineBtn, opacity: importing ? 0.6 : 1 }}
+          >
+            {importing ? 'Scanning…' : 'Upload Zerodha screenshot'}
+          </button>
+          <input ref={fileInputRef} type="file" accept="image/*" hidden onChange={handleImportFile} />
+          {importNote ? <span style={{ fontSize: 12, color: t.textSecondary }}>{importNote}</span> : null}
+          {importError ? <span style={{ fontSize: 12, color: t.red }}>{importError}</span> : null}
+        </div>
+      ) : null}
       <div style={styles.legEditorRow} className="nifty-leg-editor-row">
         <select value={draft.side} onChange={(e) => onFieldChange({ side: e.target.value })} style={styles.addLegSelect}>
           <option value="BUY">BUY</option>
@@ -1071,7 +1206,7 @@ function LegEditor({ draft, strategy, styles, theme: t, title, onFieldChange, on
         </select>
         <select value={draft.strike} onChange={(e) => onFieldChange({ strike: e.target.value })} style={{ ...styles.addLegSelect, minWidth: '190px' }}>
           {strikeOptions.map((entry) => (
-            <option key={`${draft.optionType}-${entry.strike}`} value={entry.strike}>
+            <option key={`${draft.optionType}-${entry.strike}-${entry.expiry || 'x'}`} value={entry.strike}>
               {entry.strike} {entry.premium != null ? `• Live ${entry.premium.toFixed(2)}` : '• No live premium'}
             </option>
           ))}
@@ -1091,6 +1226,31 @@ function LegEditor({ draft, strategy, styles, theme: t, title, onFieldChange, on
       <div style={styles.legEditorMeta}>
         <span>Live premium: <strong>{selectedOption?.premium != null ? Number(selectedOption.premium).toFixed(2) : '—'}</strong></span>
         <span>Current value: <strong>{draft.marketPremium !== undefined && draft.marketPremium !== '' ? Number(draft.marketPremium).toFixed(2) : (draft.premium !== undefined && draft.premium !== '' ? Number(draft.premium).toFixed(2) : '—')}</strong></span>
+        {preview.mergeHint ? <span style={{ color: t.cyan }}>{preview.mergeHint}</span> : null}
+      </div>
+      <div style={{ marginTop: 12, display: 'grid', gap: 10 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: t.textHeading }}>Updated P/L if Nifty moves</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8 }}>
+          {(preview.moveScenarios || []).map((scenario) => (
+            <div
+              key={`move-${scenario.offset}`}
+              style={{
+                ...styles.whatIfCard,
+                borderColor: scenario.isCurrent ? t.cyan : styles.whatIfCard.borderColor,
+                background: scenario.isCurrent ? `${t.cyan}12` : styles.whatIfCard.background,
+              }}
+            >
+              <div style={styles.whatIfTopRow}>
+                <div style={styles.whatIfSpot}>{scenario.offset === 0 ? 'Now' : `${scenario.offset > 0 ? '+' : ''}${scenario.offset}`}</div>
+              </div>
+              <div style={{ ...styles.whatIfValue, color: scenario.value >= 0 ? t.green : t.red, fontSize: 14 }}>
+                {formatCurrency(scenario.value)}
+              </div>
+            </div>
+          ))}
+        </div>
+        <ScenarioBarChart scenarios={preview.metrics?.scenarios || []} styles={styles} theme={t} />
+        <div style={styles.graphHint}>Preview after this add/edit — includes −200 / −100 / +100 / +200 point moves and expiry payoff bars.</div>
       </div>
       <div style={styles.addLegActions}>
         <button onClick={onSave} style={styles.closeLegConfirm}>{draft.legId != null ? 'Save Leg' : 'Add Leg'}</button>
@@ -1682,7 +1842,9 @@ export default function NiftyStrategiesPage() {
   const [lastRefreshAt, setLastRefreshAt] = useState(null);
   const [closingLegInfo, setClosingLegInfo] = useState(null);
   const [closePrice, setClosePrice] = useState('');
+  const [closeQuantity, setCloseQuantity] = useState('1');
   const [legEditor, setLegEditor] = useState(null);
+  const [legImporting, setLegImporting] = useState(false);
   const [closedExitEditor, setClosedExitEditor] = useState(null); // { strategyId, drafts, saving }
   const [usePastActionDate, setUsePastActionDate] = useState({});
   const [actionDateTimeByStrategy, setActionDateTimeByStrategy] = useState({});
@@ -2054,6 +2216,7 @@ export default function NiftyStrategiesPage() {
         learningModal.pendingCloseLeg.exitPrice,
         learningModal.actionTimestamp,
         learning,
+        learningModal.pendingCloseLeg.closeQty,
       );
     } else {
       updateStrategyStatus(learningModal.strategyId, 'closed', learningModal.actionTimestamp, learning);
@@ -2115,13 +2278,14 @@ export default function NiftyStrategiesPage() {
     } catch (e) { alert(e.message); }
   };
 
-  const closeLeg = async (strategyId, legId, exitPrice, actionTimestamp = null, learning = null) => {
+  const closeLeg = async (strategyId, legId, exitPrice, actionTimestamp = null, learning = null, closeQtyInput = null) => {
     const strategy = savedStrategies.find((s) => s.id === strategyId);
     if (!strategy) return;
     const leg = (strategy.legs || []).find((l) => l.id === legId);
     if (!leg) return;
     const eventTimestamp = actionTimestamp || new Date().toISOString();
-    const qty = Math.max(1, parseInt(leg.quantity || 1, 10) || 1);
+    const openQty = Math.max(1, parseInt(leg.quantity || 1, 10) || 1);
+    const qty = Math.min(openQty, Math.max(1, parseInt(closeQtyInput ?? openQty, 10) || 1));
     const entry = Number(leg.premium) || 0;
     const exit = Number(exitPrice) || 0;
     const lotSize = Number(strategy.lotSize) || 65;
@@ -2134,11 +2298,18 @@ export default function NiftyStrategiesPage() {
       quantity: qty, entryPremium: entry, exitPremium: exit, pnl,
       closedAt: eventTimestamp,
     };
-    const remainingLegs = strategy.legs.filter((l) => l.id !== legId);
+    const remainingQty = openQty - qty;
+    const remainingLegs = remainingQty > 0
+      ? (strategy.legs || []).map((entryLeg) => (
+        Number(entryLeg.id) === Number(legId)
+          ? { ...entryLeg, quantity: remainingQty }
+          : entryLeg
+      ))
+      : (strategy.legs || []).filter((l) => l.id !== legId);
     const transaction = {
       type: 'CLOSE',
       legId: leg.id,
-      description: `Closed ${leg.side} ${qty}L ${leg.optionType} ${leg.strike} ${formatExpiryDisplay(resolveLegExpiry(leg, strategy))} @ ${exit.toFixed(2)} → P/L ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}`,
+      description: `${remainingQty > 0 ? 'Partial close' : 'Closed'} ${leg.side} ${qty}L${remainingQty > 0 ? ` (left ${remainingQty}L)` : ''} ${leg.optionType} ${leg.strike} ${formatExpiryDisplay(resolveLegExpiry(leg, strategy))} @ ${exit.toFixed(2)} → P/L ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}`,
       amount: pnl,
       timestamp: eventTimestamp,
     };
@@ -2164,6 +2335,7 @@ export default function NiftyStrategiesPage() {
       setSavedStrategies(enriched);
       setClosingLegInfo(null);
       setClosePrice('');
+      setCloseQuantity('1');
     } catch (e) { alert(e.message); }
   };
 
@@ -2237,19 +2409,25 @@ export default function NiftyStrategiesPage() {
     }
   };
 
-  const requestLegClose = (strategy, leg, exitPrice) => {
+  const requestLegClose = (strategy, leg, exitPrice, closeQtyInput = null) => {
     const actionTimestamp = getActionTimestamp(strategy.id);
-    const remainingLegs = (strategy.legs || []).filter((entry) => entry.id !== leg.id);
-    if (!remainingLegs.length) {
-      openLearningModal(strategy.id, actionTimestamp, { legId: leg.id, exitPrice });
+    const openQty = Math.max(1, parseInt(leg.quantity || 1, 10) || 1);
+    const qty = Math.min(openQty, Math.max(1, parseInt(closeQtyInput ?? openQty, 10) || 1));
+    const remainingOnLeg = openQty - qty;
+    const remainingLegsAfter = remainingOnLeg > 0
+      ? (strategy.legs || [])
+      : (strategy.legs || []).filter((entry) => entry.id !== leg.id);
+    if (!remainingLegsAfter.length) {
+      openLearningModal(strategy.id, actionTimestamp, { legId: leg.id, exitPrice, closeQty: qty });
       return;
     }
-    closeLeg(strategy.id, leg.id, exitPrice, actionTimestamp);
+    closeLeg(strategy.id, leg.id, exitPrice, actionTimestamp, null, qty);
   };
 
   const openLegEditor = (strategy, leg = null) => {
     setClosingLegInfo(null);
     setClosePrice('');
+    setCloseQuantity('1');
     setLegEditor(buildLegEditorDraft(strategy, leg));
   };
 
@@ -2289,7 +2467,7 @@ export default function NiftyStrategiesPage() {
     const strike = Number(legEditor.strike);
     const expiry = Number(legEditor.expiry || strategy.selectedExpiry || 0);
     const premium = Number(legEditor.premium);
-    const quantity = Math.max(1, parseInt(legEditor.quantity || 1, 10) || 1);
+    const quantity = normalizeLotQty(legEditor.quantity);
     if (!strike || !premium) { alert('Pick a strike and valid premium'); return; }
 
     const selectedOption = getLegCatalogOption(strategy, legEditor.optionType, strike, expiry);
@@ -2308,20 +2486,32 @@ export default function NiftyStrategiesPage() {
       locked: existingLeg?.locked ?? false,
     };
 
-    const updatedLegs = existingLeg
-      ? (strategy.legs || []).map((leg) => (Number(leg.id) === Number(existingLeg.id) ? nextLeg : leg))
-      : [...(strategy.legs || []), nextLeg];
+    const { legs: updatedLegs, merged } = upsertLegIntoBook(strategy.legs || [], nextLeg, {
+      editId: existingLeg?.id ?? null,
+      fallbackExpiry: strategy.selectedExpiry,
+    });
+
+    const matched = !existingLeg && merged
+      ? updatedLegs.find((leg) => (
+        String(leg.side).toUpperCase() === String(nextLeg.side).toUpperCase()
+        && String(leg.optionType).toUpperCase() === String(nextLeg.optionType).toUpperCase()
+        && Number(leg.strike) === Number(nextLeg.strike)
+        && Number(resolveLegExpiry(leg, strategy) || 0) === Number(nextLeg.expiry || 0)
+      ))
+      : null;
 
     const transaction = existingLeg
       ? {
         type: 'EDIT',
-        description: `Edited leg ${existingLeg.side} ${Math.max(1, parseInt(existingLeg.quantity || 1, 10) || 1)}L ${existingLeg.optionType} ${existingLeg.strike} ${formatExpiryDisplay(resolveLegExpiry(existingLeg, strategy))} → ${nextLeg.side} ${quantity}L ${nextLeg.optionType} ${strike} ${formatExpiryDisplay(resolveLegExpiry(nextLeg, strategy))} @ ${nextLeg.premium.toFixed(2)}`,
+        description: `Edited leg ${existingLeg.side} ${normalizeLotQty(existingLeg.quantity)}L ${existingLeg.optionType} ${existingLeg.strike} ${formatExpiryDisplay(resolveLegExpiry(existingLeg, strategy))} → ${nextLeg.side} ${quantity}L ${nextLeg.optionType} ${strike} ${formatExpiryDisplay(resolveLegExpiry(nextLeg, strategy))} @ ${nextLeg.premium.toFixed(2)}`,
         amount: 0,
         timestamp: new Date().toISOString(),
       }
       : {
         type: 'ADD',
-        description: `Added ${nextLeg.side} ${quantity}L ${nextLeg.optionType} ${strike} ${formatExpiryDisplay(resolveLegExpiry(nextLeg, strategy))} @ ${nextLeg.premium.toFixed(2)}`,
+        description: matched
+          ? `Added ${quantity}L into ${nextLeg.side} ${nextLeg.optionType} ${strike} ${formatExpiryDisplay(resolveLegExpiry(nextLeg, strategy))} → ${matched.quantity}L @ avg ${Number(matched.premium).toFixed(2)}`
+          : `Added ${nextLeg.side} ${quantity}L ${nextLeg.optionType} ${strike} ${formatExpiryDisplay(resolveLegExpiry(nextLeg, strategy))} @ ${nextLeg.premium.toFixed(2)}`,
         amount: 0,
         timestamp: new Date().toISOString(),
       };
@@ -2342,6 +2532,50 @@ export default function NiftyStrategiesPage() {
       setSavedStrategies(enriched);
       setLegEditor(null);
     } catch (e) { alert(e.message); }
+  };
+
+  const importLegsIntoStrategy = async (strategyId, importedLegs = [], parsed = null) => {
+    const strategy = savedStrategies.find((s) => s.id === strategyId);
+    if (!strategy || !importedLegs.length) return;
+    setLegImporting(true);
+    try {
+      let working = [...(strategy.legs || [])];
+      const maxIdStart = Math.max(0, ...working.map((leg) => Number(leg.id) || 0));
+      let nextId = maxIdStart + 1;
+      importedLegs.forEach((leg) => {
+        const withId = { ...leg, id: nextId };
+        const result = upsertLegIntoBook(working, withId, { fallbackExpiry: strategy.selectedExpiry });
+        working = result.legs;
+        if (!result.merged) nextId += 1;
+      });
+      working = mergeLegsByContract(working, strategy.selectedExpiry);
+      const summary = importedLegs.map((leg) => `${leg.side} ${leg.quantity}L ${leg.optionType} ${leg.strike}`).join(' · ');
+      const response = await fetch('/api/options-strategies', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...strategy,
+          lotSize: parsed?.lotSize || strategy.lotSize,
+          legs: working,
+          transactions: [
+            ...(strategy.transactions || []),
+            {
+              type: 'ADD',
+              description: `Imported Zerodha fills: ${summary}`,
+              amount: 0,
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Import failed');
+      const enriched = await enrichStrategies(data.strategies || []);
+      setSavedStrategies(enriched);
+      setLegEditor(null);
+    } finally {
+      setLegImporting(false);
+    }
   };
 
   const totals = useMemo(() => {
@@ -3463,6 +3697,8 @@ export default function NiftyStrategiesPage() {
                       onFieldChange={(patch) => updateLegEditor(strategy, patch)}
                       onSave={() => saveLegEditor(strategy.id)}
                       onCancel={() => setLegEditor(null)}
+                      importing={legImporting}
+                      onImportLegs={(legs, parsed) => importLegsIntoStrategy(strategy.id, legs, parsed)}
                     />
                   )}
                   <div style={styles.legsWrap}>
@@ -3497,7 +3733,13 @@ export default function NiftyStrategiesPage() {
                                 )}
                                 {isActive && !isClosing && (
                                   <button
-                                    onClick={(e) => { e.stopPropagation(); setLegEditor(null); setClosingLegInfo({ strategyId: strategy.id, legId: leg.id }); setClosePrice(String(currentP.toFixed(2))); }}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setLegEditor(null);
+                                      setClosingLegInfo({ strategyId: strategy.id, legId: leg.id });
+                                      setClosePrice(String(currentP.toFixed(2)));
+                                      setCloseQuantity(String(qty));
+                                    }}
                                     style={styles.closeLegInlineBtn}
                                   >{closeAction}</button>
                                 )}
@@ -3514,12 +3756,26 @@ export default function NiftyStrategiesPage() {
                               onFieldChange={(patch) => updateLegEditor(strategy, patch)}
                               onSave={() => saveLegEditor(strategy.id)}
                               onCancel={() => setLegEditor(null)}
+                              importing={legImporting}
+                              onImportLegs={(legs, parsed) => importLegsIntoStrategy(strategy.id, legs, parsed)}
                             />
                           )}
                           {isClosing && (
                             <div style={styles.closeLegForm} className="nifty-close-form">
                               <div style={styles.closeLegFormHeader}>{closeAction} — {leg.optionType} {leg.strike} ({formatExpiryDisplay(resolveLegExpiry(leg, strategy))})</div>
                               <div style={styles.closeLegFormRow}>
+                                <label style={styles.closeLegLabel}>Lots:</label>
+                                <select
+                                  value={closeQuantity}
+                                  onChange={(e) => setCloseQuantity(e.target.value)}
+                                  style={styles.addLegSelect}
+                                >
+                                  {Array.from({ length: qty }, (_, index) => String(index + 1)).map((value) => (
+                                    <option key={`close-qty-${value}`} value={value}>
+                                      {value} of {qty} lot{qty === 1 ? '' : 's'}
+                                    </option>
+                                  ))}
+                                </select>
                                 <label style={styles.closeLegLabel}>{closeAction}:</label>
                                 <input
                                   type="number"
@@ -3533,16 +3789,19 @@ export default function NiftyStrategiesPage() {
                               </div>
                               {closePrice && (() => {
                                 const exitP = Number(closePrice) || 0;
-                                const previewPL = leg.side === 'SELL' ? (entryP - exitP) * qty * lotSz : (exitP - entryP) * qty * lotSz;
+                                const closeQty = Math.min(qty, Math.max(1, parseInt(closeQuantity || qty, 10) || 1));
+                                const previewPL = leg.side === 'SELL' ? (entryP - exitP) * closeQty * lotSz : (exitP - entryP) * closeQty * lotSz;
+                                const left = qty - closeQty;
                                 return (
                                   <div style={{ ...styles.closeLegPreview, color: previewPL >= 0 ? theme.green : theme.red }}>
-                                    P/L: {previewPL >= 0 ? '+' : ''}{formatCurrency(previewPL)}
+                                    P/L on {closeQty}L: {previewPL >= 0 ? '+' : ''}{formatCurrency(previewPL)}
+                                    {left > 0 ? ` · leaves ${left}L open` : ' · closes full position'}
                                   </div>
                                 );
                               })()}
                               <div style={styles.closeLegFormBtns}>
-                                <button onClick={() => requestLegClose(strategy, leg, closePrice)} style={styles.closeLegConfirm}>✅ Confirm Close</button>
-                                <button onClick={() => { setClosingLegInfo(null); setClosePrice(''); }} style={styles.closeLegCancel}>Cancel</button>
+                                <button onClick={() => requestLegClose(strategy, leg, closePrice, closeQuantity)} style={styles.closeLegConfirm}>✅ Confirm Close</button>
+                                <button onClick={() => { setClosingLegInfo(null); setClosePrice(''); setCloseQuantity('1'); }} style={styles.closeLegCancel}>Cancel</button>
                               </div>
                             </div>
                           )}

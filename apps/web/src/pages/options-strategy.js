@@ -15,6 +15,7 @@ import dynamic from 'next/dynamic';
 import { restoreUserSession } from '../lib/auth-client';
 import { useTheme } from '../lib/ThemePicker';
 import { applyTheme } from '../lib/themes';
+import { mergeLegsByContract } from '../lib/strategyLegMath';
 
 const RechartsComponents = dynamic(
   () => import('recharts').then((mod) => ({
@@ -1091,14 +1092,14 @@ export function OptionsStrategyPage({ embedded = false, hideBackButton = false, 
         pricingSource,
         ivInput,
         rateInput,
-        legs: legs.map((leg) => ({
+        legs: mergeLegsByContract(legs.map((leg) => ({
           ...leg,
           strike: Number(leg.strike),
           quantity: Math.max(1, parseInt(leg.quantity || 1, 10) || 1),
           premium: normalizePremium(leg.premium),
           marketPremium: normalizePremium(leg.marketPremium ?? leg.premium),
           locked: true,
-        })),
+        })), selectedExpiry),
         snapshotMetrics: {
           maxProfit: metrics.maxProfit,
           maxLoss: metrics.maxLoss,
