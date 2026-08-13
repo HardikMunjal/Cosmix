@@ -15,6 +15,8 @@ export function formatStravaSyncMessage(payload) {
   if (payload.alreadyUpToDate) {
     return `Strava up to date · ${payload.skippedActivities || 0} activities already synced`;
   }
+  const walks = Number(payload.newWalks || 0) > 0 ? ` · ${payload.newWalks} walk(s)` : '';
+  const yoga = Number(payload.newYoga || 0) > 0 ? ` · ${payload.newYoga} yoga` : '';
   const windowNote = payload.firstSync ? ` · first sync ${payload.windowDays || 730}d` : '';
   const maxSpeed = payload.insights?.maxSpeedKmh ? ` · max ${payload.insights.maxSpeedKmh} km/h` : '';
   const hrFromEntry = payload.entries?.find((entry) => Number(entry?.stravaAvgHeartRate || entry?.heartRateAvg || 0) > 0);
@@ -23,7 +25,7 @@ export function formatStravaSyncMessage(payload) {
   const hrDays = payload.heartRateDays ? ` · HR on ${payload.heartRateDays} day(s)` : '';
   const hrRefresh = payload.heartRateUpdated ? ` · refreshed HR on ${payload.heartRateUpdated} day(s)` : '';
   const maps = payload.detailsEnriched ? ` · mapped ${payload.detailsEnriched} run(s)` : '';
-  return `Synced ${payload.newActivities || 0} new activities · ${payload.newDays || payload.imported || 0} day(s) updated${windowNote}${maxSpeed}${hr}${hrDays}${hrRefresh}${maps}`;
+  return `Synced ${payload.newActivities || 0} new activities${walks}${yoga} · ${payload.newDays || payload.imported || 0} day(s) updated${windowNote}${maxSpeed}${hr}${hrDays}${hrRefresh}${maps}`;
 }
 
 function withApiBase(apiBase, path) {

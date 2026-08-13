@@ -21,6 +21,7 @@ import {
   saveRunningShoesLocal,
   syncRunningShoesToServer,
   wellnessApiUrl,
+  resolveWellnessApiBase,
 } from '../lib/runningShoes';
 import {
   DepthMetric,
@@ -2275,7 +2276,7 @@ export default function RunningAnalytics() {
     try {
       const payload = await runStravaAutoSync({
         userId: user.id,
-        apiBase: '',
+        apiBase: resolveWellnessApiBase(),
         force: true,
         onMessage: setStravaSyncMsg,
         onEntries: (nextEntries) => {
@@ -2308,7 +2309,7 @@ export default function RunningAnalytics() {
     setStravaSyncMsg('Syncing Strava…');
     void runStravaAutoSync({
       userId: user.id,
-      apiBase: '',
+      apiBase: resolveWellnessApiBase(),
       force: true,
       onMessage: (msg) => {
         if (!cancelled && msg) setStravaSyncMsg(msg);

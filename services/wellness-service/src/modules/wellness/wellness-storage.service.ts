@@ -1069,6 +1069,18 @@ export class WellnessStorageService {
   ): WellnessEntry {
     const merged: WellnessEntry = { ...existing };
     for (const field of WellnessStorageService.STRAVA_ACTIVITY_FIELDS) {
+      if (
+        (field === 'walkingMinutes' || field === 'walkingDistanceKm')
+        && ((Array.isArray(delta.stravaWalks) && delta.stravaWalks.length) || (Array.isArray(existing.stravaWalks) && existing.stravaWalks.length))
+      ) {
+        continue;
+      }
+      if (
+        field === 'yogaMinutes'
+        && ((Array.isArray(delta.stravaYoga) && delta.stravaYoga.length) || (Array.isArray(existing.stravaYoga) && existing.stravaYoga.length))
+      ) {
+        continue;
+      }
       const existingValue = Number(existing[field] || 0);
       const deltaValue = Number(delta[field] || 0);
       if (field.includes('Km')) {
@@ -1271,12 +1283,12 @@ export class WellnessStorageService {
     if (walks.length) {
       const mins = walks.reduce((sum: number, walk: any) => sum + Number(walk?.minutes || 0), 0);
       const km = walks.reduce((sum: number, walk: any) => sum + Number(walk?.distanceKm || 0), 0);
-      if (mins > walkingMinutes) walkingMinutes = Math.round(mins);
-      if (km > walkingDistanceKm) walkingDistanceKm = Number(km.toFixed(2));
+      walkingMinutes = Math.round(mins);
+      walkingDistanceKm = Number(km.toFixed(2));
     }
     if (yoga.length) {
       const mins = yoga.reduce((sum: number, session: any) => sum + Number(session?.minutes || 0), 0);
-      if (mins > yogaMinutes) yogaMinutes = Math.round(mins);
+      yogaMinutes = Math.round(mins);
     }
     return { walkingMinutes, walkingDistanceKm, yogaMinutes };
   }
@@ -1296,8 +1308,10 @@ export class WellnessStorageService {
     );
 
     let updatedDays = 0;
+    const seenDates = new Set<string>();
     const entries = normalizedStore.entries.map((entry) => {
       const date = this.normalizeDate(entry.date);
+      if (date) seenDates.add(date);
       const incoming = byDate.get(date);
       if (!incoming) return entry;
       if (entry.status === 'inactive') return entry;
@@ -1339,6 +1353,29 @@ export class WellnessStorageService {
       }, activePlanId ?? entry.planId ?? null);
     });
 
+    const extraEntries: WellnessEntry[] = [];
+    for (const incoming of sourceEntries) {
+      const date = this.normalizeDate(incoming.date);
+      if (!date || seenDates.has(date)) continue;
+      const hasSport = (
+        (Array.isArray(incoming.stravaWalks) && incoming.stravaWalks.length)
+        || (Array.isArray(incoming.stravaRuns) && incoming.stravaRuns.length)
+        || (Array.isArray(incoming.stravaYoga) && incoming.stravaYoga.length)
+        || Number(incoming.walkingMinutes || 0) > 0
+        || Number(incoming.runningMinutes || 0) > 0
+        || Number(incoming.yogaMinutes || 0) > 0
+      );
+      if (!hasSport) continue;
+      extraEntries.push(this.normalizeEntryRecord({
+        ...incoming,
+        date,
+        planId: activePlanId,
+        status: 'active',
+      }, activePlanId));
+      seenDates.add(date);
+      updatedDays += 1;
+    }
+
     if (!updatedDays) {
       return {
         state: this.buildPublicState(normalizedStore, scoringRules),
@@ -1348,7 +1385,7 @@ export class WellnessStorageService {
 
     const nextStore = this.normalizeStore({
       ...normalizedStore,
-      entries: this.sortEntries(entries),
+      entries: this.sortEntries([...entries, ...extraEntries]),
       updatedAt: this.nowIso(),
     });
     const derived = this.deriveScoresWithCache(nextStore, scoringRules);

@@ -188,20 +188,23 @@ export class WellnessController {
     @Query('full') full?: string,
   ) {
     const existingState = await this.storageService.load(userId);
-    const knownIds = this.stravaService.collectKnownActivityIds(existingState.entries || []);
+    const storedIds = this.stravaService.collectStoredActivityIds(existingState.entries || []);
+    const deletedIds = new Set<number>();
     for (const id of (existingState as any)?.deletedStravaActivityIds || []) {
       const numeric = Number(id);
-      if (Number.isFinite(numeric) && numeric > 0) knownIds.add(numeric);
+      if (Number.isFinite(numeric) && numeric > 0) deletedIds.add(numeric);
     }
-    const isFirstSync = knownIds.size === 0 || String(full || '') === '1';
+    const isFirstSync = storedIds.all.size === 0 || String(full || '') === '1';
     const windowDays = isFirstSync
       ? Math.max(Number(days) || 730, 365)
       : (Number(days) || 90);
 
+    // Import the activity list first. Heart-rate detail calls used to run before save and
+    // could time out, so walks never landed even when Strava returned them.
     const activities = await this.stravaService.getRecentActivities(userId, windowDays, {
-      enrichHeartRate: true,
+      enrichHeartRate: false,
     });
-    const { newActivities, skipped } = this.stravaService.filterNewActivities(activities, knownIds);
+    const { newActivities, skipped } = this.stravaService.filterNewActivities(activities, storedIds, deletedIds);
     const todayLocal = new Date(Date.now() + (5.5 * 60 * 60 * 1000)).toISOString().slice(0, 10);
     const fields = this.stravaService.mapToWellnessFields(
       activities.filter((activity) => {
@@ -211,6 +214,8 @@ export class WellnessController {
     );
     const entries = this.stravaService.buildWellnessEntriesFromActivities(newActivities);
     const insights = this.stravaService.buildRunInsights(activities);
+    const newWalks = newActivities.filter((activity) => this.stravaService.activityKind(activity) === 'walk').length;
+    const newYoga = newActivities.filter((activity) => this.stravaService.activityKind(activity) === 'yoga').length;
 
     let imported = 0;
     let newActivitiesCount = newActivities.length;
@@ -226,33 +231,44 @@ export class WellnessController {
       state = result.state;
     }
 
-    // Always refresh heart-rate on already-imported activities (detail enrichment / older syncs missing HR).
+    let enrichedActivities = activities;
     if (String(shouldImport || '1') !== '0' && activities.length) {
-      const hrResult = await this.storageService.refreshStravaHeartRate(
-        userId,
-        this.stravaService.buildWellnessEntriesFromActivities(activities),
-      );
-      heartRateUpdated = hrResult.updatedDays;
-      state = hrResult.state;
+      try {
+        enrichedActivities = await this.stravaService.enrichActivitiesHeartRateForUser(userId, activities);
+        const hrResult = await this.storageService.refreshStravaHeartRate(
+          userId,
+          this.stravaService.buildWellnessEntriesFromActivities(enrichedActivities),
+        );
+        heartRateUpdated = hrResult.updatedDays;
+        state = hrResult.state;
+      } catch (err) {
+        console.error('Strava HR refresh failed after import:', err);
+      }
     }
 
     // Persist map/streams/splits for newest runs so detail pages work offline (no Strava Premium needed).
     let detailsEnriched = 0;
     if (String(shouldImport || '1') !== '0') {
-      const runIds = activities
-        .filter((activity) => String(activity?.type || '').toLowerCase().includes('run'))
-        .map((activity) => Number(activity?.id))
-        .filter((id) => id > 0);
-      const detailResult = await this.stravaService.enrichRecentActivityDetails(userId, runIds, {
-        maxActivities: isFirstSync ? 12 : 18,
-      });
-      detailsEnriched = detailResult.enriched || 0;
+      try {
+        const runIds = activities
+          .filter((activity) => this.stravaService.activityKind(activity) === 'run')
+          .map((activity) => Number(activity?.id))
+          .filter((id) => id > 0);
+        const detailResult = await this.stravaService.enrichRecentActivityDetails(userId, runIds, {
+          maxActivities: isFirstSync ? 12 : 18,
+        });
+        detailsEnriched = detailResult.enriched || 0;
+      } catch (err) {
+        console.error('Strava run detail enrich failed after import:', err);
+      }
     }
 
     return {
       activities: activities.length,
       newActivities: newActivitiesCount,
       skippedActivities: skipped,
+      newWalks,
+      newYoga,
       newDays,
       alreadyUpToDate: alreadyUpToDate && heartRateUpdated === 0 && detailsEnriched === 0,
       imported,

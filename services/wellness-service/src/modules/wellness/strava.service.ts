@@ -260,8 +260,8 @@ export class StravaService {
       const recent = Number.isFinite(started) ? started >= cutoffMs : true;
       // Prefer flagged HR activities; also probe recent runs in case list summary omitted BPM.
       const likelyHr = Boolean(activity?.has_heartrate) || recent;
-      const type = this.normalizeActivityType(activity.type);
-      return likelyHr && (type === 'run' || type === 'walk' || type === 'yoga' || this.isYogaActivity(activity));
+      const type = this.activityKind(activity);
+      return likelyHr && (type === 'run' || type === 'walk' || type === 'yoga');
     });
 
     // Keep sync snappy — detail calls are sequential and previously timed out incremental syncs.
@@ -1326,7 +1326,7 @@ export class StravaService {
     const boundZones = this.parseAthleteHrZones(athleteZones) || this.defaultHrZoneBounds(190);
     // Always probe recent runs — Amazfit/etc often omit has_heartrate but still expose pace zones.
     const candidates = activities
-      .filter((activity) => this.normalizeActivityType(activity.type) === 'run')
+      .filter((activity) => this.activityKind(activity) === 'run')
       .slice(0, Math.max(5, Math.min(40, Number(options.maxActivities) || 25)));
 
     let premiumBlocked = false;
@@ -1428,35 +1428,98 @@ export class StravaService {
   }
 
   private normalizeActivityType(type: string): string {
-    const normalized = String(type || '').toLowerCase();
+    const normalized = String(type || '').toLowerCase().replace(/[\s_-]/g, '');
     if (normalized === 'trailrun' || normalized === 'virtualrun') return 'run';
-    if (normalized === 'hike') return 'walk';
+    if (normalized === 'hike' || normalized === 'snowshoe' || normalized === 'stairstepper') return 'walk';
     return normalized;
   }
 
+  private activitySportRaw(activity: any): string {
+    return String(activity?.sport_type || activity?.type || activity?.sportType || '');
+  }
+
+  /** Prefer Strava sport_type; type is deprecated and often missing on imported walks. */
+  activityKind(activity: any): string {
+    const sport = this.normalizeActivityType(this.activitySportRaw(activity));
+    const name = String(activity?.name || '');
+    if (sport === 'yoga' || (sport === 'workout' && /yoga|asan/i.test(name))) return 'yoga';
+    if (sport === 'walk') return 'walk';
+    if (sport === 'run') {
+      if (this.looksLikeWalkName(name)) return 'walk';
+      return 'run';
+    }
+    if ((sport === 'workout' || sport === 'cardio') && this.looksLikeWalkName(name)) return 'walk';
+    return sport;
+  }
+
+  private looksLikeWalkName(name: string): boolean {
+    if (!name) return false;
+    if (/run|jog|tempo|interval|repeat|fartlek|stride/i.test(name)) return false;
+    return /walk|stroll|\bhike\b|rambl/i.test(name);
+  }
+
   private isYogaActivity(activity: any): boolean {
-    const type = this.normalizeActivityType(activity?.type);
-    if (type === 'yoga') return true;
-    return type === 'workout' && /yoga|asan/i.test(String(activity?.name || ''));
+    return this.activityKind(activity) === 'yoga';
   }
 
   collectKnownActivityIds(entries: any[] = []): Set<number> {
-    const ids = new Set<number>();
-    for (const entry of entries) {
-      for (const id of entry?.stravaActivityIds || []) {
-        const numeric = Number(id);
-        if (Number.isFinite(numeric) && numeric > 0) ids.add(numeric);
-      }
-    }
-    return ids;
+    return this.collectStoredActivityIds(entries).all;
   }
 
-  filterNewActivities(activities: any[] = [], knownIds: Set<number>) {
-    const newActivities = activities.filter((activity) => !knownIds.has(Number(activity?.id)));
+  collectStoredActivityIds(entries: any[] = []): {
+    all: Set<number>;
+    runs: Set<number>;
+    walks: Set<number>;
+    yoga: Set<number>;
+  } {
+    const all = new Set<number>();
+    const runs = new Set<number>();
+    const walks = new Set<number>();
+    const yoga = new Set<number>();
+    const add = (set: Set<number>, value: any) => {
+      const numeric = Number(value);
+      if (Number.isFinite(numeric) && numeric > 0) {
+        set.add(numeric);
+        all.add(numeric);
+      }
+    };
+    for (const entry of entries) {
+      for (const id of entry?.stravaActivityIds || []) add(all, id);
+      for (const item of entry?.stravaRuns || []) add(runs, item?.id || item?.stravaId);
+      for (const item of entry?.stravaWalks || []) add(walks, item?.id || item?.stravaId);
+      for (const item of entry?.stravaYoga || []) add(yoga, item?.id || item?.stravaId);
+    }
+    return { all, runs, walks, yoga };
+  }
+
+  filterNewActivities(
+    activities: any[] = [],
+    stored: { all: Set<number>; runs: Set<number>; walks: Set<number>; yoga: Set<number> } | Set<number>,
+    deletedIds: Set<number> = new Set(),
+  ) {
+    const buckets = stored instanceof Set
+      ? { all: stored, runs: stored, walks: stored, yoga: stored }
+      : stored;
+    const newActivities = activities.filter((activity) => {
+      const id = Number(activity?.id);
+      if (!Number.isFinite(id) || id <= 0) return false;
+      if (deletedIds.has(id)) return false;
+      const kind = this.activityKind(activity);
+      if (kind === 'walk') return !buckets.walks.has(id);
+      if (kind === 'yoga') return !buckets.yoga.has(id);
+      if (kind === 'run') return !buckets.runs.has(id);
+      return !buckets.all.has(id);
+    });
     return {
       newActivities,
       skipped: Math.max(0, activities.length - newActivities.length),
     };
+  }
+
+  async enrichActivitiesHeartRateForUser(userId: string, activities: any[] = []): Promise<any[]> {
+    const accessToken = await this.refreshIfNeeded(userId);
+    if (!accessToken) return activities;
+    return this.enrichActivitiesWithHeartRate(accessToken, activities);
   }
 
   private sanitizeMaxSpeedKmh(rawMaxKmh: number, avgSpeedKmh: number, activityType: string) {
@@ -1491,13 +1554,13 @@ export class StravaService {
     const minutes = Math.max(1, Math.round(movingSec / 60) || Math.round(elapsedSec / 60) || 1);
     const avgSpeedKmh = movingSec > 0 ? round((distanceM / movingSec) * 3.6, 2) : 0;
     const rawMaxSpeedKmh = round(Number(activity.max_speed || 0) * 3.6, 2);
-    const maxSpeedKmh = this.sanitizeMaxSpeedKmh(rawMaxSpeedKmh, avgSpeedKmh, activity.type);
+    const maxSpeedKmh = this.sanitizeMaxSpeedKmh(rawMaxSpeedKmh, avgSpeedKmh, this.activityKind(activity));
     const paceMinPerKm = distanceKm > 0 ? round(minutes / distanceKm, 2) : null;
     const elevationGainM = round(Number(activity.total_elevation_gain || 0), 1);
     const { avgHeartrate, maxHeartrate } = this.readHeartRate(activity);
     const calories = activity.calories ? round(Number(activity.calories), 0) : null;
 
-    const type = this.normalizeActivityType(activity.type);
+    const type = this.activityKind(activity);
     const fallbackName = type === 'walk' ? 'Walk' : type === 'yoga' ? 'Yoga' : 'Run';
 
     return {
@@ -1540,7 +1603,7 @@ export class StravaService {
     const fields: Record<string, number> = {};
 
     for (const a of activities) {
-      const type = this.normalizeActivityType(a.type);
+      const type = this.activityKind(a);
       const distKm = round((a.distance || 0) / 1000, 2);
       const mins = Math.round((a.moving_time || 0) / 60);
 
@@ -1572,7 +1635,7 @@ export class StravaService {
     const byDate = new Map<string, any>();
 
     for (const activity of activities) {
-      const type = this.normalizeActivityType(activity.type);
+      const type = this.activityKind(activity);
       const date = this.activityLocalDate(activity);
       const current = byDate.get(date) || {
         date,
@@ -1670,7 +1733,7 @@ export class StravaService {
 
   buildRunInsights(activities: any[] = []) {
     const runs = activities
-      .filter((activity) => this.normalizeActivityType(activity.type) === 'run')
+      .filter((activity) => this.activityKind(activity) === 'run')
       .map((activity) => this.summarizeRun(activity))
       .filter((run) => run.distanceKm > 0 && run.minutes > 0)
       .sort((a, b) => String(b.date).localeCompare(String(a.date)));
