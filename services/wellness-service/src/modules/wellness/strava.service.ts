@@ -260,7 +260,8 @@ export class StravaService {
       const recent = Number.isFinite(started) ? started >= cutoffMs : true;
       // Prefer flagged HR activities; also probe recent runs in case list summary omitted BPM.
       const likelyHr = Boolean(activity?.has_heartrate) || recent;
-      return likelyHr && this.normalizeActivityType(activity.type) === 'run';
+      const type = this.normalizeActivityType(activity.type);
+      return likelyHr && (type === 'run' || type === 'walk' || type === 'yoga' || this.isYogaActivity(activity));
     });
 
     // Keep sync snappy — detail calls are sequential and previously timed out incremental syncs.
@@ -466,6 +467,7 @@ export class StravaService {
       bestSplitKm: Number(best.km) || null,
       bestSplitSeconds: Number(best.seconds) || null,
       bestSplitDistanceKm: Number(best.distanceKm) || null,
+      bestSplitAvgHeartrate: Number(best.avgHeartrate || 0) || null,
     };
   }
 
@@ -985,6 +987,7 @@ export class StravaService {
               bestSplitKm: Number(summary.bestSplitKm || 0) || null,
               bestSplitSeconds: Number(summary.bestSplitSeconds || 0) || null,
               bestSplitDistanceKm: Number(summary.bestSplitDistanceKm || 0) || null,
+              bestSplitAvgHeartrate: Number(summary.bestSplitAvgHeartrate || 0) || null,
             }
           : this.pickBestSplit(payload.splits || []);
         summaries.push({
@@ -1431,6 +1434,12 @@ export class StravaService {
     return normalized;
   }
 
+  private isYogaActivity(activity: any): boolean {
+    const type = this.normalizeActivityType(activity?.type);
+    if (type === 'yoga') return true;
+    return type === 'workout' && /yoga|asan/i.test(String(activity?.name || ''));
+  }
+
   collectKnownActivityIds(entries: any[] = []): Set<number> {
     const ids = new Set<number>();
     for (const entry of entries) {
@@ -1488,11 +1497,14 @@ export class StravaService {
     const { avgHeartrate, maxHeartrate } = this.readHeartRate(activity);
     const calories = activity.calories ? round(Number(activity.calories), 0) : null;
 
+    const type = this.normalizeActivityType(activity.type);
+    const fallbackName = type === 'walk' ? 'Walk' : type === 'yoga' ? 'Yoga' : 'Run';
+
     return {
       id: activity.id,
-      name: activity.name || 'Run',
+      name: activity.name || fallbackName,
       date: this.activityLocalDate(activity),
-      type: this.normalizeActivityType(activity.type),
+      type,
       distanceKm,
       minutes,
       movingSeconds: movingSec,
@@ -1516,6 +1528,7 @@ export class StravaService {
       bestSplitKm: Number(activity.bestSplitKm || 0) || null,
       bestSplitSeconds: Number(activity.bestSplitSeconds || 0) || null,
       bestSplitDistanceKm: Number(activity.bestSplitDistanceKm || 0) || null,
+      bestSplitAvgHeartrate: Number(activity.bestSplitAvgHeartrate || 0) || null,
       vo2Max: Number(activity.vo2Max || activity.vo2_max || 0) || null,
       avgCadence: Number(activity.avgCadence || activity.average_cadence || 0) || null,
       avgStrideM: Number(activity.avgStrideM || 0) || null,
@@ -1543,7 +1556,13 @@ export class StravaService {
         fields.cyclingDistanceKm = round((fields.cyclingDistanceKm || 0) + distKm, 2);
         fields.cyclingMinutes = (fields.cyclingMinutes || 0) + mins;
       } else if (type === 'workout' || type === 'weighttraining' || type === 'crossfit') {
-        fields.exerciseMinutes = (fields.exerciseMinutes || 0) + mins;
+        if (this.isYogaActivity(a)) {
+          fields.yogaMinutes = (fields.yogaMinutes || 0) + mins;
+        } else {
+          fields.exerciseMinutes = (fields.exerciseMinutes || 0) + mins;
+        }
+      } else if (type === 'yoga') {
+        fields.yogaMinutes = (fields.yogaMinutes || 0) + mins;
       }
     }
     return fields;
@@ -1577,6 +1596,8 @@ export class StravaService {
         source: 'strava',
         stravaActivityIds: [] as number[],
         stravaRuns: [] as any[],
+        stravaWalks: [] as any[],
+        stravaYoga: [] as any[],
       };
 
       const distKm = round((activity.distance || 0) / 1000, 2);
@@ -1608,15 +1629,22 @@ export class StravaService {
       } else if (type === 'walk') {
         current.walkingDistanceKm = round(current.walkingDistanceKm + distKm, 2);
         current.walkingMinutes += mins;
+        current.stravaWalks.push(this.summarizeRun(activity));
       } else if (type === 'swim') {
         current.swimmingMinutes += mins;
       } else if (type === 'ride' || type === 'virtualride') {
         current.cyclingDistanceKm = round(current.cyclingDistanceKm + distKm, 2);
         current.cyclingMinutes += mins;
       } else if (type === 'workout' || type === 'weighttraining' || type === 'crossfit') {
-        current.exerciseMinutes += mins;
+        if (this.isYogaActivity(activity)) {
+          current.yogaMinutes += mins;
+          current.stravaYoga.push(this.summarizeRun({ ...activity, type: 'Yoga' }));
+        } else {
+          current.exerciseMinutes += mins;
+        }
       } else if (type === 'yoga') {
         current.yogaMinutes += mins;
+        current.stravaYoga.push(this.summarizeRun(activity));
       }
 
       byDate.set(date, current);
@@ -1677,6 +1705,7 @@ export class StravaService {
         bestSplitKm: Number(run.bestSplitKm || 0) || null,
         bestSplitSeconds: Number(run.bestSplitSeconds || 0) || null,
         bestSplitDistanceKm: Number(run.bestSplitDistanceKm || 0) || null,
+        bestSplitAvgHeartrate: Number(run.bestSplitAvgHeartrate || 0) || null,
         vo2Max: Number(run.vo2Max || 0) || null,
       }))
       .filter((run) => run.distanceKm > 0 && run.minutes > 0)
@@ -1733,6 +1762,7 @@ export class StravaService {
             bestSplitKm: detail.summary.bestSplitKm,
             bestSplitSeconds: detail.summary.bestSplitSeconds,
             bestSplitDistanceKm: detail.summary.bestSplitDistanceKm,
+            bestSplitAvgHeartrate: detail.summary.bestSplitAvgHeartrate,
           }
         : this.pickBestSplit(detail.splits || []);
       return {
@@ -1751,6 +1781,7 @@ export class StravaService {
         bestSplitKm: run.bestSplitKm || bestSplit?.bestSplitKm || null,
         bestSplitSeconds: run.bestSplitSeconds || bestSplit?.bestSplitSeconds || null,
         bestSplitDistanceKm: run.bestSplitDistanceKm || bestSplit?.bestSplitDistanceKm || null,
+        bestSplitAvgHeartrate: run.bestSplitAvgHeartrate || bestSplit?.bestSplitAvgHeartrate || null,
         vo2Max: run.vo2Max || detail.summary?.vo2Max || null,
       };
     });

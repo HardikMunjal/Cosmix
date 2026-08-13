@@ -3,8 +3,8 @@ export const DEFAULT_SCORING_RULES = {
     { key: 'runningDistanceKm', label: 'Running', icon: '🏃', unit: 'km', physicalMultiplier: 0.9, physicalDivisor: 1, mentalMultiplier: 0.4, mentalDivisor: 1 },
     { key: 'runningMinutes', label: 'Running time', icon: '🏃', unit: 'mins', physicalMultiplier: 0.5, physicalDivisor: 30, mentalMultiplier: 0.2, mentalDivisor: 30 },
     { key: 'cyclingMinutes', label: 'Cycling', icon: '🚴', unit: 'mins', physicalMultiplier: 0.8, physicalDivisor: 30, mentalMultiplier: 0.3, mentalDivisor: 30 },
-    { key: 'walkingDistanceKm', label: 'Walking distance', icon: '🚶', unit: 'km', physicalMultiplier: 0.3, physicalDivisor: 1, mentalMultiplier: 0, mentalDivisor: 1 },
-    { key: 'walkingMinutes', label: 'Walking time', icon: '🚶', unit: 'mins', physicalMultiplier: 0, physicalDivisor: 1, mentalMultiplier: 0.25, mentalDivisor: 30 },
+    { key: 'walkingDistanceKm', label: 'Walking distance', icon: '🚶', unit: 'km', physicalMultiplier: 0.35, physicalDivisor: 1, mentalMultiplier: 0.15, mentalDivisor: 1 },
+    { key: 'walkingMinutes', label: 'Walking time', icon: '🚶', unit: 'mins', physicalMultiplier: 0.4, physicalDivisor: 30, mentalMultiplier: 0.25, mentalDivisor: 30 },
     { key: 'exerciseMinutes', label: 'Workout', icon: '💪', unit: 'mins', physicalMultiplier: 0.8, physicalDivisor: 30, mentalMultiplier: 0.5, mentalDivisor: 30 },
     { key: 'yogaMinutes', label: 'Yoga', icon: '🧘', unit: 'mins', physicalMultiplier: 0.8, physicalDivisor: 30, mentalMultiplier: 0.5, mentalDivisor: 30 },
     { key: 'badmintonMinutes', label: 'Badminton', icon: '🏸', unit: 'mins', physicalMultiplier: 1.2, physicalDivisor: 60, mentalMultiplier: 0.5, mentalDivisor: 30 },
@@ -63,7 +63,7 @@ export function normalizeScoringRules(input) {
     .map((rule) => normalizeRule(rule, rule));
 
   return {
-    activities: [...defaultRules, ...customRules],
+    activities: upgradeLegacyWalkingYogaRules([...defaultRules, ...customRules]),
     dailyPenalty: {
       physical: Number(input?.dailyPenalty?.physical ?? DEFAULT_SCORING_RULES.dailyPenalty.physical),
       mental: Number(input?.dailyPenalty?.mental ?? DEFAULT_SCORING_RULES.dailyPenalty.mental),
@@ -86,6 +86,18 @@ export function roundScore(value) {
   return Number(Number(value || 0).toFixed(2));
 }
 
+function upgradeLegacyWalkingYogaRules(activities = []) {
+  return (activities || []).map((rule) => {
+    if (rule.key === 'walkingMinutes' && Number(rule.physicalMultiplier) === 0) {
+      return { ...rule, physicalMultiplier: 0.4, physicalDivisor: 30, mentalMultiplier: Math.max(Number(rule.mentalMultiplier) || 0, 0.25), mentalDivisor: 30 };
+    }
+    if (rule.key === 'walkingDistanceKm' && Number(rule.mentalMultiplier) === 0) {
+      return { ...rule, physicalMultiplier: Math.max(Number(rule.physicalMultiplier) || 0, 0.35), mentalMultiplier: 0.15 };
+    }
+    return rule;
+  });
+}
+
 function sleepScore(sleepHours, rules) {
   const explicitHours = Number(sleepHours || 0);
   const hrs = explicitHours > 0 ? explicitHours : Number(rules.sleep.defaultHours || 0);
@@ -99,22 +111,61 @@ function computeContribution(value, multiplier, divisor) {
   return (Number(value || 0) / Math.max(1, divisor)) * multiplier;
 }
 
+export function hydrateSportMinutesFromStrava(entry = {}) {
+  const next = { ...entry };
+  const walks = Array.isArray(entry.stravaWalks) ? entry.stravaWalks : [];
+  if (walks.length) {
+    const mins = walks.reduce((sum, walk) => sum + Number(walk.minutes || 0), 0);
+    const km = walks.reduce((sum, walk) => sum + Number(walk.distanceKm || 0), 0);
+    if (mins > Number(next.walkingMinutes || 0)) next.walkingMinutes = Math.round(mins);
+    if (km > Number(next.walkingDistanceKm || 0)) next.walkingDistanceKm = Number(km.toFixed(2));
+  }
+  const yoga = Array.isArray(entry.stravaYoga) ? entry.stravaYoga : [];
+  if (yoga.length) {
+    const mins = yoga.reduce((sum, session) => sum + Number(session.minutes || 0), 0);
+    if (mins > Number(next.yogaMinutes || 0)) next.yogaMinutes = Math.round(mins);
+  }
+  return next;
+}
+
+export function sportWellnessPoints(entries = [], keys = [], scoringRules = DEFAULT_SCORING_RULES) {
+  const rules = normalizeScoringRules(scoringRules);
+  const keySet = new Set(keys);
+  let physical = 0;
+  let mental = 0;
+  (Array.isArray(entries) ? entries : [entries]).forEach((raw) => {
+    const entry = hydrateSportMinutesFromStrava(raw || {});
+    rules.activities.forEach((rule) => {
+      if (!keySet.has(rule.key)) return;
+      physical += computeContribution(entry[rule.key], rule.physicalMultiplier, rule.physicalDivisor);
+      mental += computeContribution(entry[rule.key], rule.mentalMultiplier, rule.mentalDivisor);
+    });
+  });
+  return {
+    physical: roundScore(physical),
+    mental: roundScore(mental),
+    total: roundScore(physical + mental),
+  };
+}
+
 export function getWorkoutMinutes(entry) {
-  return Number(entry.runningMinutes || 0)
-    + Number(entry.cyclingMinutes || 0)
-    + Number(entry.walkingMinutes || 0)
-    + Number(entry.exerciseMinutes || 0)
-    + Number(entry.yogaMinutes || 0)
-    + Number(entry.badmintonMinutes || 0)
-    + Number(entry.footballMinutes || 0)
-    + Number(entry.cricketMinutes || 0)
-    + Number(entry.swimmingMinutes || 0);
+  const hydrated = hydrateSportMinutesFromStrava(entry || {});
+  return Number(hydrated.runningMinutes || 0)
+    + Number(hydrated.cyclingMinutes || 0)
+    + Number(hydrated.walkingMinutes || 0)
+    + Number(hydrated.exerciseMinutes || 0)
+    + Number(hydrated.yogaMinutes || 0)
+    + Number(hydrated.badmintonMinutes || 0)
+    + Number(hydrated.footballMinutes || 0)
+    + Number(hydrated.cricketMinutes || 0)
+    + Number(hydrated.swimmingMinutes || 0);
 }
 
 export function computeEntryScores(entry, scoringRules = DEFAULT_SCORING_RULES) {
   const rules = normalizeScoringRules(scoringRules);
-  const physicalBase = rules.activities.reduce((sum, rule) => sum + computeContribution(entry[rule.key], rule.physicalMultiplier, rule.physicalDivisor), 0);
-  const mentalBase = rules.activities.reduce((sum, rule) => sum + computeContribution(entry[rule.key], rule.mentalMultiplier, rule.mentalDivisor), 0);
+  const hydrated = hydrateSportMinutesFromStrava(entry || {});
+  const physicalBase = rules.activities.reduce((sum, rule) => sum + computeContribution(hydrated[rule.key], rule.physicalMultiplier, rule.physicalDivisor), 0);
+  const mentalBase = rules.activities.reduce((sum, rule) => sum + computeContribution(hydrated[rule.key], rule.mentalMultiplier, rule.mentalDivisor), 0);
 
   const sleepPhysical = sleepScore(entry.sleepHours, rules);
   const sleepMental = sleepScore(entry.sleepHours, rules);

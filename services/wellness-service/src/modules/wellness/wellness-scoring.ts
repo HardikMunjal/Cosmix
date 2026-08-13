@@ -33,8 +33,8 @@ export const DEFAULT_SCORING_RULES: WellnessScoringRules = {
     { key: 'runningDistanceKm', label: 'Running', icon: '🏃', unit: 'km', physicalMultiplier: 0.9, physicalDivisor: 1, mentalMultiplier: 0.4, mentalDivisor: 1 },
     { key: 'runningMinutes', label: 'Running time', icon: '🏃', unit: 'mins', physicalMultiplier: 0.5, physicalDivisor: 30, mentalMultiplier: 0.2, mentalDivisor: 30 },
     { key: 'cyclingDistanceKm', label: 'Cycling', icon: '🚴', unit: 'km', physicalMultiplier: 0.8, physicalDivisor: 1, mentalMultiplier: 0.3, mentalDivisor: 1 },
-    { key: 'walkingDistanceKm', label: 'Walking distance', icon: '🚶', unit: 'km', physicalMultiplier: 0.3, physicalDivisor: 1, mentalMultiplier: 0, mentalDivisor: 1 },
-    { key: 'walkingMinutes', label: 'Walking time', icon: '🚶', unit: 'mins', physicalMultiplier: 0, physicalDivisor: 1, mentalMultiplier: 0.25, mentalDivisor: 30 },
+    { key: 'walkingDistanceKm', label: 'Walking distance', icon: '🚶', unit: 'km', physicalMultiplier: 0.35, physicalDivisor: 1, mentalMultiplier: 0.15, mentalDivisor: 1 },
+    { key: 'walkingMinutes', label: 'Walking time', icon: '🚶', unit: 'mins', physicalMultiplier: 0.4, physicalDivisor: 30, mentalMultiplier: 0.25, mentalDivisor: 30 },
     { key: 'exerciseMinutes', label: 'Workout', icon: '💪', unit: 'mins', physicalMultiplier: 0.8, physicalDivisor: 30, mentalMultiplier: 0.5, mentalDivisor: 30 },
     { key: 'yogaMinutes', label: 'Yoga', icon: '🧘', unit: 'mins', physicalMultiplier: 0.8, physicalDivisor: 30, mentalMultiplier: 0.5, mentalDivisor: 30 },
     { key: 'badmintonMinutes', label: 'Badminton', icon: '🏸', unit: 'mins', physicalMultiplier: 1.2, physicalDivisor: 60, mentalMultiplier: 0.5, mentalDivisor: 30 },
@@ -67,6 +67,18 @@ export function roundScore(value: number) {
   return Number(Number(value || 0).toFixed(2));
 }
 
+function upgradeLegacyWalkingYogaRules(activities: WellnessMetricRule[] = []) {
+  return activities.map((rule) => {
+    if (rule.key === 'walkingMinutes' && Number(rule.physicalMultiplier) === 0) {
+      return { ...rule, physicalMultiplier: 0.4, physicalDivisor: 30, mentalMultiplier: Math.max(Number(rule.mentalMultiplier) || 0, 0.25), mentalDivisor: 30 };
+    }
+    if (rule.key === 'walkingDistanceKm' && Number(rule.mentalMultiplier) === 0) {
+      return { ...rule, physicalMultiplier: Math.max(Number(rule.physicalMultiplier) || 0, 0.35), mentalMultiplier: 0.15 };
+    }
+    return rule;
+  });
+}
+
 export function normalizeScoringRules(input?: Partial<WellnessScoringRules> | null): WellnessScoringRules {
   const activityMap = new Map(
     (input?.activities || []).map((rule) => [String(rule.key || ''), rule]),
@@ -97,8 +109,10 @@ export function normalizeScoringRules(input?: Partial<WellnessScoringRules> | nu
     })
     .map((rule) => normalizeRule(rule, rule));
 
+  const activities = upgradeLegacyWalkingYogaRules([...defaultRules, ...customRules]);
+
   return {
-    activities: [...defaultRules, ...customRules],
+    activities,
     dailyPenalty: {
       physical: Number(input?.dailyPenalty?.physical ?? DEFAULT_SCORING_RULES.dailyPenalty.physical),
       mental: Number(input?.dailyPenalty?.mental ?? DEFAULT_SCORING_RULES.dailyPenalty.mental),
@@ -130,26 +144,45 @@ function computeContribution(value: unknown, multiplier: number, divisor: number
   return (Number(value || 0) / Math.max(1, divisor)) * multiplier;
 }
 
+export function hydrateSportMinutesFromStrava(entry: Record<string, unknown> = {}) {
+  const next: Record<string, unknown> = { ...entry };
+  const walks = Array.isArray(entry.stravaWalks) ? entry.stravaWalks as any[] : [];
+  if (walks.length) {
+    const mins = walks.reduce((sum, walk) => sum + Number(walk?.minutes || 0), 0);
+    const km = walks.reduce((sum, walk) => sum + Number(walk?.distanceKm || 0), 0);
+    if (mins > Number(next.walkingMinutes || 0)) next.walkingMinutes = Math.round(mins);
+    if (km > Number(next.walkingDistanceKm || 0)) next.walkingDistanceKm = Number(km.toFixed(2));
+  }
+  const yoga = Array.isArray(entry.stravaYoga) ? entry.stravaYoga as any[] : [];
+  if (yoga.length) {
+    const mins = yoga.reduce((sum, session) => sum + Number(session?.minutes || 0), 0);
+    if (mins > Number(next.yogaMinutes || 0)) next.yogaMinutes = Math.round(mins);
+  }
+  return next;
+}
+
 export function getWorkoutMinutes(entry: Record<string, unknown>) {
-  return Number(entry.runningMinutes || 0)
-    + Number(entry.cyclingMinutes || 0)
-    + Number(entry.walkingMinutes || 0)
-    + Number(entry.exerciseMinutes || 0)
-    + Number(entry.yogaMinutes || 0)
-    + Number(entry.badmintonMinutes || 0)
-    + Number(entry.footballMinutes || 0)
-    + Number(entry.cricketMinutes || 0)
-    + Number(entry.swimmingMinutes || 0);
+  const hydrated = hydrateSportMinutesFromStrava(entry);
+  return Number(hydrated.runningMinutes || 0)
+    + Number(hydrated.cyclingMinutes || 0)
+    + Number(hydrated.walkingMinutes || 0)
+    + Number(hydrated.exerciseMinutes || 0)
+    + Number(hydrated.yogaMinutes || 0)
+    + Number(hydrated.badmintonMinutes || 0)
+    + Number(hydrated.footballMinutes || 0)
+    + Number(hydrated.cricketMinutes || 0)
+    + Number(hydrated.swimmingMinutes || 0);
 }
 
 export function computeEntryScores(entry: Record<string, unknown>, rules: WellnessScoringRules = DEFAULT_SCORING_RULES) {
   const normalizedRules = normalizeScoringRules(rules);
+  const hydrated = hydrateSportMinutesFromStrava(entry);
   const physicalBase = normalizedRules.activities.reduce(
-    (sum, rule) => sum + computeContribution(entry[rule.key], rule.physicalMultiplier, rule.physicalDivisor),
+    (sum, rule) => sum + computeContribution(hydrated[rule.key], rule.physicalMultiplier, rule.physicalDivisor),
     0,
   );
   const mentalBase = normalizedRules.activities.reduce(
-    (sum, rule) => sum + computeContribution(entry[rule.key], rule.mentalMultiplier, rule.mentalDivisor),
+    (sum, rule) => sum + computeContribution(hydrated[rule.key], rule.mentalMultiplier, rule.mentalDivisor),
     0,
   );
   const sleepPhysical = sleepScore(entry.sleepHours, normalizedRules);

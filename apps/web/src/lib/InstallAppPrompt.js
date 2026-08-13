@@ -3,17 +3,29 @@ import {
   bindInstallPrompt,
   canShowInstallPrompt,
   dismissInstallPrompt,
+  getManualInstallHint,
+  hasNativeInstallPrompt,
   isIosDevice,
   isStandaloneApp,
   promptInstallApp,
 } from './pwa';
 
+function markStandaloneIfNeeded() {
+  if (typeof window === 'undefined' || !isStandaloneApp()) return;
+  try {
+    localStorage.setItem('cosmix-pwa-was-installed', '1');
+    localStorage.removeItem('cosmix-pwa-install-dismissed-at');
+  } catch (_) { /* ignore */ }
+}
+
 export function InstallAppPrompt() {
   const [visible, setVisible] = useState(false);
   const [platform, setPlatform] = useState('chromium');
   const [installing, setInstalling] = useState(false);
+  const [hint, setHint] = useState('');
 
   useEffect(() => {
+    markStandaloneIfNeeded();
     if (!canShowInstallPrompt() || isStandaloneApp()) return undefined;
 
     return bindInstallPrompt((event) => {
@@ -30,11 +42,17 @@ export function InstallAppPrompt() {
 
   if (!visible) return null;
 
+  const isIos = platform === 'ios' || isIosDevice();
+  const needsManual = platform === 'manual' || (!isIos && !hasNativeInstallPrompt());
+
   async function handleInstall() {
-    if (platform === 'ios') return;
+    if (isIos) return;
     setInstalling(true);
     try {
-      await promptInstallApp();
+      const result = await promptInstallApp();
+      if (!result.ok) {
+        setHint(getManualInstallHint());
+      }
     } finally {
       setInstalling(false);
     }
@@ -44,8 +62,6 @@ export function InstallAppPrompt() {
     dismissInstallPrompt();
     setVisible(false);
   }
-
-  const isIos = platform === 'ios' || isIosDevice();
 
   return (
     <div
@@ -73,8 +89,13 @@ export function InstallAppPrompt() {
         <div style={{ fontSize: '12px', lineHeight: 1.45, color: '#94a3b8' }}>
           {isIos
             ? 'Add Cosmix to your home screen: tap Share, then “Add to Home Screen”. Opens full-screen like a native app.'
-            : 'Install Cosmix on your device for quick access, full-screen mode, and push reminders — same features as the website.'}
+            : needsManual
+              ? `Install Cosmix again from this browser. ${getManualInstallHint()}`
+              : 'Install Cosmix on your device for quick access, full-screen mode, and push reminders — same features as the website.'}
         </div>
+        {hint ? (
+          <div style={{ fontSize: '12px', color: '#7dd3fc', lineHeight: 1.4 }}>{hint}</div>
+        ) : null}
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '4px' }}>
           {!isIos ? (
             <button
@@ -113,6 +134,64 @@ export function InstallAppPrompt() {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Always-available download control after login when Cosmix is not installed. */
+export function InstallAppHeaderButton() {
+  const [show, setShow] = useState(false);
+  const [hint, setHint] = useState('');
+  const [installing, setInstalling] = useState(false);
+
+  useEffect(() => {
+    markStandaloneIfNeeded();
+    setShow(!isStandaloneApp());
+  }, []);
+
+  if (!show) return null;
+
+  async function handleClick() {
+    setInstalling(true);
+    try {
+      const result = await promptInstallApp();
+      if (result.ok) {
+        setShow(false);
+        setHint('');
+        return;
+      }
+      setHint(getManualInstallHint());
+    } finally {
+      setInstalling(false);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={installing}
+        style={{
+          appearance: 'none',
+          border: '1px solid rgba(34,197,94,0.4)',
+          background: 'rgba(34,197,94,0.14)',
+          color: '#bbf7d0',
+          borderRadius: 999,
+          padding: '5px 10px',
+          fontSize: 10,
+          fontWeight: 800,
+          letterSpacing: '0.04em',
+          cursor: installing ? 'wait' : 'pointer',
+        }}
+      >
+        {installing ? 'Installing…' : 'Download app'}
+      </button>
+      {hint ? (
+        <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6, lineHeight: 1.4, maxWidth: 280 }}>
+          {hint}
+        </div>
+      ) : null}
     </div>
   );
 }

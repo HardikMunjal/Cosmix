@@ -14,6 +14,7 @@ import { runStravaAutoSync } from '../lib/stravaAutoSync';
 import { xhrUploadFormData } from '../lib/ThreadUploadProgress';
 import { ACTIVITY_METRIC_DEFS as activityMetricDefs, aggregateActivityTotals } from '../lib/activityMetrics';
 import { subscribeToWebPush, getNotificationPermission } from '../lib/webPush';
+import { InstallAppHeaderButton } from '../lib/InstallAppPrompt';
 
 const tradingDeskModules = [
   { icon: 'NT', title: 'Nifty Tracker', desc: 'Track saved strategies, live payoff movement, and execution snapshots.', path: '/nifty-strategies', accent: '#22c55e' },
@@ -477,6 +478,7 @@ function DashboardHero({
                 {pushBusy ? 'Enabling…' : 'Enable phone alerts'}
               </button>
             ) : null}
+            <InstallAppHeaderButton />
           </div>
 
           <div className="dashboard-header-actions">
@@ -2124,6 +2126,7 @@ export default function Dashboard() {
       void runStravaAutoSync({
         userId: uid,
         apiBase: API_BASE,
+        force: true,
         onMessage: setStravaSyncMsg,
         onEntries: (_entries, payload) => {
           if (payload) setWellnessData(payload);

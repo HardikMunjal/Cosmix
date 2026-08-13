@@ -9,10 +9,12 @@ import { formatStravaSyncMessage, runStravaAutoSync } from '../lib/stravaAutoSyn
 import {
   buildRunningRows,
   computeRunLeaderboards,
+  computeFastestKmSplits,
   computeShoeStats,
   createRunningShoeId,
   getRunningShoeLabel,
   getShoeColor,
+  findDefaultUntaggedShoe,
   isWellnessApiReady,
   loadRunningShoesFromServer,
   readRunningShoes,
@@ -22,14 +24,19 @@ import {
 } from '../lib/runningShoes';
 import {
   DepthMetric,
+  DepthBars,
   RunTrendChart,
   RunLeaderboard,
   TopDistanceRuns,
+  TopFastestSplits,
   buildRunTrendBuckets,
   DepthHBars,
+  ShoeBadge,
   ShoeMixChart,
   CHART_SOFT,
 } from '../lib/RunningModernCharts';
+import { sportWellnessPoints } from '../lib/wellnessScoring';
+import { hrZoneForBpm } from '../lib/hrZones';
 import { loadRunningSurfaceId, saveRunningSurfaceId, mergeRunningSurface } from '../lib/runningThemes';
 import { buildMarathonReadiness, loadMarathonGoal } from '../lib/marathonReadiness';
 import { buildTrainingTip } from '../lib/trainingTip';
@@ -83,6 +90,90 @@ function computeSportStats(entries = [], minKey, distKey = null) {
   const weeklyMins = rows.filter((r) => (r.date || '') >= weekAgoStr).reduce((s, r) => s + r.minutes, 0);
 
   return { rows, totalMinutes, totalDistance, longestSession, recent, weeklyMins, count: rows.length };
+}
+
+function buildSportActivityRows(entries = [], { arrayKey, minutesKey, distanceKey = null, defaultName = 'Session' } = {}) {
+  const rows = [];
+  [...(entries || [])].forEach((entry) => {
+    const activities = Array.isArray(entry?.[arrayKey]) ? entry[arrayKey] : [];
+    if (activities.length) {
+      activities.forEach((act) => {
+        const minutes = Number(act.minutes || 0);
+        const distance = Number(act.distanceKm || 0);
+        if (minutes <= 0 && distance <= 0) return;
+        const pace = distance > 0 && minutes > 0 ? minutes / distance : (Number(act.paceMinPerKm) || null);
+        rows.push({
+          date: act.date || entry.date,
+          minutes,
+          distance,
+          name: act.name || defaultName,
+          avgHeartrate: Number(act.avgHeartrate || 0) || null,
+          maxHeartrate: Number(act.maxHeartrate || 0) || null,
+          avgSpeedKmh: Number(act.avgSpeedKmh || 0) || null,
+          paceMinPerKm: pace,
+          stravaId: Number(act.id || act.stravaId || 0) || null,
+          source: 'strava',
+        });
+      });
+      return;
+    }
+
+    const dayMinutes = Number(entry?.[minutesKey] || 0);
+    const dayDistance = distanceKey ? Number(entry?.[distanceKey] || 0) : 0;
+    if (dayMinutes <= 0 && dayDistance <= 0) return;
+    rows.push({
+      date: entry.date,
+      minutes: dayMinutes,
+      distance: dayDistance,
+      name: defaultName,
+      avgHeartrate: Number(entry.stravaAvgHeartRate || entry.heartRateAvg || 0) || null,
+      maxHeartrate: Number(entry.stravaMaxHeartRate || entry.heartRateMax || 0) || null,
+      avgSpeedKmh: null,
+      paceMinPerKm: dayDistance > 0 && dayMinutes > 0 ? dayMinutes / dayDistance : null,
+      stravaId: null,
+      source: entry.source || 'manual',
+    });
+  });
+  return rows.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+}
+
+function buildWeeklySumBuckets(rows = [], valueFn, weeks = 12) {
+  const weekMap = new Map();
+  (rows || []).forEach((row) => {
+    const date = String(row.date || '').slice(0, 10);
+    const value = Number(valueFn(row) || 0);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !(value > 0)) return;
+    const d = new Date(`${date}T12:00:00`);
+    const monday = new Date(d);
+    monday.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    const key = monday.toISOString().slice(0, 10);
+    weekMap.set(key, (weekMap.get(key) || 0) + value);
+  });
+  return [...weekMap.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .slice(-weeks)
+    .map(([week, value]) => ({
+      date: week,
+      label: new Date(`${week}T12:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
+      value: Number(value.toFixed(1)),
+    }));
+}
+
+function walkPaceHrBands(rows = []) {
+  const bands = [
+    { id: 'fast', label: 'Under 12 /km', min: 0, max: 12 },
+    { id: 'brisk', label: '12–14 /km', min: 12, max: 14 },
+    { id: 'easy', label: '14–16 /km', min: 14, max: 16 },
+    { id: 'stroll', label: '16–18 /km', min: 16, max: 18 },
+    { id: 'slow', label: '18+ /km', min: 18, max: 99 },
+  ];
+  const withHr = (rows || []).filter((r) => Number(r.paceMinPerKm) > 0 && Number(r.avgHeartrate) > 0);
+  return bands.map((band) => {
+    const hits = withHr.filter((r) => r.paceMinPerKm >= band.min && r.paceMinPerKm < band.max);
+    const avgHr = hits.length ? Math.round(hits.reduce((sum, r) => sum + r.avgHeartrate, 0) / hits.length) : null;
+    const avgPace = hits.length ? hits.reduce((sum, r) => sum + r.paceMinPerKm, 0) / hits.length : null;
+    return { ...band, count: hits.length, avgHr, avgPace };
+  }).filter((band) => band.count > 0);
 }
 
 // ─── small reusable components ────────────────────────────
@@ -685,6 +776,7 @@ function RunningShoesPanel({
         id: createRunningShoeId(),
         name: trimmedName,
         brand: '',
+        imageUrl: '',
         createdAt: new Date().toISOString(),
         retired: false,
       },
@@ -703,8 +795,8 @@ function RunningShoesPanel({
   }
 
   return (
-    <div style={{ display: 'grid', gap: 12 }}>
-      <form onSubmit={handleAdd} style={{ display: 'flex', gap: 8 }}>
+    <div style={{ display: 'grid', gap: 8 }}>
+      <form onSubmit={handleAdd} style={{ display: 'flex', gap: 6 }}>
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -713,12 +805,12 @@ function RunningShoesPanel({
           style={{
             flex: 1,
             minWidth: 0,
-            padding: '10px 12px',
-            borderRadius: 12,
+            padding: '7px 10px',
+            borderRadius: 10,
             border: `1px solid ${inputBorder}`,
             background: inputBg,
             color: theme.textHeading,
-            fontSize: 14,
+            fontSize: 13,
             colorScheme: isDark ? 'dark' : 'light',
           }}
         />
@@ -727,11 +819,12 @@ function RunningShoesPanel({
           disabled={!String(name || '').trim()}
           style={{
             border: 'none',
-            borderRadius: 12,
-            padding: '10px 16px',
+            borderRadius: 10,
+            padding: '7px 12px',
             background: theme.orange,
             color: '#fff',
             fontWeight: 800,
+            fontSize: 12,
             cursor: String(name || '').trim() ? 'pointer' : 'default',
             opacity: String(name || '').trim() ? 1 : 0.55,
             whiteSpace: 'nowrap',
@@ -742,49 +835,63 @@ function RunningShoesPanel({
       </form>
 
       {activeShoes.length ? (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        <div style={{ display: 'grid', gap: 4 }}>
           {activeShoes.map((shoe) => {
-            const shoeColor = getShoeColor(shoe.id, theme.orange);
+            const shoeColor = getShoeColor(shoe, theme.orange);
             return (
-            <span
-              key={shoe.id}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '6px 8px 6px 10px',
-                borderRadius: 999,
-                border: `1px solid ${shoeColor}66`,
-                background: `${shoeColor}14`,
-                fontSize: 13,
-                fontWeight: 700,
-                color: theme.textHeading,
-              }}
-            >
-              <span style={{ width: 9, height: 9, borderRadius: 999, background: shoeColor, flexShrink: 0 }} />
-              {getRunningShoeLabel(shoe)}
-              <button
-                type="button"
-                onClick={() => handleRemove(shoe.id)}
-                aria-label={`Remove ${getRunningShoeLabel(shoe)}`}
+              <div
+                key={shoe.id}
                 style={{
-                  border: 'none',
-                  background: 'transparent',
-                  color: theme.textMuted,
-                  cursor: 'pointer',
-                  fontSize: 14,
-                  lineHeight: 1,
-                  padding: '2px 4px',
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(0, 1fr) auto',
+                  gap: 8,
+                  alignItems: 'center',
+                  padding: '5px 8px',
+                  borderRadius: 10,
+                  border: `1px solid ${shoeColor}44`,
+                  background: `${shoeColor}10`,
+                  minWidth: 0,
                 }}
               >
-                ×
-              </button>
-            </span>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 7,
+                  minWidth: 0,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: theme.textHeading,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+                >
+                  <span style={{ width: 7, height: 7, borderRadius: 999, background: shoeColor, flexShrink: 0 }} />
+                  {getRunningShoeLabel(shoe)}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleRemove(shoe.id)}
+                  aria-label={`Remove ${getRunningShoeLabel(shoe)}`}
+                  style={{
+                    border: 'none',
+                    background: 'transparent',
+                    color: theme.textMuted,
+                    cursor: 'pointer',
+                    fontSize: 14,
+                    lineHeight: 1,
+                    padding: '2px 4px',
+                    flexShrink: 0,
+                  }}
+                >
+                  ×
+                </button>
+              </div>
             );
           })}
         </div>
       ) : (
-        <div style={{ fontSize: 13, color: theme.textMuted }}>Type a shoe name and hit Add.</div>
+        <div style={{ fontSize: 12, color: theme.textMuted }}>Type a shoe name and hit Add.</div>
       )}
 
       {stravaRuns.length ? (
@@ -842,9 +949,16 @@ function RunningShoesPanel({
                       {fmtDate(run.date)} · {run.distance} km
                     </div>
                     <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 2 }}>
-                      {run.shoeId
-                        ? `Shoe: ${getRunningShoeLabel(activeShoes.find((s) => s.id === run.shoeId) || { name: 'Unknown' })}`
-                        : 'No shoe yet — choose one below'}
+                      {run.shoeId ? (
+                        <ShoeBadge
+                          label={getRunningShoeLabel(activeShoes.find((s) => s.id === run.shoeId) || { name: 'Unknown' })}
+                          color={getShoeColor(activeShoes.find((s) => s.id === run.shoeId) || { id: run.shoeId })}
+                          shoeId={run.shoeId}
+                          theme={theme}
+                        />
+                      ) : (
+                        'No shoe yet — choose one below'
+                      )}
                     </div>
                   </div>
                   <button
@@ -984,6 +1098,7 @@ function ShoeLeaderBars({ title, items = [], theme, accent, valueFmt }) {
 function ShoeStatsSection({ entries, shoes, theme, onAssignShoes }) {
   const shoeStats = useMemo(() => computeShoeStats(entries, shoes), [entries, shoes]);
   const topDistance = useMemo(() => computeRunLeaderboards(entries, shoes, 5).topDistance, [entries, shoes]);
+  const fastestSplits = useMemo(() => computeFastestKmSplits(entries, shoes, 10), [entries, shoes]);
   const untagged = shoeStats.filter((row) => !row.shoeId);
   const unknown = shoeStats.filter((row) => row.shoeId && !(shoes || []).some((shoe) => shoe.id === row.shoeId));
   if (!shoeStats.length) {
@@ -1039,22 +1154,28 @@ function ShoeStatsSection({ entries, shoes, theme, onAssignShoes }) {
         theme={theme}
         limit={5}
       />
+      <TopFastestSplits
+        title="Fastest 1 km splits"
+        rows={fastestSplits}
+        theme={theme}
+        limit={10}
+      />
       <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10, minWidth: 0 }}>
         <DepthHBars
           title="Runs per shoe"
           theme={theme}
           accent={theme.blue}
           items={shoeStats.filter((r) => r.shoeId).slice(0, 6).map((r) => ({
-            label: String(r.label || r.name || 'Shoe').slice(0, 18),
+            label: String(r.label || r.name || 'Shoe'),
             value: r.runs,
             shoeId: r.shoeId,
-            color: getShoeColor(r.shoeId, theme.blue),
+            color: getShoeColor({ id: r.shoeId, name: r.label, label: r.label }, theme.blue),
           }))}
         />
       </div>
       <div className="sport-3col" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 10, minWidth: 0 }}>
         {shoeStats.filter((row) => row.shoeId).map((row) => {
-          const shoeColor = getShoeColor(row.shoeId, theme.orange);
+          const shoeColor = getShoeColor({ id: row.shoeId, name: row.label, label: row.label }, theme.orange);
           return (
           <div key={row.shoeId || row.label} style={{
             padding: '14px 16px',
@@ -1067,9 +1188,8 @@ function ShoeStatsSection({ entries, shoes, theme, onAssignShoes }) {
             minWidth: 0,
           }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', color: theme.textMuted }}>
-              <span style={{ width: 10, height: 10, borderRadius: 999, background: shoeColor, flexShrink: 0 }} />
-              {row.label}
+            <div style={{ marginBottom: 4 }}>
+              <ShoeBadge label={row.label} color={shoeColor} shoeId={row.shoeId} theme={theme} />
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 10, fontSize: 12 }}>
               <div><span style={{ color: theme.textMuted }}>Runs</span><div style={{ fontWeight: 800, color: shoeColor }}>{row.runs}</div></div>
@@ -1206,7 +1326,8 @@ function RunningTab({
   const [deletingRunId, setDeletingRunId] = useState(null);
   const [assignError, setAssignError] = useState('');
   const untaggedRuns = importedRuns.filter((run) => !run.shoeId).length;
-  const [shoesOpen, setShoesOpen] = useState(!runningShoes.filter((s) => !s.retired).length || untaggedRuns > 0);
+  const [shoesOpen, setShoesOpen] = useState(!runningShoes.filter((s) => !s.retired).length);
+  const autoAssignRef = useRef(new Set());
   const [forceEditPastRuns, setForceEditPastRuns] = useState(false);
   const shoesSectionRef = useRef(null);
   const hrDashboard = useMemo(() => buildHeartRateDashboard(runRows, stravaInsights), [runRows, stravaInsights]);
@@ -1266,6 +1387,26 @@ function RunningTab({
       setSavingShoeId(null);
     }
   };
+
+  useEffect(() => {
+    const fallback = findDefaultUntaggedShoe(runningShoes);
+    if (!fallback?.id || !userId || !isWellnessApiReady()) return;
+    const pending = importedRuns.filter((run) => (
+      run.stravaId
+      && !run.shoeId
+      && !autoAssignRef.current.has(run.stravaId)
+    ));
+    if (!pending.length) return;
+    pending.forEach((run) => autoAssignRef.current.add(run.stravaId));
+    let cancelled = false;
+    (async () => {
+      for (const run of pending) {
+        if (cancelled) return;
+        await handleAssignShoe(run.stravaId, fallback.id);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [importedRuns, runningShoes, userId]);
 
   const handleDeleteRun = async (stravaId) => {
     if (!userId || !stravaId) return;
@@ -1413,48 +1554,51 @@ function RunningTab({
 
       <CollapsibleBlock title="Run rankings" theme={theme} defaultOpen>
         <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
-          <div className="run-dash-charts-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div style={{ fontSize: 12, color: theme.textMuted, lineHeight: 1.45 }}>
+            Best overall ranks mainly by speed vs heart rate. Distance only adds a small bonus. Runs without HR use ~174 bpm for scoring.
+          </div>
+          <div className="run-dash-charts-1" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
             <RunLeaderboard
-              title="Best HR · 5 km+"
-              subtitle="Lowest avg heart rate · runs ≥ 5 km"
-              rows={runLeaderboards.bestHr5}
+              title="Best overall · 5 km+"
+              subtitle="Score favors speed + heart rate; distance only adds a small bonus"
+              rows={runLeaderboards.bestQuality5}
               theme={theme}
-              accent={CHART_SOFT.hr}
-              metricKey="avgHeartrate"
-              metricFmt={(v) => `${Math.round(v)} bpm`}
-              emptyText="Need runs ≥ 5 km with heart rate data."
-              limit={5}
-            />
-            <RunLeaderboard
-              title="Best HR · 10 km+"
-              subtitle="Lowest avg heart rate · runs ≥ 10 km"
-              rows={runLeaderboards.bestHr10}
-              theme={theme}
-              accent={CHART_SOFT.hrAlt}
-              metricKey="avgHeartrate"
-              metricFmt={(v) => `${Math.round(v)} bpm`}
-              emptyText="Need runs ≥ 10 km with heart rate data."
-              limit={5}
-            />
-            <RunLeaderboard
-              title="Best speed · 5 km+"
-              subtitle="Highest avg speed · runs ≥ 5 km"
-              rows={runLeaderboards.bestSpeed5}
-              theme={theme}
-              accent={CHART_SOFT.green}
-              metricKey="speed"
-              metricFmt={(v) => `${Number(v).toFixed(1)} km/h`}
+              accent={CHART_SOFT.cyan}
+              metricKey="quality"
+              metricFmt={(v) => Number(v).toFixed(1)}
               emptyText="Need runs ≥ 5 km with pace data."
               limit={5}
             />
             <RunLeaderboard
-              title="Best speed · 10 km+"
-              subtitle="Highest avg speed · runs ≥ 10 km"
-              rows={runLeaderboards.bestSpeed10}
+              title="Best overall · 10 km+"
+              subtitle="Score favors speed + heart rate; distance only adds a small bonus"
+              rows={runLeaderboards.bestQuality10}
               theme={theme}
               accent={CHART_SOFT.blue}
+              metricKey="quality"
+              metricFmt={(v) => Number(v).toFixed(1)}
+              emptyText="Need runs ≥ 10 km with pace data."
+              limit={5}
+            />
+            <RunLeaderboard
+              title="Fastest · 5 km+"
+              subtitle="Highest average speed on runs of 5 km or more"
+              rows={runLeaderboards.bestSpeed5}
+              theme={theme}
+              accent={CHART_SOFT.green}
               metricKey="speed"
-              metricFmt={(v) => `${Number(v).toFixed(1)} km/h`}
+              metricFmt={(v) => Number(v).toFixed(1)}
+              emptyText="Need runs ≥ 5 km with pace data."
+              limit={5}
+            />
+            <RunLeaderboard
+              title="Fastest · 10 km+"
+              subtitle="Highest average speed on runs of 10 km or more"
+              rows={runLeaderboards.bestSpeed10}
+              theme={theme}
+              accent={CHART_SOFT.orange}
+              metricKey="speed"
+              metricFmt={(v) => Number(v).toFixed(1)}
               emptyText="Need runs ≥ 10 km with pace data."
               limit={5}
             />
@@ -1566,21 +1710,405 @@ function SimpleSportTab({ stats, name, sportLabel, minKey, showDistance, accent,
   );
 }
 
-function OverviewTab({ wellStats, wellSummary, allSportStats, name, theme }) {
+function PaceHrScatter({ rows = [], theme, xKey = 'paceMinPerKm', xLabel = 'Pace', formatX }) {
+  const points = (rows || []).filter((row) => Number(row[xKey]) > 0 && Number(row.avgHeartrate) > 0);
+  if (points.length < 2) return null;
+  const W = 360;
+  const H = 140;
+  const pad = { t: 16, r: 12, b: 28, l: 32 };
+  const xs = points.map((p) => Number(p[xKey]));
+  const ys = points.map((p) => Number(p.avgHeartrate));
+  const xMin = Math.min(...xs);
+  const xMax = Math.max(...xs);
+  const yMin = Math.min(...ys) - 4;
+  const yMax = Math.max(...ys) + 4;
+  const xSpan = Math.max(0.01, xMax - xMin);
+  const ySpan = Math.max(1, yMax - yMin);
+  const plotW = W - pad.l - pad.r;
+  const plotH = H - pad.t - pad.b;
+  const fmtX = formatX || ((v) => Number(v).toFixed(1));
+
+  return (
+    <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 18, padding: 14 }}>
+      <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.12em', color: theme.textMuted, marginBottom: 8 }}>
+        Heart rate vs {xLabel.toLowerCase()}
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: H }}>
+        <line x1={pad.l} y1={pad.t} x2={pad.l} y2={H - pad.b} stroke={theme.cardBorder} />
+        <line x1={pad.l} y1={H - pad.b} x2={W - pad.r} y2={H - pad.b} stroke={theme.cardBorder} />
+        <text x={pad.l - 4} y={pad.t + 4} textAnchor="end" fill={theme.textMuted} fontSize="9">{Math.round(yMax)}</text>
+        <text x={pad.l - 4} y={H - pad.b} textAnchor="end" fill={theme.textMuted} fontSize="9">{Math.round(yMin)}</text>
+        <text x={pad.l} y={H - 6} fill={theme.textMuted} fontSize="9">{fmtX(xMin)}</text>
+        <text x={W - pad.r} y={H - 6} textAnchor="end" fill={theme.textMuted} fontSize="9">{fmtX(xMax)}</text>
+        {points.map((p, i) => {
+          const x = pad.l + ((Number(p[xKey]) - xMin) / xSpan) * plotW;
+          const y = pad.t + plotH - ((Number(p.avgHeartrate) - yMin) / ySpan) * plotH;
+          const zone = hrZoneForBpm(p.avgHeartrate);
+          return <circle key={`${p.date}-${i}`} cx={x} cy={y} r="4.5" fill={zone?.color || CHART_SOFT.hr} opacity="0.9" />;
+        })}
+      </svg>
+      <div style={{ fontSize: 11, color: theme.textMuted }}>Each dot is a session · color follows HR zone</div>
+    </div>
+  );
+}
+
+function TopKmTable({ title, rows = [], theme, showPace = true }) {
+  const list = (rows || []).slice(0, 8);
+  if (!list.length) {
+    return (
+      <div style={{ padding: 14, borderRadius: 16, border: `1px solid ${theme.cardBorder}`, color: theme.textMuted, fontSize: 12 }}>
+        {title}: none yet.
+      </div>
+    );
+  }
+  const maxKm = Math.max(...list.map((r) => Number(r.distance) || 0), 0.01);
+  return (
+    <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 18, overflow: 'hidden' }}>
+      <div style={{ padding: '14px 18px', fontWeight: 800, fontSize: 14, color: theme.textHeading, borderBottom: `1px solid ${theme.cardBorder}` }}>{title}</div>
+      {list.map((row, i) => {
+        const km = Number(row.distance) || 0;
+        const hr = Number(row.avgHeartrate) || 0;
+        const zone = hr ? hrZoneForBpm(hr) : null;
+        return (
+          <div key={`${row.date}-${i}`} style={{ display: 'grid', gridTemplateColumns: '28px 1fr auto', gap: 10, padding: '11px 18px', borderTop: i > 0 ? `1px solid ${theme.cardBorder}` : 'none', alignItems: 'center' }}>
+            <span style={{ fontSize: 12, fontWeight: 800, color: i === 0 ? theme.orange : theme.textMuted }}>#{i + 1}</span>
+            <div>
+              <div style={{ fontSize: 12, color: theme.textSecondary }}>{fmtDate(row.date)}{row.name && row.name !== 'Walk' ? ` · ${row.name}` : ''}</div>
+              <div style={{ height: 5, marginTop: 5, borderRadius: 3, background: theme.cardBorder, overflow: 'hidden' }}>
+                <div style={{ width: `${Math.max(8, (km / maxKm) * 100)}%`, height: '100%', background: theme.cyan, borderRadius: 3 }} />
+              </div>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: theme.cyan }}>{km.toFixed(1)} km</div>
+              <div style={{ fontSize: 11, color: theme.textMuted }}>
+                {fmtMins(row.minutes)}
+                {showPace && row.paceMinPerKm ? ` · ${fmtPace(row.paceMinPerKm)}` : ''}
+                {hr ? ` · ${hr} bpm` : ''}
+                {zone ? ` ${zone.short}` : ''}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function WalkingTab({ entries = [], name, theme }) {
+  const walkRows = useMemo(() => buildSportActivityRows(entries, {
+    arrayKey: 'stravaWalks',
+    minutesKey: 'walkingMinutes',
+    distanceKey: 'walkingDistanceKm',
+    defaultName: 'Walk',
+  }), [entries]);
+
+  const weeklyKm = useMemo(() => buildWeeklySumBuckets(walkRows, (r) => r.distance, 12), [walkRows]);
+  const weeklyKmTrend = useMemo(() => ({
+    points: weeklyKm.map((w) => ({ date: w.date, label: w.label, y: w.value })),
+    overallAvg: weeklyKm.length ? weeklyKm.reduce((s, w) => s + w.value, 0) / weeklyKm.length : null,
+    last10Avg: weeklyKm.length ? weeklyKm[weeklyKm.length - 1].value : null,
+  }), [weeklyKm]);
+  const longestWalks = useMemo(() => [...walkRows].filter((r) => r.distance > 0).sort((a, b) => b.distance - a.distance), [walkRows]);
+  const paceBands = useMemo(() => walkPaceHrBands(walkRows), [walkRows]);
+  const hrWalks = useMemo(() => walkRows.filter((r) => Number(r.avgHeartrate) > 0 && Number(r.paceMinPerKm) > 0), [walkRows]);
+
+  const totalKm = walkRows.reduce((s, r) => s + (r.distance || 0), 0);
+  const totalMins = walkRows.reduce((s, r) => s + (r.minutes || 0), 0);
+  const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
+  const weekAgoStr = weekAgo.toISOString().slice(0, 10);
+  const weekKm = walkRows.filter((r) => (r.date || '') >= weekAgoStr).reduce((s, r) => s + (r.distance || 0), 0);
+  const longest = longestWalks[0];
+  const avgHr = hrWalks.length ? Math.round(hrWalks.reduce((s, r) => s + r.avgHeartrate, 0) / hrWalks.length) : null;
+  const easiestBand = [...paceBands].sort((a, b) => (a.avgHr || 999) - (b.avgHr || 999))[0];
+  const hardestBand = [...paceBands].sort((a, b) => (b.avgHr || 0) - (a.avgHr || 0))[0];
+  const wellness = useMemo(() => {
+    const weekAgoLocal = new Date(); weekAgoLocal.setDate(weekAgoLocal.getDate() - 7);
+    const weekStr = weekAgoLocal.toISOString().slice(0, 10);
+    const keys = ['walkingDistanceKm', 'walkingMinutes'];
+    const all = sportWellnessPoints(entries, keys);
+    const week = sportWellnessPoints((entries || []).filter((e) => String(e.date || '') >= weekStr), keys);
+    return { all, week };
+  }, [entries]);
+
+  if (!walkRows.length) return <EmptyState sport="Walking" theme={theme} />;
+
+  return (
+    <div style={{ display: 'grid', gap: 16 }}>
+      <div className="sport-4col" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 10 }}>
+        <DepthMetric label="Walks" value={walkRows.length} sub={`${fmtMins(totalMins)} total`} accent={theme.cyan} theme={theme} />
+        <DepthMetric label="This week" value={`${weekKm.toFixed(1)} km`} sub="last 7 days" accent={theme.green} theme={theme} />
+        <DepthMetric label="Most km walk" value={longest ? `${longest.distance.toFixed(1)}` : '--'} sub={longest ? fmtDate(longest.date) : 'no distance yet'} accent={theme.orange} theme={theme} />
+        <DepthMetric label="All-time km" value={totalKm.toFixed(1)} sub={avgHr ? `avg HR ${avgHr} bpm` : `${name}'s walks`} accent={theme.blue} theme={theme} />
+      </div>
+
+      <div className="sport-4col" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 10 }}>
+        <DepthMetric label="Wellness pts" value={wellness.all.total.toFixed(1)} sub="from walking" accent={theme.orange} theme={theme} />
+        <DepthMetric label="This week pts" value={wellness.week.total.toFixed(1)} sub="last 7 days" accent={theme.green} theme={theme} />
+        <DepthMetric label="Physical" value={wellness.all.physical.toFixed(1)} sub="km + time" accent={theme.cyan} theme={theme} />
+        <DepthMetric label="Mental" value={wellness.all.mental.toFixed(1)} sub="recovery from walks" accent={theme.purple || '#a855f7'} theme={theme} />
+      </div>
+
+      <CollapsibleBlock title="Week-wise km" theme={theme} defaultOpen>
+        <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
+          {weeklyKm.length >= 2 ? (
+            <RunTrendChart
+              title="Weekly walking distance"
+              subtitle="Sum of km each week"
+              points={weeklyKmTrend.points}
+              overallAvg={weeklyKmTrend.overallAvg}
+              last10Avg={weeklyKmTrend.last10Avg}
+              theme={theme}
+              accent={CHART_SOFT.cyan}
+              valueFmt={(v) => `${Number(v).toFixed(1)}`}
+              unitLabel=" km"
+            />
+          ) : null}
+          <DepthBars
+            title="Km by week"
+            items={weeklyKm.slice(-8).map((w) => ({ label: w.label, value: w.value }))}
+            theme={theme}
+            accent={theme.cyan}
+            unit=" km"
+          />
+        </div>
+      </CollapsibleBlock>
+
+      <CollapsibleBlock title="Heart rate at pace" theme={theme} defaultOpen>
+        <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
+          {easiestBand || hardestBand ? (
+            <div className="run-dash-mini-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 8 }}>
+              <MiniStat
+                label="Calmest pace"
+                value={easiestBand?.avgHr ? `${easiestBand.avgHr} bpm` : '--'}
+                sub={easiestBand ? `${easiestBand.label} · ${easiestBand.count} walk${easiestBand.count === 1 ? '' : 's'}` : 'need HR walks'}
+                accent={theme.green}
+                theme={theme}
+              />
+              <MiniStat
+                label="Highest HR pace"
+                value={hardestBand?.avgHr ? `${hardestBand.avgHr} bpm` : '--'}
+                sub={hardestBand ? `${hardestBand.label} · ${hardestBand.count} walk${hardestBand.count === 1 ? '' : 's'}` : 'need HR walks'}
+                accent={CHART_SOFT.hr}
+                theme={theme}
+              />
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: theme.textMuted, padding: '8px 2px' }}>
+              Sync Strava walks with heart rate to see BPM at each pace.
+            </div>
+          )}
+          {paceBands.length ? (
+            <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 18, padding: 14, display: 'grid', gap: 10 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>Heartbeat by walking pace</div>
+              {paceBands.map((band) => {
+                const maxHr = Math.max(...paceBands.map((b) => b.avgHr || 0), 1);
+                return (
+                  <div key={band.id} style={{ display: 'grid', gridTemplateColumns: '110px 1fr 72px', gap: 8, alignItems: 'center' }}>
+                    <span style={{ fontSize: 11, color: theme.textMuted, fontWeight: 700 }}>{band.label}</span>
+                    <div style={{ height: 10, borderRadius: 999, background: theme.cardBorder, overflow: 'hidden' }}>
+                      <div style={{ width: `${Math.min(100, ((band.avgHr || 0) / maxHr) * 100)}%`, height: '100%', background: hrZoneForBpm(band.avgHr)?.color || theme.cyan }} />
+                    </div>
+                    <span style={{ fontSize: 12, fontWeight: 800, color: theme.textHeading, textAlign: 'right' }}>{band.avgHr} bpm</span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+          <PaceHrScatter rows={hrWalks} theme={theme} xKey="paceMinPerKm" xLabel="Pace" formatX={(v) => fmtPace(v).replace(' /km', '')} />
+        </div>
+      </CollapsibleBlock>
+
+      <div className="sport-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+        <TopKmTable title="Most km walked" rows={longestWalks} theme={theme} />
+        <SportSessionTable rows={walkRows} showDistance title="Recent walks" theme={theme} />
+      </div>
+    </div>
+  );
+}
+
+function YogaTab({ entries = [], name, theme }) {
+  const yogaRows = useMemo(() => buildSportActivityRows(entries, {
+    arrayKey: 'stravaYoga',
+    minutesKey: 'yogaMinutes',
+    defaultName: 'Yoga',
+  }), [entries]);
+
+  const weeklyMins = useMemo(() => buildWeeklySumBuckets(yogaRows, (r) => r.minutes, 12), [yogaRows]);
+  const weeklyTrend = useMemo(() => ({
+    points: weeklyMins.map((w) => ({ date: w.date, label: w.label, y: w.value })),
+    overallAvg: weeklyMins.length ? weeklyMins.reduce((s, w) => s + w.value, 0) / weeklyMins.length : null,
+    last10Avg: weeklyMins.length ? weeklyMins[weeklyMins.length - 1].value : null,
+  }), [weeklyMins]);
+  const longest = useMemo(() => [...yogaRows].sort((a, b) => b.minutes - a.minutes), [yogaRows]);
+  const hrSessions = useMemo(() => yogaRows.filter((r) => Number(r.avgHeartrate) > 0), [yogaRows]);
+  const totalMins = yogaRows.reduce((s, r) => s + (r.minutes || 0), 0);
+  const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
+  const weekAgoStr = weekAgo.toISOString().slice(0, 10);
+  const weekMins = yogaRows.filter((r) => (r.date || '') >= weekAgoStr).reduce((s, r) => s + (r.minutes || 0), 0);
+  const avgHr = hrSessions.length ? Math.round(hrSessions.reduce((s, r) => s + r.avgHeartrate, 0) / hrSessions.length) : null;
+  const longestSession = longest[0];
+  const calmest = [...hrSessions].sort((a, b) => a.avgHeartrate - b.avgHeartrate)[0];
+  const peakHr = [...hrSessions].sort((a, b) => b.avgHeartrate - a.avgHeartrate)[0];
+  const wellness = useMemo(() => {
+    const weekAgoLocal = new Date(); weekAgoLocal.setDate(weekAgoLocal.getDate() - 7);
+    const weekStr = weekAgoLocal.toISOString().slice(0, 10);
+    const keys = ['yogaMinutes'];
+    const all = sportWellnessPoints(entries, keys);
+    const week = sportWellnessPoints((entries || []).filter((e) => String(e.date || '') >= weekStr), keys);
+    return { all, week };
+  }, [entries]);
+
+  if (!yogaRows.length) return <EmptyState sport="Yoga" theme={theme} />;
+
+  return (
+    <div style={{ display: 'grid', gap: 16 }}>
+      <div className="sport-4col" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 10 }}>
+        <DepthMetric label="Sessions" value={yogaRows.length} sub={`${fmtMins(totalMins)} total`} accent={theme.purple || '#a855f7'} theme={theme} />
+        <DepthMetric label="This week" value={fmtMins(weekMins)} sub="last 7 days" accent={theme.green} theme={theme} />
+        <DepthMetric label="Longest" value={longestSession ? fmtMins(longestSession.minutes) : '--'} sub={longestSession ? fmtDate(longestSession.date) : ''} accent={theme.orange} theme={theme} />
+        <DepthMetric label="Avg HR" value={avgHr ? `${avgHr}` : '--'} sub={avgHr ? `${hrSessions.length} HR sessions` : `${name}'s yoga`} accent={CHART_SOFT.hr} theme={theme} />
+      </div>
+
+      <div className="sport-4col" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 10 }}>
+        <DepthMetric label="Wellness pts" value={wellness.all.total.toFixed(1)} sub="from yoga" accent={theme.orange} theme={theme} />
+        <DepthMetric label="This week pts" value={wellness.week.total.toFixed(1)} sub="last 7 days" accent={theme.green} theme={theme} />
+        <DepthMetric label="Physical" value={wellness.all.physical.toFixed(1)} sub="from session time" accent={theme.cyan} theme={theme} />
+        <DepthMetric label="Mental" value={wellness.all.mental.toFixed(1)} sub="calm + recovery" accent={theme.purple || '#a855f7'} theme={theme} />
+      </div>
+
+      <CollapsibleBlock title="Week-wise minutes" theme={theme} defaultOpen>
+        <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
+          {weeklyMins.length >= 2 ? (
+            <RunTrendChart
+              title="Weekly yoga time"
+              subtitle="Minutes practiced each week"
+              points={weeklyTrend.points}
+              overallAvg={weeklyTrend.overallAvg}
+              last10Avg={weeklyTrend.last10Avg}
+              theme={theme}
+              accent={theme.purple || '#a855f7'}
+              valueFmt={(v) => `${Math.round(v)}`}
+              unitLabel=" min"
+            />
+          ) : null}
+          <DepthBars
+            title="Minutes by week"
+            items={weeklyMins.slice(-8).map((w) => ({ label: w.label, value: Math.round(w.value) }))}
+            theme={theme}
+            accent={theme.purple || '#a855f7'}
+            unit="m"
+          />
+        </div>
+      </CollapsibleBlock>
+
+      <CollapsibleBlock title="Heart rate" theme={theme} defaultOpen>
+        <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
+          {hrSessions.length ? (
+            <>
+              <div className="run-dash-mini-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 8 }}>
+                <MiniStat
+                  label="Calmest session"
+                  value={calmest ? `${calmest.avgHeartrate} bpm` : '--'}
+                  sub={calmest ? `${fmtDate(calmest.date)} · ${fmtMins(calmest.minutes)}` : ''}
+                  accent={theme.green}
+                  theme={theme}
+                />
+                <MiniStat
+                  label="Peak session HR"
+                  value={peakHr ? `${peakHr.avgHeartrate} bpm` : '--'}
+                  sub={peakHr ? `${fmtDate(peakHr.date)} · ${fmtMins(peakHr.minutes)}${peakHr.maxHeartrate ? ` · max ${peakHr.maxHeartrate}` : ''}` : ''}
+                  accent={CHART_SOFT.hr}
+                  theme={theme}
+                />
+              </div>
+              <PaceHrScatter
+                rows={hrSessions}
+                theme={theme}
+                xKey="minutes"
+                xLabel="Duration"
+                formatX={(v) => `${Math.round(v)}m`}
+              />
+            </>
+          ) : (
+            <div style={{ fontSize: 12, color: theme.textMuted, padding: '8px 2px' }}>
+              Sync Strava yoga with heart rate to see BPM by session length.
+            </div>
+          )}
+        </div>
+      </CollapsibleBlock>
+
+      <div className="sport-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+        <SportSessionTable rows={longest} showDistance={false} title="Longest yoga sessions" theme={theme} />
+        <SportSessionTable rows={yogaRows} showDistance={false} title="Recent yoga" theme={theme} />
+      </div>
+    </div>
+  );
+}
+
+
+function OverviewTab({ wellStats, wellSummary, allSportStats, entries = [], name, theme }) {
+  const walkRows = useMemo(() => buildSportActivityRows(entries, {
+    arrayKey: 'stravaWalks',
+    minutesKey: 'walkingMinutes',
+    distanceKey: 'walkingDistanceKm',
+    defaultName: 'Walk',
+  }), [entries]);
+  const yogaRows = useMemo(() => buildSportActivityRows(entries, {
+    arrayKey: 'stravaYoga',
+    minutesKey: 'yogaMinutes',
+    defaultName: 'Yoga',
+  }), [entries]);
+  const runActivityRows = useMemo(() => buildRunningRows(entries), [entries]);
+
+  const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
+  const weekAgoStr = weekAgo.toISOString().slice(0, 10);
+  const inWeek = (row) => String(row.date || '') >= weekAgoStr;
+
+  const runStats = allSportStats.running;
+  const walkKmWeek = walkRows.filter(inWeek).reduce((s, r) => s + (r.distance || 0), 0);
+  const yogaMinsWeek = yogaRows.filter(inWeek).reduce((s, r) => s + (r.minutes || 0), 0);
+  const runKmWeek = runActivityRows.filter(inWeek).reduce((s, r) => s + (r.distance || 0), 0);
+
   const activities = [
-    { label: 'Running', emoji: '🏃', key: 'running', sessions: allSportStats.running?.count || 0, mins: allSportStats.running?.totalMinutes || 0, accent: theme.green },
-    { label: 'Badminton', emoji: '🏸', key: 'badminton', sessions: allSportStats.badminton?.count || 0, mins: allSportStats.badminton?.totalMinutes || 0, accent: theme.yellow },
-    { label: 'Cycling', emoji: '🚴', key: 'cycling', sessions: allSportStats.cycling?.count || 0, mins: allSportStats.cycling?.totalMinutes || 0, accent: theme.blue },
-    { label: 'Walking', emoji: '🚶', key: 'walking', sessions: allSportStats.walking?.count || 0, mins: allSportStats.walking?.totalMinutes || 0, accent: theme.cyan },
-    { label: 'Swimming', emoji: '🏊', key: 'swimming', sessions: allSportStats.swimming?.count || 0, mins: allSportStats.swimming?.totalMinutes || 0, accent: theme.purple },
-    { label: 'Yoga', emoji: '🧘', key: 'yoga', sessions: allSportStats.yoga?.count || 0, mins: allSportStats.yoga?.totalMinutes || 0, accent: theme.purple || '#a855f7' },
-  ].filter((a) => a.sessions > 0);
+    { label: 'Running', emoji: '🏃', key: 'running', sessions: runActivityRows.length || runStats?.count || 0, mins: runActivityRows.reduce((s, r) => s + (r.minutes || 0), 0) || runStats?.totalMinutes || 0, distance: runActivityRows.reduce((s, r) => s + (r.distance || 0), 0) || runStats?.totalDistance || 0, accent: theme.green, weeklyMins: runActivityRows.filter(inWeek).reduce((s, r) => s + (r.minutes || 0), 0) },
+    { label: 'Walking', emoji: '🚶', key: 'walking', sessions: walkRows.length || allSportStats.walking?.count || 0, mins: walkRows.reduce((s, r) => s + (r.minutes || 0), 0) || allSportStats.walking?.totalMinutes || 0, distance: walkRows.reduce((s, r) => s + (r.distance || 0), 0) || allSportStats.walking?.totalDistance || 0, accent: theme.cyan, weeklyMins: walkRows.filter(inWeek).reduce((s, r) => s + (r.minutes || 0), 0) },
+    { label: 'Yoga', emoji: '🧘', key: 'yoga', sessions: yogaRows.length || allSportStats.yoga?.count || 0, mins: yogaRows.reduce((s, r) => s + (r.minutes || 0), 0) || allSportStats.yoga?.totalMinutes || 0, distance: 0, accent: theme.purple || '#a855f7', weeklyMins: yogaMinsWeek },
+    { label: 'Cycling', emoji: '🚴', key: 'cycling', sessions: allSportStats.cycling?.count || 0, mins: allSportStats.cycling?.totalMinutes || 0, distance: allSportStats.cycling?.totalDistance || 0, accent: theme.blue, weeklyMins: allSportStats.cycling?.weeklyMins || 0 },
+    { label: 'Swimming', emoji: '🏊', key: 'swimming', sessions: allSportStats.swimming?.count || 0, mins: allSportStats.swimming?.totalMinutes || 0, distance: 0, accent: theme.purple, weeklyMins: allSportStats.swimming?.weeklyMins || 0 },
+    { label: 'Badminton', emoji: '🏸', key: 'badminton', sessions: allSportStats.badminton?.count || 0, mins: allSportStats.badminton?.totalMinutes || 0, distance: 0, accent: theme.yellow, weeklyMins: allSportStats.badminton?.weeklyMins || 0 },
+  ].filter((a) => a.sessions > 0 || a.mins > 0);
 
   const totalActivityMins = activities.reduce((s, a) => s + a.mins, 0);
+  const weekMins = activities.reduce((s, a) => s + (a.weeklyMins || 0), 0);
+  const walkPts = sportWellnessPoints(entries, ['walkingDistanceKm', 'walkingMinutes']);
+  const yogaPts = sportWellnessPoints(entries, ['yogaMinutes']);
+  const runPts = sportWellnessPoints(entries, ['runningDistanceKm', 'runningMinutes']);
+  const weekEntries = (entries || []).filter((e) => String(e.date || '') >= weekAgoStr);
+  const weekWalkPts = sportWellnessPoints(weekEntries, ['walkingDistanceKm', 'walkingMinutes']);
+  const weekYogaPts = sportWellnessPoints(weekEntries, ['yogaMinutes']);
+  const weekRunPts = sportWellnessPoints(weekEntries, ['runningDistanceKm', 'runningMinutes']);
+
+  const weeklyMix = buildWeeklySumBuckets(
+    activities.flatMap((sport) => (sport.key === 'walking' ? walkRows : sport.key === 'yoga' ? yogaRows : sport.key === 'running' ? runActivityRows : (allSportStats[sport.key]?.rows || [])).map((row) => ({ date: row.date, minutes: row.minutes || 0 }))),
+    (row) => row.minutes,
+    8,
+  );
+
+  const recentMix = [
+    ...walkRows.slice(0, 6).map((r) => ({ ...r, sport: 'Walk', accent: theme.cyan })),
+    ...yogaRows.slice(0, 6).map((r) => ({ ...r, sport: 'Yoga', accent: theme.purple || '#a855f7' })),
+    ...(runActivityRows || []).slice(0, 6).map((r) => ({ ...r, sport: 'Run', accent: theme.green })),
+  ].sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 8);
 
   return (
     <div style={{ display: 'grid', gap: '20px' }}>
-      {/* Overall activity breakdown */}
+      <div className="sport-4col" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 10 }}>
+        <DepthMetric label="This week" value={fmtMins(weekMins)} sub={`${activities.filter((a) => a.weeklyMins > 0).length} sports`} accent={theme.orange} theme={theme} />
+        <DepthMetric label="Walk km · 7d" value={walkKmWeek.toFixed(1)} sub={`${runKmWeek.toFixed(1)} km run`} accent={theme.cyan} theme={theme} />
+        <DepthMetric label="Yoga · 7d" value={fmtMins(yogaMinsWeek)} sub={`${yogaRows.filter(inWeek).length} session${yogaRows.filter(inWeek).length === 1 ? '' : 's'}`} accent={theme.purple || '#a855f7'} theme={theme} />
+        <DepthMetric label="Week wellness" value={(weekWalkPts.total + weekYogaPts.total + weekRunPts.total).toFixed(1)} sub={`walk ${weekWalkPts.total.toFixed(1)} · yoga ${weekYogaPts.total.toFixed(1)}`} accent={theme.green} theme={theme} />
+      </div>
+
       <div>
         <SectionLabel theme={theme}>{name}&apos;s Activity Breakdown</SectionLabel>
         {activities.length === 0 ? (
@@ -1594,7 +2122,7 @@ function OverviewTab({ wellStats, wellSummary, allSportStats, name, theme }) {
             {activities.map((a) => {
               const pct = totalActivityMins > 0 ? Math.round((a.mins / totalActivityMins) * 100) : 0;
               return (
-                <div key={a.key} style={{ padding: '14px 20px', borderTop: `1px solid ${theme.cardBorder}`, display: 'grid', gridTemplateColumns: '32px 1fr 80px 60px', gap: '12px', alignItems: 'center' }}>
+                <div key={a.key} style={{ padding: '14px 20px', borderTop: `1px solid ${theme.cardBorder}`, display: 'grid', gridTemplateColumns: '32px 1fr 80px 70px 52px', gap: '10px', alignItems: 'center' }}>
                   <span style={{ fontSize: '20px' }}>{a.emoji}</span>
                   <div>
                     <div style={{ fontWeight: 700, fontSize: '13px', color: theme.textHeading, marginBottom: '5px' }}>{a.label}</div>
@@ -1603,6 +2131,7 @@ function OverviewTab({ wellStats, wellSummary, allSportStats, name, theme }) {
                     </div>
                   </div>
                   <span style={{ fontSize: '12px', color: theme.textSecondary, textAlign: 'right' }}>{a.sessions} sessions</span>
+                  <span style={{ fontSize: '12px', color: theme.textMuted, textAlign: 'right' }}>{a.distance > 0 ? `${Number(a.distance).toFixed(1)} km` : fmtMins(a.mins)}</span>
                   <span style={{ fontSize: '13px', fontWeight: 700, color: a.accent, textAlign: 'right' }}>{pct}%</span>
                 </div>
               );
@@ -1611,7 +2140,39 @@ function OverviewTab({ wellStats, wellSummary, allSportStats, name, theme }) {
         )}
       </div>
 
-      {/* Wellness scores */}
+      <div className="sport-3col" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0,1fr))', gap: 10 }}>
+        <DepthMetric label="Run wellness" value={runPts.total.toFixed(1)} sub={`phys ${runPts.physical.toFixed(1)} · mind ${runPts.mental.toFixed(1)}`} accent={theme.green} theme={theme} />
+        <DepthMetric label="Walk wellness" value={walkPts.total.toFixed(1)} sub={`phys ${walkPts.physical.toFixed(1)} · mind ${walkPts.mental.toFixed(1)}`} accent={theme.cyan} theme={theme} />
+        <DepthMetric label="Yoga wellness" value={yogaPts.total.toFixed(1)} sub={`phys ${yogaPts.physical.toFixed(1)} · mind ${yogaPts.mental.toFixed(1)}`} accent={theme.purple || '#a855f7'} theme={theme} />
+      </div>
+
+      {weeklyMix.length ? (
+        <DepthBars
+          title="Activity minutes by week"
+          items={weeklyMix.map((w) => ({ label: w.label, value: Math.round(w.value) }))}
+          theme={theme}
+          accent={theme.orange}
+          unit="m"
+        />
+      ) : null}
+
+      {recentMix.length ? (
+        <div>
+          <SectionLabel theme={theme}>Recent across sports</SectionLabel>
+          <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: 18, overflow: 'hidden' }}>
+            {recentMix.map((row, i) => (
+              <div key={`${row.sport}-${row.date}-${i}`} style={{ display: 'grid', gridTemplateColumns: '70px 1fr auto', gap: 10, padding: '11px 16px', borderTop: i > 0 ? `1px solid ${theme.cardBorder}` : 'none', alignItems: 'center' }}>
+                <span style={{ fontSize: 12, fontWeight: 800, color: row.accent }}>{row.sport}</span>
+                <span style={{ fontSize: 12, color: theme.textSecondary }}>{fmtDate(row.date)}</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: theme.textHeading }}>
+                  {row.distance > 0 ? `${Number(row.distance).toFixed(1)} km · ${fmtMins(row.minutes)}` : fmtMins(row.minutes)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       {wellStats?.topScores?.length > 0 && (
         <div>
           <SectionLabel theme={theme}>Top Wellness Days</SectionLabel>
@@ -1652,7 +2213,7 @@ function OverviewTab({ wellStats, wellSummary, allSportStats, name, theme }) {
 function EmptyState({ sport, theme }) {
   return (
     <div style={{ padding: '48px 24px', borderRadius: '24px', background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, textAlign: 'center', color: theme.textSecondary, fontSize: '15px' }}>
-      No {sport} data logged yet. Add it in the Wellness section.
+      No {sport} data logged yet. Sync Strava or add it in the Wellness section.
     </div>
   );
 }
@@ -1663,11 +2224,11 @@ const PRIMARY_TABS = [
   { id: 'overview', label: 'Overview', emoji: '📊' },
 ];
 const MORE_SPORT_TABS = [
-  { id: 'badminton', label: 'Badminton', emoji: '🏸' },
+  { id: 'walking', label: 'Walking', emoji: '🚶' },
   { id: 'yoga', label: 'Yoga', emoji: '🧘' },
   { id: 'cycling', label: 'Cycling', emoji: '🚴' },
-  { id: 'walking', label: 'Walking', emoji: '🚶' },
   { id: 'swimming', label: 'Swimming', emoji: '🏊' },
+  { id: 'badminton', label: 'Badminton', emoji: '🏸' },
 ];
 
 export default function RunningAnalytics() {
@@ -1743,13 +2304,12 @@ export default function RunningAnalytics() {
   useEffect(() => {
     if (!user?.id || !isWellnessApiReady()) return undefined;
     let cancelled = false;
-    const lastSync = Number(localStorage.getItem(`cosmix-strava-last-sync-${user.id}`) || 0);
-    const stale = !lastSync || (Date.now() - lastSync > 45 * 60 * 1000);
-    // Pull latest Strava runs when opening Running — force if older than 45 min so today's map appears.
+    setStravaSyncing(true);
+    setStravaSyncMsg('Syncing Strava…');
     void runStravaAutoSync({
       userId: user.id,
       apiBase: '',
-      force: stale,
+      force: true,
       onMessage: (msg) => {
         if (!cancelled && msg) setStravaSyncMsg(msg);
       },
@@ -1761,9 +2321,14 @@ export default function RunningAnalytics() {
         } catch (_) { /* ignore */ }
       },
     }).then(async (payload) => {
-      if (cancelled || !payload || payload.skippedDueToInterval) return;
-      await refreshWellnessPayload(user.id);
-      setMapsRefreshKey((k) => k + 1);
+      if (cancelled) return;
+      if (payload && !payload.skippedDueToInterval) {
+        await refreshWellnessPayload(user.id);
+        setMapsRefreshKey((k) => k + 1);
+      }
+      if (!payload) setStravaSyncMsg((prev) => prev || 'Strava sync failed — try Sync again.');
+    }).finally(() => {
+      if (!cancelled) setStravaSyncing(false);
     });
     return () => { cancelled = true; };
   }, [user?.id]);
@@ -1815,7 +2380,7 @@ export default function RunningAnalytics() {
     () => (Array.isArray(serverEntries) && serverEntries.length ? serverEntries : (wellSummary?.entries || [])),
     [serverEntries, wellSummary],
   );
-  const runRows = useMemo(() => buildRunningRows(entries), [entries]);
+  const runRows = useMemo(() => buildRunningRows(entries, runningShoes), [entries, runningShoes]);
   const name = user?.name || user?.username || 'Athlete';
 
   useEffect(() => {
@@ -2077,7 +2642,15 @@ export default function RunningAnalytics() {
           <button
             type="button"
             className={`sport-tab-btn sport-tab-btn--other${showOtherSports ? ' is-active' : ''}`}
-            onClick={() => setShowOtherSports((v) => !v)}
+            onClick={() => {
+              setShowOtherSports((open) => {
+                const next = !open;
+                if (next && !MORE_SPORT_TABS.some((tab) => tab.id === activeTab)) {
+                  setActiveTab('walking');
+                }
+                return next;
+              });
+            }}
             style={{
               border: showOtherSports ? `1px solid ${theme.cyan}` : '1px solid transparent',
               background: showOtherSports ? `${theme.cyan}18` : 'transparent',
@@ -2114,7 +2687,7 @@ export default function RunningAnalytics() {
 
         {/* ── Tab Content ── */}
         {activeTab === 'overview' && (
-          <OverviewTab wellStats={wellStats} wellSummary={wellSummary} allSportStats={allSportStats} name={name} theme={theme} />
+          <OverviewTab wellStats={wellStats} wellSummary={wellSummary} allSportStats={allSportStats} entries={entries} name={name} theme={theme} />
         )}
         {activeTab === 'running' && (
           <RunningTab
@@ -2140,13 +2713,13 @@ export default function RunningAnalytics() {
           <SimpleSportTab stats={allSportStats.badminton} name={name} sportLabel="Badminton" minKey="badmintonMinutes" showDistance={false} accent={theme.yellow || '#eab308'} theme={theme} />
         )}
         {activeTab === 'yoga' && (
-          <SimpleSportTab stats={allSportStats.yoga} name={name} sportLabel="Yoga" minKey="yogaMinutes" showDistance={false} accent={theme.purple || '#a855f7'} theme={theme} />
+          <YogaTab entries={entries} name={name} theme={theme} />
         )}
         {activeTab === 'cycling' && (
           <SimpleSportTab stats={allSportStats.cycling} name={name} sportLabel="Cycling" minKey="cyclingMinutes" showDistance={false} accent={theme.blue} theme={theme} />
         )}
         {activeTab === 'walking' && (
-          <SimpleSportTab stats={allSportStats.walking} name={name} sportLabel="Walking" minKey="walkingMinutes" showDistance={true} accent={theme.cyan} theme={theme} />
+          <WalkingTab entries={entries} name={name} theme={theme} />
         )}
         {activeTab === 'swimming' && (
           <SimpleSportTab stats={allSportStats.swimming} name={name} sportLabel="Swimming" minKey="swimmingMinutes" showDistance={false} accent={theme.purple} theme={theme} />

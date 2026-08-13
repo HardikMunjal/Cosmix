@@ -248,14 +248,11 @@ export function DepthHBars({ title, items = [], theme, accent, unit = '' }) {
         <div style={{ fontSize: 12, color: theme.textMuted }}>No data yet</div>
       ) : rows.map((item, index) => {
         const pct = Math.max(4, (Number(item.value) || 0) / max * 100);
-        const color = item.color || getShoeColor(item.shoeId, accent);
+        const color = item.color || getShoeColor({ id: item.shoeId, name: item.label, label: item.label }, accent);
         return (
           <div key={`${item.label}-${index}`} style={{ minWidth: 0 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 4, fontSize: 11 }}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: theme.textSecondary, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-                <span style={{ width: 8, height: 8, borderRadius: 999, background: color, flexShrink: 0 }} />
-                {item.label}
-              </span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 4, fontSize: 11, alignItems: 'center' }}>
+              <ShoeBadge label={item.label} color={color} theme={theme} />
               <span style={{ color, fontWeight: 800, flexShrink: 0 }}>{item.value}{unit}</span>
             </div>
             <div style={{ height: 14, borderRadius: 8, background: theme.cardBorder, overflow: 'hidden', position: 'relative' }}>
@@ -546,6 +543,138 @@ export function RunTrendChart({
   );
 }
 
+export function ShoeBadge({ label, color, shoeId, theme, align = 'left' }) {
+  const resolved = color
+    || getShoeColor({ id: shoeId, name: label, label })
+    || theme?.textSecondary
+    || theme?.textMuted;
+  return (
+    <span style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: align === 'right' ? 'flex-end' : 'flex-start',
+      gap: 7,
+      minWidth: 0,
+      maxWidth: '100%',
+      color: resolved,
+      fontWeight: 700,
+      textAlign: align === 'right' ? 'right' : 'left',
+    }}
+    >
+      <span style={{
+        width: 8,
+        height: 8,
+        borderRadius: 999,
+        background: resolved || '#94a3b8',
+        flexShrink: 0,
+      }}
+      />
+      <span style={{
+        minWidth: 0,
+        lineHeight: 1.25,
+        overflowWrap: 'anywhere',
+        wordBreak: 'break-word',
+      }}
+      >
+        {label || 'Untagged'}
+      </span>
+    </span>
+  );
+}
+
+function fmtRunDate(dateStr) {
+  const raw = String(dateStr || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw || '--';
+  const d = new Date(`${raw}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return raw.slice(5);
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+}
+
+/** 70 → "1h 10m"; 45 → "45m". */
+export function fmtRunDuration(minutes) {
+  const total = Math.round(Number(minutes) || 0);
+  if (total <= 0) return '--';
+  if (total < 60) return `${total}m`;
+  const hours = Math.floor(total / 60);
+  const mins = total % 60;
+  if (mins <= 0) return `${hours}h`;
+  return `${hours}h ${mins}m`;
+}
+
+function rankBarColor(index) {
+  if (index === 0) return '#38bdf8';
+  if (index === 1) return '#f59e0b';
+  if (index === 2) return '#fb7185';
+  return '#64748b';
+}
+
+function MetricCell({
+  label,
+  value,
+  unit,
+  color,
+  theme,
+  align = 'center',
+  valueSize = 13,
+}) {
+  const textAlign = align;
+  return (
+    <div style={{
+      minWidth: 0,
+      textAlign,
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: align === 'left' ? 'flex-start' : align === 'right' ? 'flex-end' : 'center',
+      gap: 3,
+      padding: '0 2px',
+    }}
+    >
+      {label ? (
+        <div style={{
+          fontSize: 9,
+          fontWeight: 700,
+          letterSpacing: '0.05em',
+          textTransform: 'uppercase',
+          color: theme.textMuted,
+          lineHeight: 1,
+          width: '100%',
+          textAlign,
+        }}
+        >
+          {label}
+        </div>
+      ) : null}
+      <div style={{
+        fontSize: valueSize,
+        fontWeight: 800,
+        lineHeight: 1.15,
+        color: color || theme.textHeading,
+        width: '100%',
+        textAlign,
+        overflowWrap: 'anywhere',
+        wordBreak: 'break-word',
+      }}
+      >
+        {value}
+      </div>
+      {unit != null ? (
+        <div style={{
+          fontSize: 9,
+          color: theme.textMuted,
+          lineHeight: 1,
+          width: '100%',
+          textAlign,
+          fontWeight: 600,
+        }}
+        >
+          {unit}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Clean leaderboard with equal metric spacing: Score · Dist · Time · Speed · HR · Shoe. */
 export function RunLeaderboard({
   title,
   subtitle,
@@ -565,23 +694,38 @@ export function RunLeaderboard({
     return (
       <div style={{
         padding: 14,
-        borderRadius: 20,
+        borderRadius: 16,
         background: theme.cardBg,
         border: `1px solid ${theme.cardBorder}`,
         color: theme.textMuted,
         fontSize: 12,
       }}
       >
-        <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading, marginBottom: 4 }}>{title}</div>
+        <div style={{ fontSize: 14, fontWeight: 800, color: theme.textHeading, marginBottom: 4 }}>{title}</div>
         {emptyText}
       </div>
     );
   }
 
+  // Rank | 5 equal metric cols | shoe — constant gap, symmetric metrics.
+  const gridCols = '22px repeat(5, minmax(0, 1fr)) minmax(0, 1.05fr)';
+  const colGap = 8;
+  const rowPad = '10px 10px';
+
+  const headerStyle = {
+    fontSize: 9,
+    fontWeight: 700,
+    letterSpacing: '0.05em',
+    textTransform: 'uppercase',
+    color: theme.textMuted,
+    textAlign: 'center',
+    lineHeight: 1,
+  };
+
   return (
     <div style={{
-      padding: 14,
-      borderRadius: 20,
+      padding: 12,
+      borderRadius: 16,
       background: theme.cardBg,
       border: `1px solid ${theme.cardBorder}`,
       boxShadow: theme.chartDepth,
@@ -589,107 +733,133 @@ export function RunLeaderboard({
       minWidth: 0,
       display: 'grid',
       gap: 8,
+      width: '100%',
     }}
     >
-      <div>
-        <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>{title}</div>
+      <div style={{ padding: '2px 4px 4px' }}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+          {title}
+        </div>
         {subtitle ? (
           <div style={{ fontSize: 11, color: theme.textMuted, marginTop: 3, lineHeight: 1.4 }}>{subtitle}</div>
         ) : null}
       </div>
+
       <div style={{
         display: 'grid',
-        gridTemplateColumns: '22px 1fr 52px 44px 44px minmax(0, 1fr)',
-        gap: '6px 8px',
-        padding: '0 2px 4px',
-        fontSize: 9,
-        fontWeight: 800,
-        textTransform: 'uppercase',
-        letterSpacing: '0.06em',
-        color: theme.textMuted,
+        gridTemplateColumns: gridCols,
+        gap: colGap,
+        padding: '0 10px 2px',
+        alignItems: 'end',
       }}
       >
         <span />
-        <span>Run</span>
-        <span>Speed</span>
-        <span>HR</span>
-        <span>Km</span>
-        <span>Shoe</span>
+        <span style={{ ...headerStyle, color: theme.textSecondary || theme.textHeading, fontWeight: 800 }}>Score</span>
+        <span style={headerStyle}>Dist</span>
+        <span style={headerStyle}>Time</span>
+        <span style={headerStyle}>Speed</span>
+        <span style={headerStyle}>HR</span>
+        <span style={{ ...headerStyle, textAlign: 'left' }}>Shoe</span>
       </div>
+
       <div style={{ display: 'grid', gap: 6 }}>
         {list.map((row, index) => {
           const metric = Number(row[metricKey]) || 0;
-          const barW = Math.max(8, (Math.abs(metric) / max) * 100);
-          const dateLabel = String(row.date || '').slice(5) || '--';
+          const barW = Math.max(10, (Math.abs(metric) / max) * 100);
+          const barColor = accent || rankBarColor(index);
+          const scoreText = metricFmt ? metricFmt(metric) : String(metric);
+          const shoeColor = getShoeColor(
+            { id: row.shoeId, name: row.shoeLabel, label: row.shoeLabel },
+            row.shoeColor || '#64748b',
+          );
+
           return (
             <div
               key={row.id || `${row.date}-${index}`}
               style={{
                 display: 'grid',
-                gridTemplateColumns: '22px 1fr 52px 44px 44px minmax(0, 1fr)',
-                gap: '6px 8px',
+                gridTemplateColumns: gridCols,
+                gap: colGap,
                 alignItems: 'center',
-                fontSize: 11,
-              }}
-            >
-              <span style={{ fontWeight: 800, color: theme.textMuted }}>{index + 1}</span>
-              <div style={{ minWidth: 0 }}>
-                <div style={{
-                  height: 8,
-                  borderRadius: 999,
-                  background: 'rgba(148,163,184,0.12)',
-                  overflow: 'hidden',
-                  marginBottom: 4,
-                }}
-                >
-                  <div style={{
-                    width: `${barW}%`,
-                    minWidth: metric > 0 ? 8 : 0,
-                    height: '100%',
-                    borderRadius: 999,
-                  background: accent,
-                  opacity: 0.72,
-                  }}
-                  />
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, alignItems: 'baseline' }}>
-                  <span style={{ fontWeight: 800, color: accent }}>
-                    {metricFmt ? metricFmt(metric) : metric}
-                  </span>
-                  <span style={{ fontSize: 9, color: theme.textMuted }}>{dateLabel}</span>
-                </div>
-              </div>
-              <span style={{ fontWeight: 700, color: CHART_SOFT.green }}>
-                {row.speed ? `${row.speed}` : '--'}
-              </span>
-              <span style={{ fontWeight: 700, color: CHART_SOFT.hr }}>
-                {row.avgHeartrate ? `${row.avgHeartrate}` : '--'}
-              </span>
-              <span style={{ fontWeight: 700, color: theme.textSecondary || theme.textHeading }}>
-                {row.distance ? Number(row.distance).toFixed(1) : '--'}
-              </span>
-              <span style={{
-                fontWeight: 700,
-                color: row.shoeColor || theme.textMuted,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 5,
+                padding: rowPad,
+                borderRadius: 12,
+                background: 'rgba(148,163,184,0.06)',
+                border: `1px solid ${theme.cardBorder}`,
                 minWidth: 0,
               }}
-              >
-                <span style={{
-                  width: 7,
-                  height: 7,
-                  borderRadius: '50%',
-                  background: row.shoeColor || theme.textMuted,
-                  flexShrink: 0,
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                <span style={{ fontSize: 11, fontWeight: 800, color: theme.textMuted }}>
+                  {index + 1}
+                </span>
+                <span style={{ width: 3, height: 22, borderRadius: 99, background: rankBarColor(index), flexShrink: 0 }} />
+              </div>
+
+              <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading, lineHeight: 1.15 }}>
+                  {scoreText}
+                </div>
+                <div style={{
+                  width: '70%',
+                  maxWidth: 36,
+                  height: 2,
+                  borderRadius: 99,
+                  background: 'rgba(148,163,184,0.15)',
+                  overflow: 'hidden',
                 }}
-                />
+                >
+                  <div style={{ width: `${barW}%`, height: '100%', borderRadius: 99, background: barColor }} />
+                </div>
+                <div style={{ fontSize: 9, color: theme.textMuted, fontWeight: 600, lineHeight: 1 }}>
+                  {fmtRunDate(row.date)}
+                </div>
+              </div>
+
+              <MetricCell
+                theme={theme}
+                value={row.distance != null ? Number(row.distance).toFixed(1) : '--'}
+                unit="km"
+                color={theme.textHeading}
+              />
+              <MetricCell
+                theme={theme}
+                value={fmtRunDuration(row.minutes)}
+                unit={'\u00A0'}
+                color={CHART_SOFT.cyan}
+                valueSize={11}
+              />
+              <MetricCell
+                theme={theme}
+                value={row.speed != null ? Number(row.speed).toFixed(1) : '--'}
+                unit="km/h"
+                color={CHART_SOFT.green}
+              />
+              <MetricCell
+                theme={theme}
+                value={row.avgHeartrate != null
+                  ? `${row.hrEstimated ? '~' : ''}${Math.round(row.avgHeartrate)}`
+                  : '--'}
+                unit="bpm"
+                color={CHART_SOFT.hr}
+              />
+
+              <div style={{
+                minWidth: 0,
+                textAlign: 'left',
+                fontSize: 7.5,
+                fontWeight: 700,
+                color: shoeColor,
+                lineHeight: 1.15,
+                overflow: 'hidden',
+                display: '-webkit-box',
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: 'vertical',
+                wordBreak: 'break-word',
+                paddingLeft: 2,
+              }}
+              >
                 {row.shoeLabel || 'Untagged'}
-              </span>
+              </div>
             </div>
           );
         })}
@@ -904,7 +1074,7 @@ export function ShoeDonutShare({ shoeStats = [], theme, title = 'Distance share'
     const frac = Number(row.totalKm || 0) / total;
     const len = frac * c;
     const dash = `${len} ${c - len}`;
-    const color = getShoeColor(row.shoeId, theme.orange);
+    const color = getShoeColor({ id: row.shoeId, name: row.label, label: row.label }, theme.orange);
     const item = { ...row, dash, offset, color, pct: Math.round(frac * 100) };
     offset += len;
     return item;
@@ -963,19 +1133,7 @@ export function ShoeDonutShare({ shoeStats = [], theme, title = 'Distance share'
               minWidth: 0,
             }}
             >
-              <span style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                color: theme.textSecondary,
-                fontWeight: 700,
-                minWidth: 0,
-                overflow: 'hidden',
-              }}
-              >
-                <span style={{ width: 8, height: 8, borderRadius: 999, background: arc.color, flexShrink: 0 }} />
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{arc.label}</span>
-              </span>
+              <ShoeBadge label={arc.label} color={arc.color} theme={theme} />
               <span style={{ color: arc.color, fontWeight: 800, flexShrink: 0, textAlign: 'right', whiteSpace: 'nowrap' }}>
                 {arc.pct}%
                 <span style={{ display: 'block', fontSize: 10, color: theme.textMuted, fontWeight: 700 }}>
@@ -994,17 +1152,28 @@ export function TopDistanceRuns({ title, rows = [], theme, limit = 5 }) {
   const list = (rows || []).slice(0, limit);
   if (!list.length) {
     return (
-      <div style={{ padding: 14, borderRadius: 20, border: `1px solid ${theme.cardBorder}`, color: theme.textMuted, fontSize: 12 }}>
+      <div style={{ padding: 14, borderRadius: 16, border: `1px solid ${theme.cardBorder}`, color: theme.textMuted, fontSize: 12 }}>
         {title}: no runs yet.
       </div>
     );
   }
   const maxKm = Math.max(...list.map((r) => Number(r.distance) || 0), 0.01);
+  const gridCols = '22px repeat(4, minmax(0, 1fr)) minmax(0, 1.05fr)';
+  const colGap = 8;
+  const headerStyle = {
+    fontSize: 9,
+    fontWeight: 700,
+    letterSpacing: '0.05em',
+    textTransform: 'uppercase',
+    color: theme.textMuted,
+    textAlign: 'center',
+    lineHeight: 1,
+  };
 
   return (
     <div style={{
-      padding: 14,
-      borderRadius: 20,
+      padding: 12,
+      borderRadius: 16,
       background: theme.cardBg,
       border: `1px solid ${theme.cardBorder}`,
       boxShadow: theme.chartDepth,
@@ -1012,83 +1181,239 @@ export function TopDistanceRuns({ title, rows = [], theme, limit = 5 }) {
       minWidth: 0,
       display: 'grid',
       gap: 8,
+      width: '100%',
     }}
     >
-      <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>{title}</div>
+      <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading, letterSpacing: '0.04em', textTransform: 'uppercase', padding: '2px 4px' }}>
+        {title}
+      </div>
       <div style={{
         display: 'grid',
-        gridTemplateColumns: '20px 1fr 44px 40px minmax(0, 1fr)',
-        gap: '6px 8px',
-        fontSize: 9,
-        fontWeight: 800,
-        textTransform: 'uppercase',
-        letterSpacing: '0.06em',
-        color: theme.textMuted,
+        gridTemplateColumns: gridCols,
+        gap: colGap,
+        padding: '0 10px 2px',
+        alignItems: 'end',
       }}
       >
         <span />
-        <span>Run</span>
-        <span>Speed</span>
-        <span>HR</span>
-        <span>Shoe</span>
+        <span style={{ ...headerStyle, color: theme.textSecondary || theme.textHeading, fontWeight: 800 }}>Dist</span>
+        <span style={headerStyle}>Time</span>
+        <span style={headerStyle}>Speed</span>
+        <span style={headerStyle}>HR</span>
+        <span style={{ ...headerStyle, textAlign: 'left' }}>Shoe</span>
       </div>
-      <div style={{ display: 'grid', gap: 8 }}>
+      <div style={{ display: 'grid', gap: 6 }}>
         {list.map((row, index) => {
           const km = Number(row.distance) || 0;
           const barW = Math.max(10, (km / maxKm) * 100);
-          const color = row.shoeColor || CHART_SOFT.blue;
+          const shoeColor = getShoeColor(
+            { id: row.shoeId, name: row.shoeLabel, label: row.shoeLabel },
+            row.shoeColor || '#64748b',
+          );
           return (
             <div
               key={row.id || `${row.date}-${index}`}
               style={{
                 display: 'grid',
-                gridTemplateColumns: '20px 1fr 44px 40px minmax(0, 1fr)',
-                gap: '6px 8px',
+                gridTemplateColumns: gridCols,
+                gap: colGap,
                 alignItems: 'center',
-                fontSize: 11,
+                padding: '10px 10px',
+                borderRadius: 12,
+                background: 'rgba(148,163,184,0.06)',
+                border: `1px solid ${theme.cardBorder}`,
                 minWidth: 0,
               }}
             >
-              <span style={{ fontWeight: 800, color: theme.textMuted }}>{index + 1}</span>
-              <div style={{ minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                <span style={{ fontSize: 11, fontWeight: 800, color: theme.textMuted }}>{index + 1}</span>
+                <span style={{ width: 3, height: 22, borderRadius: 99, background: rankBarColor(index), flexShrink: 0 }} />
+              </div>
+              <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading, lineHeight: 1.15 }}>
+                  {km.toFixed(1)}
+                </div>
                 <div style={{
-                  height: 7,
-                  borderRadius: 999,
-                  background: 'rgba(148,163,184,0.12)',
+                  width: '70%',
+                  maxWidth: 36,
+                  height: 2,
+                  borderRadius: 99,
+                  background: 'rgba(148,163,184,0.15)',
                   overflow: 'hidden',
-                  marginBottom: 4,
                 }}
                 >
-                  <div style={{ width: `${barW}%`, height: '100%', borderRadius: 999, background: color, opacity: 0.75 }} />
+                  <div style={{ width: `${barW}%`, height: '100%', borderRadius: 99, background: CHART_SOFT.blue }} />
                 </div>
-                <div style={{ fontWeight: 800, color: CHART_SOFT.blue }}>
-                  {km.toFixed(1)} km
-                  <span style={{ fontWeight: 600, color: theme.textMuted, fontSize: 10, marginLeft: 6 }}>
-                    {String(row.date || '').slice(5)}
-                  </span>
+                <div style={{ fontSize: 9, color: theme.textMuted, fontWeight: 600, lineHeight: 1 }}>
+                  {fmtRunDate(row.date)} · km
                 </div>
               </div>
-              <span style={{ fontWeight: 700, color: CHART_SOFT.green, whiteSpace: 'nowrap' }}>
-                {row.speed ? row.speed : '--'}
-              </span>
-              <span style={{ fontWeight: 700, color: CHART_SOFT.hr, whiteSpace: 'nowrap' }}>
-                {row.avgHeartrate ? row.avgHeartrate : '--'}
-              </span>
-              <span style={{
-                fontWeight: 700,
-                color,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 5,
+              <MetricCell theme={theme} value={fmtRunDuration(row.minutes)} unit={'\u00A0'} color={CHART_SOFT.cyan} valueSize={11} />
+              <MetricCell
+                theme={theme}
+                value={row.speed != null ? Number(row.speed).toFixed(1) : '--'}
+                unit="km/h"
+                color={CHART_SOFT.green}
+              />
+              <MetricCell
+                theme={theme}
+                value={row.avgHeartrate != null
+                  ? `${row.hrEstimated ? '~' : ''}${Math.round(row.avgHeartrate)}`
+                  : '--'}
+                unit="bpm"
+                color={CHART_SOFT.hr}
+              />
+              <div style={{
                 minWidth: 0,
+                textAlign: 'left',
+                fontSize: 7.5,
+                fontWeight: 700,
+                color: shoeColor,
+                lineHeight: 1.15,
+                overflow: 'hidden',
+                display: '-webkit-box',
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: 'vertical',
+                wordBreak: 'break-word',
+                paddingLeft: 2,
               }}
               >
-                <span style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0 }} />
                 {row.shoeLabel || 'Untagged'}
-              </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function fmtSplitPace(minPerKm, seconds = null) {
+  const sec = Number(seconds);
+  if (Number.isFinite(sec) && sec > 0) {
+    const mins = Math.floor(sec / 60);
+    const rest = Math.round(sec % 60);
+    return `${mins}:${String(rest).padStart(2, '0')}`;
+  }
+  const n = Number(minPerKm);
+  if (!(n > 0)) return '--';
+  const mins = Math.floor(n);
+  const rest = Math.round((n - mins) * 60);
+  return `${mins}:${String(rest).padStart(2, '0')}`;
+}
+
+export function TopFastestSplits({ title = 'Fastest 1 km splits', rows = [], theme, limit = 10 }) {
+  const list = (rows || []).slice(0, limit);
+  if (!list.length) {
+    return (
+      <div style={{ padding: 14, borderRadius: 16, border: `1px solid ${theme.cardBorder}`, color: theme.textMuted, fontSize: 12 }}>
+        {title}: sync GPS runs to fill 1 km splits.
+      </div>
+    );
+  }
+  const gridCols = '22px repeat(4, minmax(0, 1fr)) minmax(0, 1.05fr)';
+  const colGap = 8;
+  const headerStyle = {
+    fontSize: 9,
+    fontWeight: 700,
+    letterSpacing: '0.05em',
+    textTransform: 'uppercase',
+    color: theme.textMuted,
+    textAlign: 'center',
+    lineHeight: 1,
+  };
+
+  return (
+    <div style={{
+      padding: 12,
+      borderRadius: 16,
+      background: theme.cardBg,
+      border: `1px solid ${theme.cardBorder}`,
+      boxShadow: theme.chartDepth,
+      overflow: 'hidden',
+      minWidth: 0,
+      display: 'grid',
+      gap: 8,
+      width: '100%',
+    }}
+    >
+      <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading, letterSpacing: '0.04em', textTransform: 'uppercase', padding: '2px 4px' }}>
+        {title}
+      </div>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: gridCols,
+        gap: colGap,
+        padding: '0 10px 2px',
+        alignItems: 'end',
+      }}
+      >
+        <span />
+        <span style={{ ...headerStyle, color: theme.textSecondary || theme.textHeading, fontWeight: 800 }}>Pace</span>
+        <span style={headerStyle}>Km</span>
+        <span style={headerStyle}>Date</span>
+        <span style={headerStyle}>HR</span>
+        <span style={{ ...headerStyle, textAlign: 'left' }}>Shoe</span>
+      </div>
+      <div style={{ display: 'grid', gap: 6 }}>
+        {list.map((row, index) => {
+          const shoeColor = getShoeColor(
+            { id: row.shoeId, name: row.shoeLabel, label: row.shoeLabel },
+            row.shoeColor || '#64748b',
+          );
+          const kmLabel = Number(row.splitKm) > 0 ? `Km ${row.splitKm}` : '1 km';
+          return (
+            <div
+              key={row.id || `${row.date}-${row.splitKm}-${index}`}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: gridCols,
+                gap: colGap,
+                alignItems: 'center',
+                padding: '10px 10px',
+                borderRadius: 12,
+                background: 'rgba(148,163,184,0.06)',
+                border: `1px solid ${theme.cardBorder}`,
+                minWidth: 0,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                <span style={{ fontSize: 11, fontWeight: 800, color: theme.textMuted }}>{index + 1}</span>
+                <span style={{ width: 3, height: 22, borderRadius: 99, background: rankBarColor(index), flexShrink: 0 }} />
+              </div>
+              <MetricCell
+                theme={theme}
+                value={fmtSplitPace(row.splitPace, row.splitSeconds)}
+                unit="/km"
+                color={CHART_SOFT.green}
+              />
+              <MetricCell theme={theme} value={kmLabel} unit={'\u00A0'} color={CHART_SOFT.cyan} valueSize={11} />
+              <MetricCell theme={theme} value={fmtRunDate(row.date)} unit={'\u00A0'} color={theme.textSecondary} valueSize={11} />
+              <MetricCell
+                theme={theme}
+                value={row.splitHr != null
+                  ? `${row.splitHrEstimated ? '~' : ''}${Math.round(row.splitHr)}`
+                  : '--'}
+                unit="bpm"
+                color={CHART_SOFT.hr}
+              />
+              <div style={{
+                minWidth: 0,
+                textAlign: 'left',
+                fontSize: 7.5,
+                fontWeight: 700,
+                color: shoeColor,
+                lineHeight: 1.15,
+                overflow: 'hidden',
+                display: '-webkit-box',
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: 'vertical',
+                wordBreak: 'break-word',
+                paddingLeft: 2,
+              }}
+              >
+                {row.shoeLabel || 'Untagged'}
+              </div>
             </div>
           );
         })}

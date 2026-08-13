@@ -652,6 +652,7 @@ export default function WellnessPage() {
           return runStravaAutoSync({
             userId: uid,
             apiBase: API_BASE,
+            force: true,
             onMessage: setStravaMsg,
             onEntries: (nextEntries) => {
               if (Array.isArray(nextEntries)) setEntries(nextEntries);

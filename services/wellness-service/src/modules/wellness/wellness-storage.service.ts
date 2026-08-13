@@ -1082,21 +1082,14 @@ export class WellnessStorageService {
     const deltaIds = Array.isArray(delta.stravaActivityIds) ? delta.stravaActivityIds : [];
     merged.stravaActivityIds = [...new Set([...existingIds, ...deltaIds].map((id) => Number(id)).filter((id) => id > 0))];
 
-    const existingRuns = Array.isArray(existing.stravaRuns) ? existing.stravaRuns : [];
-    const deltaRuns = Array.isArray(delta.stravaRuns) ? delta.stravaRuns : [];
-    const runById = new Map<number, any>();
-    for (const run of [...existingRuns, ...deltaRuns]) {
-      const id = Number(run?.id || run?.stravaId || 0);
-      if (!Number.isFinite(id) || id <= 0) continue;
-      const previous = runById.get(id) || {};
-      runById.set(id, {
-        ...previous,
-        ...run,
-        // Keep shoe assignment if the incoming delta does not include one.
-        shoeId: run?.shoeId || previous?.shoeId || '',
-      });
-    }
-    merged.stravaRuns = [...runById.values()];
+    merged.stravaRuns = this.mergeStravaActivityList(
+      existing.stravaRuns,
+      delta.stravaRuns,
+      { keepShoe: true },
+    ).list;
+    merged.stravaWalks = this.mergeStravaActivityList(existing.stravaWalks, delta.stravaWalks).list;
+    merged.stravaYoga = this.mergeStravaActivityList(existing.stravaYoga, delta.stravaYoga).list;
+    Object.assign(merged, this.sportTotalsFromStravaActivities(merged));
 
     const existingHrWeight = Number(existing.runningMinutes || 0) + Number(existing.walkingMinutes || 0) + Number(existing.cyclingMinutes || 0);
     const deltaHrWeight = Number(delta.runningMinutes || 0) + Number(delta.walkingMinutes || 0) + Number(delta.cyclingMinutes || 0);
@@ -1227,6 +1220,67 @@ export class WellnessStorageService {
     };
   }
 
+  private mergeStravaActivityList(
+    existingList: any[] = [],
+    incomingList: any[] = [],
+    options: { keepShoe?: boolean } = {},
+  ): { list: any[]; changed: boolean } {
+    const existing = Array.isArray(existingList) ? existingList : [];
+    const incoming = Array.isArray(incomingList) ? incomingList : [];
+    const byId = new Map<number, any>();
+    for (const item of existing) {
+      const id = Number(item?.id || item?.stravaId || 0);
+      if (id > 0) byId.set(id, { ...item });
+    }
+    const beforeIds = new Set(byId.keys());
+    let changed = false;
+
+    for (const item of incoming) {
+      const id = Number(item?.id || item?.stravaId || 0);
+      if (id <= 0) continue;
+      const previous = byId.get(id) || {};
+      const merged = {
+        ...previous,
+        ...item,
+        ...(options.keepShoe ? { shoeId: previous.shoeId || item.shoeId || '' } : {}),
+        avgHeartrate: item.avgHeartrate || previous.avgHeartrate || null,
+        maxHeartrate: item.maxHeartrate || previous.maxHeartrate || null,
+      };
+      if (!beforeIds.has(id)) {
+        changed = true;
+      } else if (
+        Number(merged.avgHeartrate || 0) !== Number(previous.avgHeartrate || 0)
+        || Number(merged.maxHeartrate || 0) !== Number(previous.maxHeartrate || 0)
+        || Number(merged.distanceKm || 0) !== Number(previous.distanceKm || 0)
+        || Number(merged.minutes || 0) !== Number(previous.minutes || 0)
+      ) {
+        changed = true;
+      }
+      byId.set(id, merged);
+    }
+
+    return { list: [...byId.values()], changed };
+  }
+
+  private sportTotalsFromStravaActivities(entry: WellnessEntry) {
+    const walks = Array.isArray(entry.stravaWalks) ? entry.stravaWalks : [];
+    const yoga = Array.isArray(entry.stravaYoga) ? entry.stravaYoga : [];
+    let walkingMinutes = Number(entry.walkingMinutes || 0);
+    let walkingDistanceKm = Number(entry.walkingDistanceKm || 0);
+    let yogaMinutes = Number(entry.yogaMinutes || 0);
+    if (walks.length) {
+      const mins = walks.reduce((sum: number, walk: any) => sum + Number(walk?.minutes || 0), 0);
+      const km = walks.reduce((sum: number, walk: any) => sum + Number(walk?.distanceKm || 0), 0);
+      if (mins > walkingMinutes) walkingMinutes = Math.round(mins);
+      if (km > walkingDistanceKm) walkingDistanceKm = Number(km.toFixed(2));
+    }
+    if (yoga.length) {
+      const mins = yoga.reduce((sum: number, session: any) => sum + Number(session?.minutes || 0), 0);
+      if (mins > yogaMinutes) yogaMinutes = Math.round(mins);
+    }
+    return { walkingMinutes, walkingDistanceKm, yogaMinutes };
+  }
+
   async refreshStravaHeartRate(
     userId: string,
     sourceEntries: WellnessEntry[] = [],
@@ -1253,46 +1307,34 @@ export class WellnessStorageService {
       const nextMax = Number(incoming.stravaMaxHeartRate || incoming.heartRateMax || 0);
       const currentAvg = Number(entry.stravaAvgHeartRate || entry.heartRateAvg || 0);
       const currentMax = Number(entry.stravaMaxHeartRate || entry.heartRateMax || 0);
-      const incomingRuns = Array.isArray(incoming.stravaRuns) ? incoming.stravaRuns : [];
-      const existingRuns = Array.isArray(entry.stravaRuns) ? entry.stravaRuns : [];
 
-      let runsChanged = false;
-      const runById = new Map<number, any>();
-      for (const run of existingRuns) {
-        const id = Number(run?.id || run?.stravaId || 0);
-        if (id > 0) runById.set(id, { ...run });
-      }
-      for (const run of incomingRuns) {
-        const id = Number(run?.id || run?.stravaId || 0);
-        if (id <= 0) continue;
-        const previous = runById.get(id) || {};
-        const mergedRun = {
-          ...previous,
-          ...run,
-          shoeId: previous.shoeId || run.shoeId || '',
-          avgHeartrate: run.avgHeartrate || previous.avgHeartrate || null,
-          maxHeartrate: run.maxHeartrate || previous.maxHeartrate || null,
-        };
-        if (
-          Number(mergedRun.avgHeartrate || 0) !== Number(previous.avgHeartrate || 0)
-          || Number(mergedRun.maxHeartrate || 0) !== Number(previous.maxHeartrate || 0)
-        ) {
-          runsChanged = true;
-        }
-        runById.set(id, mergedRun);
-      }
+      const mergedRuns = this.mergeStravaActivityList(entry.stravaRuns, incoming.stravaRuns, { keepShoe: true });
+      const mergedWalks = this.mergeStravaActivityList(entry.stravaWalks, incoming.stravaWalks);
+      const mergedYoga = this.mergeStravaActivityList(entry.stravaYoga, incoming.stravaYoga);
+
+      const sportTotals = this.sportTotalsFromStravaActivities({
+        ...entry,
+        stravaWalks: mergedWalks.list,
+        stravaYoga: mergedYoga.list,
+      });
+      const totalsChanged = sportTotals.walkingMinutes !== Number(entry.walkingMinutes || 0)
+        || sportTotals.walkingDistanceKm !== Number(entry.walkingDistanceKm || 0)
+        || sportTotals.yogaMinutes !== Number(entry.yogaMinutes || 0);
 
       const shouldUpdateHr = (nextAvg > 0 && nextAvg !== currentAvg) || (nextMax > 0 && nextMax !== currentMax);
-      if (!shouldUpdateHr && !runsChanged) return entry;
+      if (!shouldUpdateHr && !mergedRuns.changed && !mergedWalks.changed && !mergedYoga.changed && !totalsChanged) return entry;
 
       updatedDays += 1;
       return this.normalizeEntryRecord({
         ...entry,
+        ...sportTotals,
         stravaAvgHeartRate: nextAvg || currentAvg || null,
         stravaMaxHeartRate: Math.max(nextMax, currentMax) || null,
         heartRateAvg: nextAvg || currentAvg || null,
         heartRateMax: Math.max(nextMax, currentMax) || null,
-        stravaRuns: [...runById.values()],
+        stravaRuns: mergedRuns.list,
+        stravaWalks: mergedWalks.list,
+        stravaYoga: mergedYoga.list,
         updatedAt: this.nowIso(),
       }, activePlanId ?? entry.planId ?? null);
     });
