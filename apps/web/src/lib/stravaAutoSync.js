@@ -12,6 +12,7 @@ function firstSyncFlagKey(userId) {
 
 export function formatStravaSyncMessage(payload) {
   if (!payload) return '';
+  if (payload.stravaError) return payload.stravaError;
   if (payload.alreadyUpToDate) {
     return `Strava up to date · ${payload.skippedActivities || 0} activities already synced`;
   }
@@ -73,6 +74,10 @@ export async function runStravaAutoSync({
     if (!payload) {
       if (onMessage) onMessage('Strava sync failed — try Sync again.');
       return null;
+    }
+    if (payload.stravaError) {
+      if (onMessage) onMessage(payload.stravaError);
+      return payload;
     }
     localStorage.setItem(syncStorageKey(uid), String(Date.now()));
     if (useFullHistory || payload.firstSync) {

@@ -201,9 +201,34 @@ export class WellnessController {
 
     // Import the activity list first. Heart-rate detail calls used to run before save and
     // could time out, so walks never landed even when Strava returned them.
-    const activities = await this.stravaService.getRecentActivities(userId, windowDays, {
-      enrichHeartRate: false,
-    });
+    let activities: any[] = [];
+    try {
+      activities = await this.stravaService.getRecentActivities(userId, windowDays, {
+        enrichHeartRate: false,
+      });
+    } catch (err) {
+      const stravaError = err instanceof Error ? err.message : 'Strava sync failed';
+      console.error('Strava activities fetch failed:', stravaError);
+      return {
+        activities: 0,
+        newActivities: 0,
+        skippedActivities: 0,
+        newWalks: 0,
+        newYoga: 0,
+        newDays: 0,
+        alreadyUpToDate: false,
+        imported: 0,
+        firstSync: isFirstSync,
+        windowDays,
+        heartRateUpdated: 0,
+        detailsEnriched: 0,
+        stravaError,
+        fields: {},
+        entries: [],
+        insights: null,
+        heartRateDays: 0,
+      };
+    }
     const { newActivities, skipped } = this.stravaService.filterNewActivities(activities, storedIds, deletedIds);
     const todayLocal = new Date(Date.now() + (5.5 * 60 * 60 * 1000)).toISOString().slice(0, 10);
     const fields = this.stravaService.mapToWellnessFields(
@@ -441,7 +466,19 @@ export class WellnessController {
 
     const activities = await this.stravaService.getRecentActivities(userId, windowDays, {
       enrichHeartRate: true,
+    }).catch((err) => {
+      console.error('Strava insights fetch failed:', err);
+      return [];
     });
+    if (!activities.length) {
+      return {
+        ...dbInsights,
+        connected: true,
+        source: 'database',
+        live: false,
+        heartRateAvailable: Boolean(dbInsights.avgHeartRate || dbInsights.heartRateZoneRuns),
+      };
+    }
     const zoneEnrichment = await this.stravaService.enrichActivitiesWithHeartRateZones(userId, activities, {
       maxActivities: 25,
     });

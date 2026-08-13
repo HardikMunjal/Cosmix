@@ -209,33 +209,52 @@ export class StravaService {
 
   async getRecentActivities(userId: string, days = 90, options: { enrichHeartRate?: boolean } = {}): Promise<any[]> {
     const accessToken = await this.refreshIfNeeded(userId);
-    if (!accessToken) return [];
+    if (!accessToken) {
+      throw new Error('Strava token missing or expired. Reconnect Strava in Wellness.');
+    }
 
     const windowDays = Math.max(1, Math.min(1095, Number(days) || 90));
     const after = Math.floor((Date.now() - windowDays * 86400000) / 1000);
     const collected: any[] = [];
     const maxPages = windowDays > 180 ? 40 : windowDays > 90 ? 20 : 8;
 
-    try {
-      for (let page = 1; page <= maxPages; page += 1) {
-        const res = await fetch(
-          `https://www.strava.com/api/v3/athlete/activities?after=${after}&per_page=50&page=${page}`,
-          { headers: { Authorization: `Bearer ${accessToken}` } },
-        );
-        if (!res.ok) break;
-        const activities = await res.json();
-        if (!Array.isArray(activities) || !activities.length) break;
-        collected.push(...activities);
-        if (activities.length < 50) break;
+    for (let page = 1; page <= maxPages; page += 1) {
+      const res = await fetch(
+        `https://www.strava.com/api/v3/athlete/activities?after=${after}&per_page=50&page=${page}`,
+        { headers: { Authorization: `Bearer ${accessToken}` } },
+      );
+      if (!res.ok) {
+        const message = await this.formatStravaHttpError(res);
+        if (!collected.length) throw new Error(message);
+        console.error('Strava activities page failed:', message);
+        break;
       }
-
-      if (options.enrichHeartRate !== false) {
-        return this.enrichActivitiesWithHeartRate(accessToken, collected);
-      }
-      return collected;
-    } catch {
-      return collected;
+      const activities = await res.json();
+      if (!Array.isArray(activities) || !activities.length) break;
+      collected.push(...activities);
+      if (activities.length < 50) break;
     }
+
+    if (options.enrichHeartRate !== false) {
+      return this.enrichActivitiesWithHeartRate(accessToken, collected);
+    }
+    return collected;
+  }
+
+  private async formatStravaHttpError(res: Response): Promise<string> {
+    const text = await res.text();
+    let parsed: any = null;
+    try { parsed = JSON.parse(text); } catch { parsed = null; }
+    const code = String(parsed?.errors?.[0]?.code || '');
+    const resource = String(parsed?.errors?.[0]?.resource || '');
+    const field = String(parsed?.errors?.[0]?.field || '');
+    if (res.status === 403 && /inactive/i.test(code) && /application/i.test(resource)) {
+      return 'Strava API app is Inactive. Open strava.com/settings/api, turn the app back on (a Strava subscription is required), then sync again.';
+    }
+    if (res.status === 403 && /athlete/i.test(`${parsed?.message || ''} ${field} ${code}`)) {
+      return 'Strava connected-athlete limit exceeded. Raise it at strava.com/settings/api, then reconnect.';
+    }
+    return `Strava API error ${res.status}: ${parsed?.message || text.slice(0, 180) || res.statusText}`;
   }
 
   private async fetchActivityDetail(accessToken: string, activityId: number): Promise<any | null> {
