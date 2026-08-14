@@ -13,8 +13,36 @@ function formatCommentTime(ts) {
   return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+function MediaSlide({ item }) {
+  if (!item) return <div className="chat-lightbox-slide is-empty" />;
+  if (isVideoMedia(item)) {
+    return (
+      <div className="chat-lightbox-slide">
+        <video
+          className="chat-lightbox-media"
+          src={item.imageUrl}
+          controls
+          playsInline
+          onClick={(event) => event.stopPropagation()}
+        />
+      </div>
+    );
+  }
+  return (
+    <div className="chat-lightbox-slide">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        className="chat-lightbox-media"
+        src={item.imageUrl}
+        alt={item.caption || 'Album media'}
+        draggable={false}
+      />
+    </div>
+  );
+}
+
 /**
- * Phone-style album viewer: swipe left/right between photos, comment on each.
+ * Phone-style album viewer: swipe left/right between photos, swipe down to close.
  */
 export function ChatMediaLightbox({
   theme,
@@ -30,35 +58,41 @@ export function ChatMediaLightbox({
 }) {
   const [index, setIndex] = useState(startIndex);
   const [dragX, setDragX] = useState(0);
+  const [dragY, setDragY] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [animating, setAnimating] = useState(false);
   const touchStartRef = useRef(null);
   const stageRef = useRef(null);
   const current = items[index] || null;
   const comments = Array.isArray(current?.comments) ? current.comments : [];
+  const prevItem = items.length > 1 ? items[(index - 1 + items.length) % items.length] : null;
+  const nextItem = items.length > 1 ? items[(index + 1) % items.length] : null;
 
   const goPrev = useCallback(() => {
     if (items.length < 2) return;
-    setAnimating(true);
+    setAnimating(false);
     setIndex((value) => (value > 0 ? value - 1 : items.length - 1));
     setDragX(0);
+    setDragY(0);
   }, [items.length]);
 
   const goNext = useCallback(() => {
     if (items.length < 2) return;
-    setAnimating(true);
+    setAnimating(false);
     setIndex((value) => (value < items.length - 1 ? value + 1 : 0));
     setDragX(0);
+    setDragY(0);
   }, [items.length]);
 
   useEffect(() => {
     setIndex(startIndex);
     setDragX(0);
+    setDragY(0);
   }, [startIndex]);
 
   useEffect(() => {
     if (!animating) return undefined;
-    const timer = window.setTimeout(() => setAnimating(false), 280);
+    const timer = window.setTimeout(() => setAnimating(false), 240);
     return () => window.clearTimeout(timer);
   }, [animating, index]);
 
@@ -72,58 +106,93 @@ export function ChatMediaLightbox({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [goNext, goPrev, onClose]);
 
-  const handleTouchStart = (event) => {
-    if (items.length < 2) return;
-    const touch = event.touches?.[0] || event.changedTouches?.[0];
-    if (!touch) return;
-    touchStartRef.current = { x: touch.clientX, y: touch.clientY, t: Date.now() };
+  const beginDrag = (x, y) => {
+    touchStartRef.current = { x, y, t: Date.now(), axis: null };
     setDragging(true);
     setAnimating(false);
   };
 
-  const handleTouchMove = (event) => {
-    if (!touchStartRef.current || items.length < 2) return;
-    const touch = event.touches?.[0] || event.changedTouches?.[0];
-    if (!touch) return;
-    const dx = touch.clientX - touchStartRef.current.x;
-    const dy = touch.clientY - touchStartRef.current.y;
-    if (Math.abs(dx) > Math.abs(dy)) {
-      if (event.cancelable) event.preventDefault();
+  const moveDrag = (x, y, event) => {
+    if (!touchStartRef.current) return;
+    const dx = x - touchStartRef.current.x;
+    const dy = y - touchStartRef.current.y;
+    if (!touchStartRef.current.axis) {
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      touchStartRef.current.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+    }
+    if (touchStartRef.current.axis === 'x') {
+      if (items.length < 2) return;
+      if (event?.cancelable) event.preventDefault();
       setDragX(dx);
+      setDragY(0);
+      return;
+    }
+    if (dy > 0) {
+      if (event?.cancelable) event.preventDefault();
+      setDragY(dy);
+      setDragX(0);
     }
   };
 
-  const handleTouchEnd = (event) => {
-    if (!touchStartRef.current || items.length < 2) {
+  const endDrag = (x, y) => {
+    if (!touchStartRef.current) {
       setDragging(false);
       setDragX(0);
+      setDragY(0);
       return;
     }
-    const touch = event.changedTouches?.[0];
-    const endX = touch?.clientX ?? touchStartRef.current.x;
-    const delta = endX - touchStartRef.current.x;
+    const dx = x - touchStartRef.current.x;
+    const dy = y - touchStartRef.current.y;
     const elapsed = Date.now() - touchStartRef.current.t;
+    const axis = touchStartRef.current.axis;
     const width = stageRef.current?.clientWidth || window.innerWidth || 360;
-    const threshold = Math.min(88, width * 0.22);
-    const velocity = Math.abs(delta) / Math.max(1, elapsed);
-    const shouldFlip = Math.abs(delta) > threshold || (Math.abs(delta) > 28 && velocity > 0.45);
-
-    setDragging(false);
+    const height = stageRef.current?.clientHeight || window.innerHeight || 640;
+    const velocity = Math.abs(axis === 'y' ? dy : dx) / Math.max(1, elapsed);
     touchStartRef.current = null;
+    setDragging(false);
 
-    if (shouldFlip) {
-      if (delta > 0) goPrev();
-      else goNext();
-    } else {
-      setAnimating(true);
-      setDragX(0);
+    if (axis === 'y' && (dy > Math.min(110, height * 0.18) || (dy > 48 && velocity > 0.55))) {
+      onClose?.();
+      return;
     }
+    if (axis === 'x' && items.length > 1) {
+      const threshold = Math.min(56, width * 0.12);
+      const shouldFlip = Math.abs(dx) > threshold || (Math.abs(dx) > 24 && velocity > 0.35);
+      if (shouldFlip) {
+        if (dx > 0) goPrev();
+        else goNext();
+        return;
+      }
+    }
+    setAnimating(true);
+    setDragX(0);
+    setDragY(0);
+  };
+
+  const handlePointerDown = (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    if (event.target?.closest?.('video, input, button, textarea, a')) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    beginDrag(event.clientX, event.clientY);
+  };
+
+  const handlePointerMove = (event) => {
+    if (!touchStartRef.current) return;
+    moveDrag(event.clientX, event.clientY, event);
+  };
+
+  const handlePointerUp = (event) => {
+    endDrag(event.clientX, event.clientY);
   };
 
   if (!current) return null;
 
-  const video = isVideoMedia(current);
   const accent = theme?.blue || '#38bdf8';
+  const closing = dragY > 0;
+  const dim = closing ? Math.max(0.35, 1 - dragY / 420) : 1;
+  const trackX = items.length > 1
+    ? `calc(-33.333% + ${dragX}px)`
+    : `${dragX}px`;
 
   return (
     <>
@@ -143,27 +212,49 @@ export function ChatMediaLightbox({
           align-items: center;
           justify-content: space-between;
           gap: 10px;
-          padding: 10px 12px calc(10px + env(safe-area-inset-top, 0px));
-          background: linear-gradient(180deg, rgba(0,0,0,0.72), transparent);
+          padding: calc(10px + env(safe-area-inset-top, 0px)) 10px 10px;
+          background: linear-gradient(180deg, rgba(0,0,0,0.78), transparent);
+          z-index: 3;
+        }
+        .chat-lightbox-back {
+          appearance: none;
+          border: none;
+          background: rgba(255,255,255,0.14);
+          color: #fff;
+          border-radius: 999px;
+          padding: 10px 14px;
+          font-size: 15px;
+          font-weight: 800;
+          cursor: pointer;
+          font-family: inherit;
+          flex-shrink: 0;
         }
         .chat-lightbox-stage {
           position: relative;
           display: grid;
           place-items: center;
           overflow: hidden;
-          touch-action: pan-y;
+          touch-action: none;
           min-height: 0;
           background: #000;
+          cursor: grab;
         }
+        .chat-lightbox-stage:active { cursor: grabbing; }
         .chat-lightbox-track {
-          width: 100%;
+          width: ${items.length > 1 ? '300%' : '100%'};
           height: 100%;
-          display: grid;
-          place-items: center;
+          display: flex;
           will-change: transform;
         }
         .chat-lightbox-track.is-animating {
-          transition: transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
+          transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+        }
+        .chat-lightbox-slide {
+          flex: 0 0 ${items.length > 1 ? '33.333%' : '100%'};
+          width: ${items.length > 1 ? '33.333%' : '100%'};
+          height: 100%;
+          display: grid;
+          place-items: center;
         }
         .chat-lightbox-media {
           max-width: 100vw;
@@ -176,8 +267,8 @@ export function ChatMediaLightbox({
           pointer-events: auto;
         }
         .chat-lightbox-icon-btn {
-          width: 36px;
-          height: 36px;
+          width: 40px;
+          height: 40px;
           border: none;
           border-radius: 999px;
           background: rgba(255,255,255,0.14);
@@ -194,18 +285,29 @@ export function ChatMediaLightbox({
           position: absolute;
           top: 50%;
           transform: translateY(-50%);
-          width: 40px;
-          height: 40px;
+          width: 44px;
+          height: 44px;
           border-radius: 999px;
           border: none;
-          background: rgba(15,23,42,0.55);
+          background: rgba(15,23,42,0.45);
           color: #fff;
-          font-size: 22px;
+          font-size: 26px;
           cursor: pointer;
           z-index: 2;
         }
-        .chat-lightbox-nav--left { left: 8px; }
-        .chat-lightbox-nav--right { right: 8px; }
+        .chat-lightbox-nav--left { left: 6px; }
+        .chat-lightbox-nav--right { right: 6px; }
+        .chat-lightbox-hint {
+          position: absolute;
+          bottom: 12px;
+          left: 50%;
+          transform: translateX(-50%);
+          font-size: 11px;
+          font-weight: 700;
+          color: rgba(248,250,252,0.62);
+          pointer-events: none;
+          z-index: 2;
+        }
         .chat-lightbox-footer {
           padding: 10px 12px calc(12px + env(safe-area-inset-bottom, 0px));
           display: grid;
@@ -248,9 +350,9 @@ export function ChatMediaLightbox({
           -webkit-overflow-scrolling: touch;
         }
         .chat-lightbox-thumb {
-          flex: 0 0 52px;
-          width: 52px;
-          height: 52px;
+          flex: 0 0 56px;
+          width: 56px;
+          height: 56px;
           border-radius: 10px;
           overflow: hidden;
           border: 2px solid transparent;
@@ -304,15 +406,14 @@ export function ChatMediaLightbox({
             max-height: min(72vh, 820px);
             border-radius: 8px;
           }
-          .chat-lightbox-nav { display: grid; }
-        }
-        @media (max-width: 899px) {
-          .chat-lightbox-nav { display: none; }
         }
       `}</style>
-      <div className="chat-lightbox" role="dialog" aria-modal="true" aria-label="Photo viewer">
+      <div className="chat-lightbox" role="dialog" aria-modal="true" aria-label="Photo viewer" style={{ opacity: dim }}>
         <div className="chat-lightbox-toolbar">
-          <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+          <button type="button" className="chat-lightbox-back" onClick={onClose}>
+            ← Back
+          </button>
+          <div style={{ display: 'grid', gap: 2, minWidth: 0, flex: 1 }}>
             <div style={{ fontSize: 14, fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {current.caption || 'Photo'}
             </div>
@@ -321,24 +422,20 @@ export function ChatMediaLightbox({
               {current.uploadedBy ? ` · ${current.uploadedBy}` : ''}
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 6 }}>
-            {onDownload ? (
-              <button type="button" className="chat-lightbox-icon-btn" onClick={() => onDownload?.(current)} aria-label="Download" title="Download">
-                ⬇
-              </button>
-            ) : null}
-            <button type="button" className="chat-lightbox-icon-btn" onClick={onClose} aria-label="Close" title="Close">
-              ✕
+          {onDownload ? (
+            <button type="button" className="chat-lightbox-icon-btn" onClick={() => onDownload?.(current)} aria-label="Download" title="Download">
+              ⬇
             </button>
-          </div>
+          ) : null}
         </div>
 
         <div
           ref={stageRef}
           className="chat-lightbox-stage"
-          onTouchStart={handleTouchStart}
-          onTouchMove={handleTouchMove}
-          onTouchEnd={handleTouchEnd}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
         >
           {items.length > 1 ? (
             <>
@@ -348,29 +445,15 @@ export function ChatMediaLightbox({
           ) : null}
           <div
             className={`chat-lightbox-track${animating && !dragging ? ' is-animating' : ''}`}
-            style={{ transform: `translate3d(${dragX}px, 0, 0)` }}
+            style={{ transform: `translate3d(${trackX}, ${dragY}px, 0)` }}
           >
-            {video ? (
-              <video
-                key={current.id}
-                className="chat-lightbox-media"
-                src={current.imageUrl}
-                controls
-                playsInline
-                onClick={(event) => event.stopPropagation()}
-              />
-            ) : (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                key={current.id}
-                className="chat-lightbox-media"
-                src={current.imageUrl}
-                alt={current.caption || 'Album media'}
-                draggable={false}
-                onClick={(event) => event.stopPropagation()}
-              />
-            )}
+            {items.length > 1 ? <MediaSlide item={prevItem} /> : null}
+            <MediaSlide item={current} />
+            {items.length > 1 ? <MediaSlide item={nextItem} /> : null}
           </div>
+          {items.length > 1 && !dragging ? (
+            <div className="chat-lightbox-hint">Swipe photos · swipe down to close</div>
+          ) : null}
         </div>
 
         <div className="chat-lightbox-footer">
@@ -402,6 +485,7 @@ export function ChatMediaLightbox({
                       setAnimating(true);
                       setIndex(itemIndex);
                       setDragX(0);
+                      setDragY(0);
                     }}
                   >
                     {thumbVideo ? (

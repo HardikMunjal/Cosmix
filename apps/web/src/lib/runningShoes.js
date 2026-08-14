@@ -469,23 +469,41 @@ export function computeRunLeaderboards(entries = [], shoes = [], limit = 5) {
   };
 }
 
-export function computeFastestKmSplits(entries = [], shoes = [], limit = 10) {
+export function computeFastestKmSplits(entries = [], shoes = [], limit = 10, extraRuns = []) {
   const shoeMap = new Map((shoes || []).map((shoe) => [shoe.id, shoe]));
-  return buildRunningRows(entries, shoes)
-    .filter((row) => Number(row.bestSplitPaceMinPerKm) > 1.5 && Number(row.bestSplitPaceMinPerKm) < 20)
-    .map((row) => {
-      const mapped = mapRunRow(row, shoeMap);
-      const splitHr = Number(row.bestSplitAvgHeartrate || 0) || null;
-      const runHr = Number(row.avgHeartrate || 0) || null;
-      return {
-        ...mapped,
-        splitPace: Number(row.bestSplitPaceMinPerKm),
-        splitKm: Number(row.bestSplitKm || 0) || null,
-        splitSeconds: Number(row.bestSplitSeconds || 0) || null,
-        splitHr: splitHr || runHr,
-        splitHrEstimated: !splitHr && !runHr,
-      };
-    })
+  const byKey = new Map();
+
+  function ingest(row) {
+    const pace = Number(row.bestSplitPaceMinPerKm || row.splitPace || 0);
+    if (!(pace > 1.5 && pace < 20)) return;
+    const mapped = mapRunRow({
+      ...row,
+      distance: Number(row.distance || row.distanceKm || 0),
+      minutes: Number(row.minutes || 0),
+      stravaId: Number(row.stravaId || row.id || 0) || null,
+    }, shoeMap);
+    const splitHr = Number(row.bestSplitAvgHeartrate || row.splitHr || 0) || null;
+    const runHr = Number(row.avgHeartrate || 0) || null;
+    const stravaId = Number(row.stravaId || row.id || mapped.stravaId || 0) || null;
+    const key = stravaId ? `id:${stravaId}` : `d:${row.date || mapped.date}:${pace.toFixed(3)}`;
+    const next = {
+      ...mapped,
+      stravaId: stravaId || mapped.stravaId,
+      splitPace: pace,
+      splitKm: Number(row.bestSplitKm || row.splitKm || 0) || null,
+      splitSeconds: Number(row.bestSplitSeconds || row.splitSeconds || 0) || null,
+      splitHr: splitHr || runHr,
+      splitHrEstimated: !splitHr && !runHr,
+      splitSpeedKmh: Number((60 / pace).toFixed(2)),
+    };
+    const prev = byKey.get(key);
+    if (!prev || next.splitPace < prev.splitPace) byKey.set(key, next);
+  }
+
+  buildRunningRows(entries, shoes).forEach(ingest);
+  (extraRuns || []).forEach(ingest);
+
+  return [...byKey.values()]
     .sort((a, b) => a.splitPace - b.splitPace)
     .slice(0, limit);
 }

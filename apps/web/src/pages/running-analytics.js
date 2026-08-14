@@ -30,6 +30,8 @@ import {
   RunLeaderboard,
   TopDistanceRuns,
   TopFastestSplits,
+  SplitRankBars,
+  KmHrSpeedChart,
   buildRunTrendBuckets,
   DepthHBars,
   ShoeBadge,
@@ -60,6 +62,58 @@ function fmtPace(minPerKm) {
   const mins = Math.floor(minPerKm);
   const secs = Math.round((minPerKm - mins) * 60);
   return `${mins}:${String(secs).padStart(2, '0')} /km`;
+}
+
+function kmSplitsFromDetail(detail) {
+  const stored = Array.isArray(detail?.splits) ? detail.splits : [];
+  if (stored.length) {
+    return stored
+      .map((split) => {
+        const pace = Number(split.paceMinPerKm || 0);
+        const speed = Number(split.speedKmh || 0) || (pace > 0 ? 60 / pace : null);
+        return {
+          km: Number(split.km || 0),
+          hr: Number(split.avgHeartrate || 0) || null,
+          speed: speed > 0 ? Number(speed.toFixed(2)) : null,
+        };
+      })
+      .filter((row) => row.km > 0);
+  }
+
+  const distance = Array.isArray(detail?.streams?.distance) ? detail.streams.distance.map((v) => Number(v) || 0) : [];
+  const time = Array.isArray(detail?.streams?.time) ? detail.streams.time.map((v) => Number(v) || 0) : [];
+  const heartrate = Array.isArray(detail?.streams?.heartrate) ? detail.streams.heartrate.map((v) => Number(v) || 0) : [];
+  const velocity = Array.isArray(detail?.streams?.velocityKmh) ? detail.streams.velocityKmh.map((v) => Number(v) || 0) : [];
+  if (distance.length < 2 || time.length < 2) return [];
+
+  const splits = [];
+  const totalM = distance[distance.length - 1] || 0;
+  const kmCount = Math.max(1, Math.ceil(totalM / 1000));
+  let startIdx = 0;
+  for (let km = 1; km <= kmCount; km += 1) {
+    const target = Math.min(km * 1000, totalM);
+    let endIdx = startIdx;
+    while (endIdx < distance.length - 1 && distance[endIdx] < target) endIdx += 1;
+    if (km === kmCount) endIdx = distance.length - 1;
+    const distM = Math.max(0, (distance[endIdx] || 0) - (distance[startIdx] || 0));
+    const sec = Math.max(1, (time[endIdx] || 0) - (time[startIdx] || 0));
+    const speed = sec > 0 ? (distM / sec) * 3.6 : null;
+    let hr = null;
+    if (heartrate.length > endIdx) {
+      const slice = heartrate.slice(startIdx, endIdx + 1).filter((bpm) => bpm > 0);
+      if (slice.length) hr = Math.round(slice.reduce((sum, bpm) => sum + bpm, 0) / slice.length);
+    } else if (velocity.length && !speed) {
+      /* keep speed from distance/time */
+    }
+    splits.push({
+      km,
+      hr,
+      speed: speed > 0 ? Number(speed.toFixed(2)) : null,
+    });
+    startIdx = endIdx;
+    if (startIdx >= distance.length - 1) break;
+  }
+  return splits;
 }
 
 function fmtMins(mins) {
@@ -112,6 +166,7 @@ function buildSportActivityRows(entries = [], { arrayKey, minutesKey, distanceKe
           maxHeartrate: Number(act.maxHeartrate || 0) || null,
           avgSpeedKmh: Number(act.avgSpeedKmh || 0) || null,
           paceMinPerKm: pace,
+          calories: Number(act.calories || 0) || null,
           stravaId: Number(act.id || act.stravaId || 0) || null,
           source: 'strava',
         });
@@ -1096,10 +1151,10 @@ function ShoeLeaderBars({ title, items = [], theme, accent, valueFmt }) {
   );
 }
 
-function ShoeStatsSection({ entries, shoes, theme, onAssignShoes }) {
+function ShoeStatsSection({ entries, shoes, theme, onAssignShoes, extraSplitRuns = [] }) {
   const shoeStats = useMemo(() => computeShoeStats(entries, shoes), [entries, shoes]);
   const topDistance = useMemo(() => computeRunLeaderboards(entries, shoes, 5).topDistance, [entries, shoes]);
-  const fastestSplits = useMemo(() => computeFastestKmSplits(entries, shoes, 10), [entries, shoes]);
+  const fastestSplits = useMemo(() => computeFastestKmSplits(entries, shoes, 10, extraSplitRuns), [entries, shoes, extraSplitRuns]);
   const untagged = shoeStats.filter((row) => !row.shoeId);
   const unknown = shoeStats.filter((row) => row.shoeId && !(shoes || []).some((shoe) => shoe.id === row.shoeId));
   if (!shoeStats.length) {
@@ -1464,6 +1519,20 @@ function RunningTab({
     [entries, runningShoes],
   );
 
+  const extraSplitRuns = useMemo(() => {
+    const fromInsights = [
+      ...(stravaInsights?.fastestSplits || []),
+      ...(stravaInsights?.recentRuns || []),
+      stravaInsights?.bestSplitRun,
+    ].filter(Boolean);
+    return fromInsights;
+  }, [stravaInsights]);
+
+  const fastestSplits = useMemo(
+    () => computeFastestKmSplits(entries, runningShoes, 15, extraSplitRuns),
+    [entries, runningShoes, extraSplitRuns],
+  );
+
   return (
     <div style={{ display: 'grid', gap: '14px' }}>
       {trainingTip ? <CoachBotCard tip={trainingTip} theme={theme} runRows={runRows} /> : null}
@@ -1553,6 +1622,34 @@ function RunningTab({
         </div>
       </CollapsibleBlock>
 
+      <CollapsibleBlock title="Fastest 1 km ranking" theme={theme} defaultOpen>
+        <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
+          <div style={{ fontSize: 12, color: theme.textMuted, lineHeight: 1.45 }}>
+            Ranked from stored GPS 1 km splits. Each run contributes its fastest kilometre.
+          </div>
+          {fastestSplits[0] ? (
+            <div className="run-dash-mini-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 8 }}>
+              <MiniStat
+                label="#1 split"
+                value={fmtPace(fastestSplits[0].splitPace)}
+                sub={fastestSplits[0].splitKm ? `Km ${fastestSplits[0].splitKm} · ${fmtDate(fastestSplits[0].date)}` : fmtDate(fastestSplits[0].date)}
+                accent={theme.green}
+                theme={theme}
+              />
+              <MiniStat
+                label="Split speed"
+                value={fastestSplits[0].splitSpeedKmh ? `${fastestSplits[0].splitSpeedKmh}` : '--'}
+                sub={fastestSplits[0].splitHr ? `${fastestSplits[0].splitHrEstimated ? '~' : ''}${fastestSplits[0].splitHr} bpm` : 'km/h'}
+                accent={theme.cyan}
+                theme={theme}
+              />
+            </div>
+          ) : null}
+          <SplitRankBars title="Ranking" rows={fastestSplits} theme={theme} limit={12} />
+          <TopFastestSplits title="Fastest 1 km splits" rows={fastestSplits} theme={theme} limit={12} />
+        </div>
+      </CollapsibleBlock>
+
       <CollapsibleBlock title="Run rankings" theme={theme} defaultOpen>
         <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
           <div style={{ fontSize: 12, color: theme.textMuted, lineHeight: 1.45 }}>
@@ -1612,7 +1709,7 @@ function RunningTab({
       </CollapsibleBlock>
 
       <CollapsibleBlock title="Shoe analytics" theme={theme} defaultOpen>
-        <ShoeStatsSection entries={entries} shoes={runningShoes} theme={theme} onAssignShoes={openShoeAssigner} />
+        <ShoeStatsSection entries={entries} shoes={runningShoes} theme={theme} onAssignShoes={openShoeAssigner} extraSplitRuns={extraSplitRuns} />
       </CollapsibleBlock>
 
       <div ref={shoesSectionRef}>
@@ -1795,7 +1892,7 @@ function TopKmTable({ title, rows = [], theme, showPace = true }) {
   );
 }
 
-function WalkingTab({ entries = [], name, theme }) {
+function WalkingTab({ entries = [], name, theme, userId = null }) {
   const walkRows = useMemo(() => buildSportActivityRows(entries, {
     arrayKey: 'stravaWalks',
     minutesKey: 'walkingMinutes',
@@ -1812,6 +1909,54 @@ function WalkingTab({ entries = [], name, theme }) {
   const longestWalks = useMemo(() => [...walkRows].filter((r) => r.distance > 0).sort((a, b) => b.distance - a.distance), [walkRows]);
   const paceBands = useMemo(() => walkPaceHrBands(walkRows), [walkRows]);
   const hrWalks = useMemo(() => walkRows.filter((r) => Number(r.avgHeartrate) > 0 && Number(r.paceMinPerKm) > 0), [walkRows]);
+  const lastWalk = useMemo(
+    () => walkRows.find((row) => Number(row.stravaId) > 0) || walkRows[0] || null,
+    [walkRows],
+  );
+  const [walkDetail, setWalkDetail] = useState(null);
+
+  useEffect(() => {
+    const activityId = Number(lastWalk?.stravaId || 0);
+    if (!userId || !activityId || !isWellnessApiReady()) {
+      setWalkDetail(null);
+      return undefined;
+    }
+    let cancelled = false;
+    fetch(wellnessApiUrl(`/wellness/strava/runs/${encodeURIComponent(userId)}/${encodeURIComponent(activityId)}`))
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload) => {
+        if (!cancelled) setWalkDetail(payload && payload.ok === false ? null : payload);
+      })
+      .catch(() => {
+        if (!cancelled) setWalkDetail(null);
+      });
+    return () => { cancelled = true; };
+  }, [userId, lastWalk?.stravaId]);
+
+  const lastWalkSplits = useMemo(() => kmSplitsFromDetail(walkDetail), [walkDetail]);
+  const walkHrTrend = useMemo(() => {
+    const byDate = new Map();
+    walkRows.forEach((row) => {
+      const hr = Number(row.avgHeartrate || 0);
+      if (!(hr > 0)) return;
+      const date = String(row.date || '').slice(0, 10);
+      if (!date) return;
+      const prev = byDate.get(date) || { sum: 0, n: 0, date };
+      byDate.set(date, { sum: prev.sum + hr, n: prev.n + 1, date });
+    });
+    const points = [...byDate.values()]
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .slice(-30)
+      .map((item) => ({
+        date: item.date,
+        label: fmtDate(item.date),
+        y: Math.round(item.sum / item.n),
+      }));
+    const overallAvg = points.length ? points.reduce((sum, point) => sum + point.y, 0) / points.length : null;
+    const last10 = points.slice(-10);
+    const last10Avg = last10.length ? last10.reduce((sum, point) => sum + point.y, 0) / last10.length : null;
+    return { points, overallAvg, last10Avg };
+  }, [walkRows]);
 
   const totalKm = walkRows.reduce((s, r) => s + (r.distance || 0), 0);
   const totalMins = walkRows.reduce((s, r) => s + (r.minutes || 0), 0);
@@ -1848,6 +1993,41 @@ function WalkingTab({ entries = [], name, theme }) {
         <DepthMetric label="Physical" value={wellness.all.physical.toFixed(1)} sub="km + time" accent={theme.cyan} theme={theme} />
         <DepthMetric label="Mental" value={wellness.all.mental.toFixed(1)} sub="recovery from walks" accent={theme.purple || '#a855f7'} theme={theme} />
       </div>
+
+      <CollapsibleBlock title="Last walk · km heart rate & speed" theme={theme} defaultOpen>
+        <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
+          <KmHrSpeedChart
+            title={lastWalk ? `${lastWalk.name || 'Walk'} · ${fmtDate(lastWalk.date)}` : 'Last walk · km splits'}
+            subtitle={lastWalk
+              ? `${Number(lastWalk.distance || 0).toFixed(1)} km · ${fmtMins(lastWalk.minutes)}${lastWalk.avgHeartrate ? ` · avg ${lastWalk.avgHeartrate} bpm` : ''}`
+              : 'Open a synced Strava walk to chart each kilometre'}
+            splits={lastWalkSplits}
+            theme={theme}
+          />
+        </div>
+      </CollapsibleBlock>
+
+      <CollapsibleBlock title="Heart rate across days" theme={theme} defaultOpen>
+        <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
+          {walkHrTrend.points.length >= 2 ? (
+            <RunTrendChart
+              title="Walking heart rate"
+              subtitle="Average BPM by day · last 30 walks with HR"
+              points={walkHrTrend.points}
+              overallAvg={walkHrTrend.overallAvg}
+              last10Avg={walkHrTrend.last10Avg}
+              theme={theme}
+              accent={CHART_SOFT.hr}
+              valueFmt={(v) => `${Math.round(v)}`}
+              unitLabel=" bpm"
+            />
+          ) : (
+            <div style={{ fontSize: 12, color: theme.textMuted, padding: '8px 2px' }}>
+              Need heart-rate walks on more than one day to chart BPM over time.
+            </div>
+          )}
+        </div>
+      </CollapsibleBlock>
 
       <CollapsibleBlock title="Week-wise km" theme={theme} defaultOpen>
         <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
@@ -1927,7 +2107,7 @@ function WalkingTab({ entries = [], name, theme }) {
   );
 }
 
-function YogaTab({ entries = [], name, theme }) {
+function YogaTab({ entries = [], name, theme, userId = null }) {
   const yogaRows = useMemo(() => buildSportActivityRows(entries, {
     arrayKey: 'stravaYoga',
     minutesKey: 'yogaMinutes',
@@ -1959,6 +2139,79 @@ function YogaTab({ entries = [], name, theme }) {
     return { all, week };
   }, [entries]);
 
+  const lastYoga = useMemo(
+    () => yogaRows.find((row) => Number(row.stravaId) > 0) || yogaRows[0] || null,
+    [yogaRows],
+  );
+  const [yogaDetail, setYogaDetail] = useState(null);
+
+  useEffect(() => {
+    const activityId = Number(lastYoga?.stravaId || 0);
+    if (!userId || !activityId || !isWellnessApiReady()) {
+      setYogaDetail(null);
+      return undefined;
+    }
+    let cancelled = false;
+    fetch(wellnessApiUrl(`/wellness/strava/runs/${encodeURIComponent(userId)}/${encodeURIComponent(activityId)}`))
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload) => {
+        if (!cancelled) setYogaDetail(payload && payload.ok === false ? null : payload);
+      })
+      .catch(() => {
+        if (!cancelled) setYogaDetail(null);
+      });
+    return () => { cancelled = true; };
+  }, [userId, lastYoga?.stravaId]);
+
+  const lastYogaHrPoints = useMemo(() => {
+    const hrs = Array.isArray(yogaDetail?.streams?.heartrate)
+      ? yogaDetail.streams.heartrate.map((v) => Number(v) || 0).filter((v) => v > 40)
+      : [];
+    if (hrs.length < 2) return [];
+    const step = Math.max(1, Math.ceil(hrs.length / 48));
+    const points = [];
+    for (let i = 0; i < hrs.length; i += step) {
+      points.push({
+        date: String(i),
+        label: `${Math.round(i / 60)}m`,
+        y: hrs[i],
+      });
+    }
+    const last = hrs[hrs.length - 1];
+    if (points[points.length - 1]?.y !== last) {
+      points.push({ date: String(hrs.length - 1), label: `${Math.round((hrs.length - 1) / 60)}m`, y: last });
+    }
+    return points;
+  }, [yogaDetail]);
+
+  const yogaHrTrend = useMemo(() => {
+    const byDate = new Map();
+    yogaRows.forEach((row) => {
+      const hr = Number(row.avgHeartrate || 0);
+      if (!(hr > 0)) return;
+      const date = String(row.date || '').slice(0, 10);
+      if (!date) return;
+      const prev = byDate.get(date) || { sum: 0, n: 0, date };
+      byDate.set(date, { sum: prev.sum + hr, n: prev.n + 1, date });
+    });
+    const points = [...byDate.values()]
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .slice(-30)
+      .map((item) => ({
+        date: item.date,
+        label: fmtDate(item.date),
+        y: Math.round(item.sum / item.n),
+      }));
+    const overallAvg = points.length ? points.reduce((sum, point) => sum + point.y, 0) / points.length : null;
+    const last10 = points.slice(-10);
+    const last10Avg = last10.length ? last10.reduce((sum, point) => sum + point.y, 0) / last10.length : null;
+    return { points, overallAvg, last10Avg };
+  }, [yogaRows]);
+
+  const totalCalories = yogaRows.reduce((sum, row) => sum + Number(row.calories || 0), 0);
+  const maxHrAll = yogaRows.reduce((best, row) => Math.max(best, Number(row.maxHeartrate || 0)), 0) || null;
+  const avgSession = yogaRows.length ? Math.round(totalMins / yogaRows.length) : 0;
+
   if (!yogaRows.length) return <EmptyState sport="Yoga" theme={theme} />;
 
   return (
@@ -1968,6 +2221,13 @@ function YogaTab({ entries = [], name, theme }) {
         <DepthMetric label="This week" value={fmtMins(weekMins)} sub="last 7 days" accent={theme.green} theme={theme} />
         <DepthMetric label="Longest" value={longestSession ? fmtMins(longestSession.minutes) : '--'} sub={longestSession ? fmtDate(longestSession.date) : ''} accent={theme.orange} theme={theme} />
         <DepthMetric label="Avg HR" value={avgHr ? `${avgHr}` : '--'} sub={avgHr ? `${hrSessions.length} HR sessions` : `${name}'s yoga`} accent={CHART_SOFT.hr} theme={theme} />
+      </div>
+
+      <div className="sport-4col" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 10 }}>
+        <DepthMetric label="Calories" value={totalCalories ? `${Math.round(totalCalories)}` : '--'} sub="from Strava yoga" accent={theme.orange} theme={theme} />
+        <DepthMetric label="Max HR" value={maxHrAll ? `${maxHrAll}` : '--'} sub="highest recorded" accent={CHART_SOFT.hr} theme={theme} />
+        <DepthMetric label="Avg session" value={fmtMins(avgSession)} sub={`${yogaRows.length} sessions`} accent={theme.cyan} theme={theme} />
+        <DepthMetric label="Peak HR session" value={peakHr ? `${peakHr.avgHeartrate}` : '--'} sub={peakHr ? fmtDate(peakHr.date) : 'need HR'} accent={theme.purple || '#a855f7'} theme={theme} />
       </div>
 
       <div className="sport-4col" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 10 }}>
@@ -2004,6 +2264,34 @@ function YogaTab({ entries = [], name, theme }) {
 
       <CollapsibleBlock title="Heart rate" theme={theme} defaultOpen>
         <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
+          {yogaHrTrend.points.length >= 2 ? (
+            <RunTrendChart
+              title="Yoga heart rate"
+              subtitle="Average BPM by day · last 30 sessions with HR"
+              points={yogaHrTrend.points}
+              overallAvg={yogaHrTrend.overallAvg}
+              last10Avg={yogaHrTrend.last10Avg}
+              theme={theme}
+              accent={CHART_SOFT.hr}
+              valueFmt={(v) => `${Math.round(v)}`}
+              unitLabel=" bpm"
+            />
+          ) : null}
+          {lastYogaHrPoints.length >= 2 ? (
+            <RunTrendChart
+              title={lastYoga ? `Last session · ${fmtDate(lastYoga.date)}` : 'Last yoga session'}
+              subtitle={lastYoga
+                ? `${fmtMins(lastYoga.minutes)}${lastYoga.avgHeartrate ? ` · avg ${lastYoga.avgHeartrate} bpm` : ''}${lastYoga.maxHeartrate ? ` · max ${lastYoga.maxHeartrate}` : ''}${lastYoga.calories ? ` · ${Math.round(lastYoga.calories)} kcal` : ''}`
+                : 'Heart rate through the session'}
+              points={lastYogaHrPoints}
+              overallAvg={lastYoga?.avgHeartrate || null}
+              last10Avg={null}
+              theme={theme}
+              accent={CHART_SOFT.hrAlt}
+              valueFmt={(v) => `${Math.round(v)}`}
+              unitLabel=" bpm"
+            />
+          ) : null}
           {hrSessions.length ? (
             <>
               <div className="run-dash-mini-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 8 }}>
@@ -2714,13 +3002,13 @@ export default function RunningAnalytics() {
           <SimpleSportTab stats={allSportStats.badminton} name={name} sportLabel="Badminton" minKey="badmintonMinutes" showDistance={false} accent={theme.yellow || '#eab308'} theme={theme} />
         )}
         {activeTab === 'yoga' && (
-          <YogaTab entries={entries} name={name} theme={theme} />
+          <YogaTab entries={entries} name={name} theme={theme} userId={user?.id} />
         )}
         {activeTab === 'cycling' && (
           <SimpleSportTab stats={allSportStats.cycling} name={name} sportLabel="Cycling" minKey="cyclingMinutes" showDistance={false} accent={theme.blue} theme={theme} />
         )}
         {activeTab === 'walking' && (
-          <WalkingTab entries={entries} name={name} theme={theme} />
+          <WalkingTab entries={entries} name={name} theme={theme} userId={user?.id} />
         )}
         {activeTab === 'swimming' && (
           <SimpleSportTab stats={allSportStats.swimming} name={name} sportLabel="Swimming" minKey="swimmingMinutes" showDistance={false} accent={theme.purple} theme={theme} />

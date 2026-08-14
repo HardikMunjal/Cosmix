@@ -9,7 +9,6 @@ import { buildStrategySummary, formatCurrency } from '../lib/userInsights';
 import NotificationModule from '../modules/dashboard/NotificationModule';
 import PostFeedModule from '../modules/dashboard/PostFeedModule';
 import ThreadsModule from '../modules/dashboard/ThreadsModule';
-import ThreadWorkspaceModule from '../modules/dashboard/ThreadWorkspaceModule';
 import { runStravaAutoSync } from '../lib/stravaAutoSync';
 import { xhrUploadFormData } from '../lib/ThreadUploadProgress';
 import { ACTIVITY_METRIC_DEFS as activityMetricDefs, aggregateActivityTotals } from '../lib/activityMetrics';
@@ -1651,7 +1650,11 @@ export default function Dashboard() {
       setActiveTab('home');
     }
     const threadParam = String(router.query.thread || '').trim();
-    setSelectedThreadId(threadParam);
+    if (threadParam) {
+      router.replace({ pathname: '/chat', query: { thread: threadParam } });
+      return;
+    }
+    setSelectedThreadId('');
   }, [router.isReady, router.query.tab, router.query.thread]);
 
   const selectedThread = useMemo(
@@ -1661,8 +1664,7 @@ export default function Dashboard() {
 
   const openDashboardThread = useCallback((group) => {
     if (!group?.id) return;
-    setSelectedThreadId(group.id);
-    router.push({ pathname: '/dashboard', query: { tab: 'threads', thread: group.id } }, undefined, { shallow: true });
+    router.push({ pathname: '/chat', query: { thread: group.id } });
   }, [router]);
 
   const closeDashboardThread = useCallback(() => {
@@ -1759,6 +1761,22 @@ export default function Dashboard() {
         parentFolderId: parentFolderId || null,
       }),
     });
+    await loadThreadsBootstrap();
+  }, [chatBootstrap.groups, loadThreadsBootstrap, selectedThreadId, user?.username]);
+
+  const handleUpdateThreadWallpaper = useCallback(async (wallpaperUrl) => {
+    const thread = (chatBootstrap.groups || []).find((group) => group.id === selectedThreadId);
+    const actorUsername = String(user?.username || '').trim();
+    if (!thread?.id || !actorUsername) return;
+    const response = await fetch(`/chat-api/chat/groups/${encodeURIComponent(thread.id)}/wallpaper`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ actorUsername, wallpaperUrl: wallpaperUrl || '' }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload?.message || payload?.error || 'Could not update wallpaper.');
+    }
     await loadThreadsBootstrap();
   }, [chatBootstrap.groups, loadThreadsBootstrap, selectedThreadId, user?.username]);
 
@@ -3995,44 +4013,26 @@ export default function Dashboard() {
           </div>
         </section>
 
-        <section style={{ display: activeTab === 'threads' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '18px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '14px' }} className="dashboard-panel dashboard-tab-surface dashboard-tab-surface--threads">
+        <section style={{ display: activeTab === 'threads' ? 'grid' : 'none', borderRadius: '20px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '12px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '10px' }} className="dashboard-panel dashboard-tab-surface dashboard-tab-surface--threads">
           <div className="dashboard-tab-surface-head">
             <div>
               <div className="dashboard-tab-surface-eyebrow dashboard-tab-surface-eyebrow--threads">Your spaces</div>
-              <div className="dashboard-tab-surface-title dashboard-tab-surface-title--threads">Threads</div>
+              <div className="dashboard-tab-surface-title dashboard-tab-surface-title--threads" style={{ fontSize: 18, marginTop: 2 }}>Threads</div>
             </div>
-            <div style={{ fontSize: '11px', color: '#a1a1aa', fontWeight: 700, padding: '8px 12px', borderRadius: '999px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.06)' }}>
+            <div style={{ fontSize: '11px', color: '#a1a1aa', fontWeight: 700, padding: '6px 10px', borderRadius: '999px', border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.06)' }}>
               {`${(chatBootstrap.groups || []).filter((group) => !group?.parentGroupId).length} active`}
             </div>
           </div>
 
-          {stravaSyncMsg ? (
-            <div style={{ fontSize: 12, color: theme.textMuted, padding: '0 2px' }}>{stravaSyncMsg}</div>
-          ) : null}
-
-          {selectedThread ? (
-            <ThreadWorkspaceModule
-              thread={selectedThread}
-              theme={theme}
-              username={user?.username || ''}
-              userId={user?.id || null}
-              avatar={user?.avatar || null}
-              onBack={closeDashboardThread}
-              onCreateFolder={handleCreateThreadFolder}
-              onUploadToFolder={handleUploadToFolder}
-              onRefresh={loadThreadsBootstrap}
-            />
-          ) : (
-            <ThreadsModule
-              groups={chatBootstrap.groups || []}
-              theme={theme}
-              username={user?.username || ''}
-              loading={threadsLoading && !threadsReady}
-              onOpenThread={openDashboardThread}
-              onCreateThread={() => router.push({ pathname: '/chat', query: { view: 'create' } })}
-              onJoinThread={() => router.push({ pathname: '/chat', query: { view: 'join' } })}
-            />
-          )}
+          <ThreadsModule
+            groups={chatBootstrap.groups || []}
+            theme={theme}
+            username={user?.username || ''}
+            loading={threadsLoading && !threadsReady}
+            onOpenThread={openDashboardThread}
+            onCreateThread={() => router.push({ pathname: '/chat', query: { view: 'create' } })}
+            onJoinThread={() => router.push({ pathname: '/chat', query: { view: 'join' } })}
+          />
         </section>
 
         <section style={{ display: activeTab === 'posts' ? 'grid' : 'none', borderRadius: '28px', border: `1px solid ${theme.cardBorder}`, background: theme.panelBg, padding: '18px', boxShadow: `0 20px 56px ${theme.shadow}`, gap: '14px' }} className="dashboard-panel dashboard-tab-surface dashboard-tab-surface--posts">

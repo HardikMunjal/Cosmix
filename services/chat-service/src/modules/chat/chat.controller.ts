@@ -136,6 +136,18 @@ export class ChatController {
     return this.chatService.updateGroupCover(body.actorUsername, groupId, body);
   }
 
+  @Put('groups/:groupId/wallpaper')
+  updateGroupWallpaper(
+    @Param('groupId') groupId: string,
+    @Body()
+    body: {
+      actorUsername: string;
+      wallpaperUrl?: string | null;
+    },
+  ) {
+    return this.chatService.updateGroupWallpaper(body.actorUsername, groupId, body);
+  }
+
   @Put('groups/:groupId/access')
   updateGroupAccess(
     @Param('groupId') groupId: string,

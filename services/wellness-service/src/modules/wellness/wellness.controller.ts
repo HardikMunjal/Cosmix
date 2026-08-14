@@ -279,8 +279,16 @@ export class WellnessController {
           .filter((activity) => this.stravaService.activityKind(activity) === 'run')
           .map((activity) => Number(activity?.id))
           .filter((id) => id > 0);
-        const detailResult = await this.stravaService.enrichRecentActivityDetails(userId, runIds, {
-          maxActivities: isFirstSync ? 12 : 18,
+        const walkIds = activities
+          .filter((activity) => this.stravaService.activityKind(activity) === 'walk')
+          .map((activity) => Number(activity?.id))
+          .filter((id) => id > 0);
+        const yogaIds = activities
+          .filter((activity) => this.stravaService.activityKind(activity) === 'yoga')
+          .map((activity) => Number(activity?.id))
+          .filter((id) => id > 0);
+        const detailResult = await this.stravaService.enrichRecentActivityDetails(userId, [...runIds, ...walkIds, ...yogaIds], {
+          maxActivities: isFirstSync ? 16 : 22,
         });
         detailsEnriched = detailResult.enriched || 0;
       } catch (err) {
@@ -417,7 +425,7 @@ export class WellnessController {
     // Fast path: build insights from Cosmix activity_details (no Strava, no giant wellness JSON).
     let storedRuns = await this.stravaService.listStoredRunSummaries(userId, {
       days: windowDays,
-      limit: 50,
+      limit: 80,
     });
 
     // Fallback: wellness entries if details table is thin.
@@ -434,7 +442,7 @@ export class WellnessController {
             return Number.isFinite(started) ? started >= cutoffMs : true;
           });
         if (fromEntries.length > storedRuns.length) {
-          storedRuns = await this.stravaService.attachStoredDetailFields(userId, fromEntries, { maxLookups: 16 });
+          storedRuns = await this.stravaService.attachStoredDetailFields(userId, fromEntries, { maxLookups: 40 });
         }
       } catch (_) { /* keep details-only */ }
     }

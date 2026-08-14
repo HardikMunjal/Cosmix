@@ -429,6 +429,7 @@ export default function ThreadInlineChat({
           min-height: 0;
           height: 100%;
           grid-template-rows: 1fr auto auto auto;
+          background: transparent;
         }
         .cx-chat--focus {
           position: fixed;

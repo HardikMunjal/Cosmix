@@ -102,6 +102,7 @@ type GroupRecord = {
     coverImageUrl: string | null;
     coverS3Key: string | null;
     coverMediaType: 'image' | 'video' | null;
+    wallpaperUrl: string | null;
     createdAt: string;
     updatedAt: string;
 };
@@ -183,6 +184,7 @@ type GroupView = {
     coverImageUrl: string | null;
     coverS3Key: string | null;
     coverMediaType: 'image' | 'video' | null;
+    wallpaperUrl: string | null;
     createdAt: string;
     memberships: GroupMembershipView[];
     images: GroupImageView[];
@@ -249,6 +251,7 @@ type GroupRow = {
     cover_image_url: string | null;
     cover_s3_key: string | null;
     cover_media_type: string | null;
+    wallpaper_url: string | null;
     created_at: Date;
     updated_at: Date;
 };
@@ -855,6 +858,7 @@ export class ChatService {
             coverImageUrl: group.coverImageUrl ?? null,
             coverS3Key: group.coverS3Key ?? null,
             coverMediaType: group.coverMediaType ?? null,
+            wallpaperUrl: group.wallpaperUrl ?? null,
             createdAt: group.createdAt,
             memberships: memberships
                 .slice()
@@ -987,6 +991,7 @@ export class ChatService {
                 ALTER TABLE chat_groups ADD COLUMN IF NOT EXISTS cover_image_url TEXT;
                 ALTER TABLE chat_groups ADD COLUMN IF NOT EXISTS cover_s3_key TEXT;
                 ALTER TABLE chat_groups ADD COLUMN IF NOT EXISTS cover_media_type TEXT;
+                ALTER TABLE chat_groups ADD COLUMN IF NOT EXISTS wallpaper_url TEXT;
 
                 CREATE INDEX IF NOT EXISTS idx_chat_groups_parent ON chat_groups(parent_group_id);
                 CREATE INDEX IF NOT EXISTS idx_chat_groups_created_by ON chat_groups(created_by);
@@ -1273,6 +1278,7 @@ export class ChatService {
                         coverImageUrl: groupRow.cover_image_url ?? null,
                         coverS3Key: groupRow.cover_s3_key ?? null,
                         coverMediaType: (groupRow.cover_media_type === 'video' ? 'video' : groupRow.cover_media_type === 'image' ? 'image' : null),
+                        wallpaperUrl: groupRow.wallpaper_url ?? null,
                         createdAt: groupRow.created_at.toISOString(),
                         updatedAt: groupRow.updated_at.toISOString(),
                     },
@@ -1926,6 +1932,7 @@ export class ChatService {
             coverImageUrl,
             coverS3Key,
             coverMediaType,
+            wallpaperUrl: null,
             createdAt: now,
             updatedAt: now,
         };
@@ -2037,6 +2044,42 @@ export class ChatService {
         group.coverImageUrl = coverImageUrl;
         group.coverS3Key = coverS3Key;
         group.coverMediaType = coverMediaType;
+        group.updatedAt = now;
+        const bootstrap = await this.getBootstrap(actor);
+        return { ...bootstrap, updatedGroupId: groupId };
+    }
+
+    async updateGroupWallpaper(
+        actorUsername: string,
+        groupId: string,
+        payload: { wallpaperUrl?: string | null },
+    ) {
+        const actor = this.normalizeUsername(actorUsername);
+        await this.assertGroupPermission(actor, groupId, 'invite');
+        const raw = String(payload.wallpaperUrl || '').trim();
+        const wallpaperUrl = raw || null;
+        if (wallpaperUrl && !wallpaperUrl.startsWith('preset:') && !/^(https?:\/\/|\/)/i.test(wallpaperUrl)) {
+            throw new BadRequestException('Wallpaper must be a preset or an image URL.');
+        }
+        const now = this.nowIso();
+
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            await pool?.query(
+                `UPDATE chat_groups
+                 SET wallpaper_url = $1, updated_at = $2
+                 WHERE id = $3`,
+                [wallpaperUrl, now, groupId],
+            );
+            const bootstrap = await this.getBootstrap(actor);
+            return { ...bootstrap, updatedGroupId: groupId };
+        }
+
+        const group = this.groups.find((entry) => entry.id === groupId);
+        if (!group) {
+            throw new NotFoundException('Group not found.');
+        }
+        group.wallpaperUrl = wallpaperUrl;
         group.updatedAt = now;
         const bootstrap = await this.getBootstrap(actor);
         return { ...bootstrap, updatedGroupId: groupId };

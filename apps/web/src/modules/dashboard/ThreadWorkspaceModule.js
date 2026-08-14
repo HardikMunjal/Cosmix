@@ -1,19 +1,20 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { buildFolderTree } from '../../lib/ChatAlbumGallery';
 import { ChatMediaLightbox } from '../../lib/ChatMediaLightbox';
 import ThreadInlineChat from '../../lib/ThreadInlineChat';
 import { createUploadSession, ThreadUploadProgress } from '../../lib/ThreadUploadProgress';
+import { THREAD_WALLPAPERS, resolveThreadWallpaper } from '../../lib/threadWallpapers';
 
 function threadEmoji(name) {
   const lower = String(name || '').toLowerCase();
-  if (lower.includes('cricket')) return '🏏';
-  if (lower.includes('football') || lower.includes('soccer')) return '⚽';
-  if (lower.includes('goa') || lower.includes('beach')) return '🏖️';
-  if (lower.includes('family')) return '👨‍👩‍👧';
-  if (lower.includes('day')) return '📅';
-  if (lower.includes('trip') || lower.includes('travel')) return '🏔️';
-  return '📁';
+  if (lower.includes('cricket')) return 'ðŸ';
+  if (lower.includes('football') || lower.includes('soccer')) return 'âš½';
+  if (lower.includes('goa') || lower.includes('beach')) return 'ðŸ–ï¸';
+  if (lower.includes('family')) return 'ðŸ‘¨â€ðŸ‘©â€ðŸ‘§';
+  if (lower.includes('day')) return 'ðŸ“…';
+  if (lower.includes('trip') || lower.includes('travel')) return 'ðŸ”ï¸';
+  return 'ðŸ“';
 }
 
 function isVideoMedia(image) {
@@ -74,6 +75,7 @@ export default function ThreadWorkspaceModule({
   onCreateFolder,
   onUploadToFolder,
   onRefresh,
+  onUpdateWallpaper,
 }) {
   const [threadMode, setThreadMode] = useState('chat'); // chat | photos
   const [folderPath, setFolderPath] = useState([]);
@@ -86,6 +88,8 @@ export default function ThreadWorkspaceModule({
   const [commentDrafts, setCommentDrafts] = useState({});
   const [postingComment, setPostingComment] = useState(false);
   const [commentError, setCommentError] = useState('');
+  const [wallpaperOpen, setWallpaperOpen] = useState(false);
+  const [savingWallpaper, setSavingWallpaper] = useState(false);
   const fileInputRef = useRef(null);
   const uploadTargetRef = useRef(null);
 
@@ -98,6 +102,7 @@ export default function ThreadWorkspaceModule({
     setCommentDrafts({});
     setCommentError('');
     setThreadMode('chat');
+    setWallpaperOpen(false);
   }, [thread?.id]);
 
   const folderTree = useMemo(() => buildFolderTree(thread?.folders || []), [thread?.folders]);
@@ -119,6 +124,11 @@ export default function ThreadWorkspaceModule({
     );
     return (thread?.images || []).filter((image) => imageIds.has(image.id));
   }, [currentFolder, thread?.images]);
+
+  const swipePhotos = useMemo(() => {
+    if (currentMedia.length) return currentMedia;
+    return (thread?.images || []).filter((image) => image?.imageUrl);
+  }, [currentMedia, thread?.images]);
 
   const canComment = useMemo(() => {
     const membership = (thread?.memberships || []).find(
@@ -237,7 +247,7 @@ export default function ThreadWorkspaceModule({
   }
 
   function openPhotoAt(imageId) {
-    const idx = currentMedia.findIndex((image) => image.id === imageId);
+    const idx = swipePhotos.findIndex((image) => image.id === imageId);
     if (idx < 0) return;
     setLightboxIndex(idx);
     setCommentError('');
@@ -269,172 +279,249 @@ export default function ThreadWorkspaceModule({
 
   const inChat = threadMode === 'chat';
   const inPhotos = threadMode === 'photos';
+  const wallpaperStyle = resolveThreadWallpaper(thread);
+  const canEditLook = useMemo(() => {
+    const membership = (thread?.memberships || []).find(
+      (entry) => String(entry.username || '').toLowerCase() === String(username || '').toLowerCase(),
+    );
+    if (!membership) return false;
+    return membership.role === 'owner' || membership.role === 'admin' || membership.canInvite === true;
+  }, [thread?.memberships, username]);
+
+  const handleWorkspaceBack = useCallback(() => {
+    if (lightboxIndex != null) {
+      setLightboxIndex(null);
+      return;
+    }
+    if (wallpaperOpen) {
+      setWallpaperOpen(false);
+      return;
+    }
+    if (menu) {
+      setMenu(null);
+      return;
+    }
+    if (creatingFolder) {
+      setCreatingFolder(null);
+      setPendingFolderName('');
+      return;
+    }
+    if (inPhotos && folderPath.length) {
+      goToPathIndex(folderPath.length - 1);
+      return;
+    }
+    if (inPhotos) {
+      setThreadMode('chat');
+      return;
+    }
+    onBack?.();
+  }, [creatingFolder, folderPath.length, inPhotos, lightboxIndex, menu, onBack, wallpaperOpen]);
+
+  async function applyWallpaper(wallpaperUrl) {
+    if (!onUpdateWallpaper) return;
+    setSavingWallpaper(true);
+    try {
+      await onUpdateWallpaper(wallpaperUrl);
+      setWallpaperOpen(false);
+    } finally {
+      setSavingWallpaper(false);
+    }
+  }
 
   useEffect(() => {
-    if (!inChat || typeof document === 'undefined') return undefined;
+    if (typeof document === 'undefined') return undefined;
     const previous = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
       document.body.style.overflow = previous;
     };
-  }, [inChat]);
+  }, []);
 
-  if (!thread) return null;
+  useEffect(() => {
+    function onKeyDown(event) {
+      if (event.key === 'Escape') handleWorkspaceBack();
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [handleWorkspaceBack]);
 
-  return (
-    <div className={`thread-workspace${inChat ? ' thread-workspace--chat' : ' thread-workspace--photos'}`}>
+  if (!thread || typeof document === 'undefined') return null;
+
+  const backLabel = wallpaperOpen
+    ? 'â† Back'
+    : (inPhotos && folderPath.length)
+      ? 'â† Back'
+      : inPhotos
+        ? 'â† Chat'
+        : 'â† Threads';
+  const wallpaperPhotos = (thread.images || []).filter((image) => image?.imageUrl && !isVideoMedia(image)).slice(0, 12);
+
+  return createPortal(
+    <div className="thread-phone" role="dialog" aria-modal="true" aria-label={thread.name} style={wallpaperStyle}>
       <style>{`
-        .thread-workspace { display: grid; gap: 12px; min-height: 0; }
-        .thread-workspace--photos {
-          background: #000;
-          border-radius: 20px;
-          padding: 14px;
-          border: 1px solid rgba(255,255,255,0.08);
-        }
-        .thread-workspace--chat {
-          /* chat renders in a body portal so composer isn't clipped by bottom nav */
-        }
-        .thread-workspace-head { display: grid; gap: 8px; }
-        .thread-chat-overlay {
+        .thread-phone {
           position: fixed;
           inset: 0;
           z-index: 1400;
-          background: #000;
           display: grid;
           grid-template-rows: auto 1fr;
           min-height: 100dvh;
           height: 100dvh;
           max-height: 100dvh;
+          background-repeat: no-repeat;
+          background-size: cover;
+          background-position: center;
+          color: #f8fafc;
         }
-        .thread-chat-overlay-head {
-          display: grid;
-          gap: 8px;
-          padding: calc(10px + env(safe-area-inset-top, 0px)) 12px 10px;
-          border-bottom: 1px solid rgba(255,255,255,0.08);
-          background: #0a0a0a;
-        }
-        .thread-workspace-toprow {
+        .thread-phone-head {
           display: flex;
           align-items: center;
-          justify-content: space-between;
-          gap: 10px;
-          flex-wrap: wrap;
+          gap: 8px;
+          padding: calc(8px + env(safe-area-inset-top, 0px)) 10px 8px;
+          background: linear-gradient(180deg, rgba(2,6,23,0.78), rgba(2,6,23,0.28));
+          border-bottom: 1px solid rgba(255,255,255,0.08);
         }
-        .thread-workspace-back {
-          appearance: none;
-          border: 1px solid rgba(255,255,255,0.12);
-          background: #141414;
-          color: #f4f4f5;
-          border-radius: 999px;
-          padding: 8px 12px;
-          font-size: 12px;
-          font-weight: 800;
-          cursor: pointer;
-          width: fit-content;
-        }
-        .thread-workspace-title { font-size: 22px; font-weight: 900; color: #fafafa; }
-        .thread-chat-overlay .thread-workspace-title { font-size: 16px; }
-        .thread-mode-switch {
-          display: inline-grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 4px;
-          padding: 4px;
-          border-radius: 999px;
-          border: 1px solid rgba(255,255,255,0.1);
-          background: #111;
-          width: min(100%, 280px);
-        }
-        .thread-mode-btn {
+        .thread-phone-back {
           appearance: none;
           border: none;
+          background: rgba(255,255,255,0.14);
+          color: #fff;
           border-radius: 999px;
-          padding: 9px 12px;
-          font-size: 12px;
+          padding: 10px 14px;
+          font-size: 15px;
           font-weight: 800;
           cursor: pointer;
-          background: transparent;
-          color: #a1a1aa;
           font-family: inherit;
+          flex-shrink: 0;
         }
-        .thread-mode-btn.is-active {
+        .thread-phone-title {
+          flex: 1;
+          min-width: 0;
+          font-size: 16px;
+          font-weight: 800;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .thread-phone-icon {
+          width: 38px;
+          height: 38px;
+          border: none;
+          border-radius: 12px;
+          background: rgba(255,255,255,0.12);
+          color: #fff;
+          cursor: pointer;
+          font-size: 16px;
+        }
+        .thread-phone-icon.is-active {
           background: #fafafa;
           color: #09090b;
         }
-        .thread-workspace-path {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 4px;
-          align-items: center;
-          font-size: 12px;
-          color: #a1a1aa;
-          font-weight: 700;
-        }
-        .thread-workspace-path button {
-          appearance: none;
-          border: none;
-          background: transparent;
-          color: #e4e4e7;
-          cursor: pointer;
-          font: inherit;
-          padding: 0;
-        }
-        .thread-explorer {
-          border-radius: 18px;
-          border: 1px solid rgba(255,255,255,0.08);
-          background: #0a0a0a;
-          min-height: 320px;
+        .thread-phone-body {
+          min-height: 0;
           display: grid;
-          grid-template-rows: auto 1fr;
           overflow: hidden;
         }
-        .thread-explorer-toolbar {
+        .thread-chat-shell {
+          min-height: 0;
+          height: 100%;
+          display: grid;
+          overflow: hidden;
+        }
+        .thread-chat-shell .cx-chat,
+        .thread-chat-shell .cx-chat--focus,
+        .thread-chat-shell .cx-chat--embedded {
+          position: relative !important;
+          inset: auto !important;
+          height: 100% !important;
+          min-height: 0 !important;
+          max-height: 100% !important;
+          border-radius: 0 !important;
+          z-index: auto !important;
+          background: transparent !important;
+          border: none !important;
+        }
+        .thread-photos {
+          display: grid;
+          grid-template-rows: auto auto minmax(0, 1fr);
+          min-height: 0;
+          overflow: hidden;
+        }
+        .thread-photo-film {
+          display: flex;
+          gap: 8px;
+          overflow-x: auto;
+          padding: 10px 12px 6px;
+          scroll-snap-type: x mandatory;
+          -webkit-overflow-scrolling: touch;
+        }
+        .thread-photo-card {
+          flex: 0 0 min(78vw, 320px);
+          height: 42vh;
+          max-height: 360px;
+          border: none;
+          padding: 0;
+          border-radius: 18px;
+          overflow: hidden;
+          scroll-snap-align: center;
+          background: rgba(0,0,0,0.35);
+          cursor: pointer;
+        }
+        .thread-photo-card img,
+        .thread-photo-card video {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+          pointer-events: none;
+        }
+        .thread-photos-toolbar {
           display: flex;
           justify-content: space-between;
           align-items: center;
           gap: 8px;
-          padding: 10px 12px;
-          border-bottom: 1px solid rgba(255,255,255,0.08);
-          font-size: 11px;
-          color: #a1a1aa;
+          padding: 4px 12px 8px;
+          font-size: 12px;
+          color: rgba(226,232,240,0.8);
           font-weight: 700;
         }
+        .thread-photos-toolbar button {
+          appearance: none;
+          border: none;
+          background: transparent;
+          color: inherit;
+          font: inherit;
+          cursor: pointer;
+          padding: 0;
+        }
         .thread-explorer-body {
-          padding: 12px;
+          padding: 0 10px 16px;
           overflow: auto;
-          min-height: 260px;
+          min-height: 0;
         }
         .thread-explorer-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
-          gap: 10px;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 4px;
         }
         .thread-explorer-item {
           appearance: none;
-          border: 1px solid transparent;
-          background: transparent;
-          border-radius: 12px;
-          padding: 8px 6px;
+          border: none;
+          background: rgba(15,23,42,0.45);
+          padding: 0;
           cursor: pointer;
           color: inherit;
           font-family: inherit;
-          display: grid;
-          gap: 6px;
-          justify-items: center;
-          text-align: center;
-        }
-        .thread-explorer-item:hover { background: rgba(255,255,255,0.06); }
-        .thread-explorer-item.is-selected {
-          background: rgba(255,255,255,0.08);
-          border-color: rgba(255,255,255,0.18);
+          aspect-ratio: 1;
+          overflow: hidden;
+          border-radius: 8px;
         }
         .thread-explorer-icon {
-          width: 56px;
-          height: 56px;
-          border-radius: 12px;
+          width: 100%;
+          height: 100%;
           display: grid;
           place-items: center;
           font-size: 28px;
-          background: #141414;
           overflow: hidden;
         }
         .thread-explorer-icon img,
@@ -443,26 +530,19 @@ export default function ThreadWorkspaceModule({
           height: 100%;
           object-fit: cover;
         }
-        .thread-explorer-label {
-          font-size: 11px;
-          font-weight: 700;
-          color: #e2e8f0;
-          line-height: 1.3;
-          word-break: break-word;
-        }
         .thread-explorer-empty {
-          min-height: 220px;
+          min-height: 180px;
           display: grid;
           place-items: center;
           text-align: center;
           gap: 8px;
-          color: #a1a1aa;
+          color: #cbd5e1;
           font-size: 13px;
           padding: 20px;
         }
         .thread-explorer-menu {
           position: fixed;
-          z-index: 50;
+          z-index: 1500;
           min-width: 190px;
           border-radius: 12px;
           border: 1px solid rgba(255,255,255,0.12);
@@ -500,7 +580,7 @@ export default function ThreadWorkspaceModule({
           border-radius: 10px;
           padding: 8px 10px;
           font-size: 13px;
-          min-width: 180px;
+          min-width: 160px;
           font-family: inherit;
         }
         .thread-explorer-create button {
@@ -513,27 +593,42 @@ export default function ThreadWorkspaceModule({
           background: #fafafa;
           color: #09090b;
         }
-        .thread-chat-shell {
-          min-height: 0;
-          height: 100%;
+        .thread-wallpaper-sheet {
+          position: absolute;
+          inset: auto 0 0 0;
+          z-index: 6;
+          background: rgba(8,12,22,0.96);
+          border-top: 1px solid rgba(255,255,255,0.1);
+          border-radius: 22px 22px 0 0;
+          padding: 14px 14px calc(16px + env(safe-area-inset-bottom, 0px));
           display: grid;
-          overflow: hidden;
+          gap: 12px;
+          max-height: 72dvh;
+          overflow: auto;
         }
-        .thread-chat-shell .cx-chat,
-        .thread-chat-shell .cx-chat--focus,
-        .thread-chat-shell .cx-chat--embedded {
-          position: relative !important;
-          inset: auto !important;
-          height: 100% !important;
-          min-height: 0 !important;
-          max-height: 100% !important;
-          border-radius: 0 !important;
-          z-index: auto !important;
+        .thread-wallpaper-grid {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 8px;
         }
+        .thread-wallpaper-tile {
+          border: 2px solid transparent;
+          border-radius: 14px;
+          height: 72px;
+          cursor: pointer;
+          color: #fff;
+          font-size: 11px;
+          font-weight: 800;
+          display: grid;
+          align-content: end;
+          padding: 8px;
+          text-align: left;
+        }
+        .thread-wallpaper-tile.is-active { border-color: #fff; }
         .thread-comment-error {
           font-size: 12px;
           color: #fda4af;
-          padding: 0 4px;
+          padding: 0 12px;
         }
       `}</style>
 
@@ -546,54 +641,56 @@ export default function ThreadWorkspaceModule({
         onChange={handleFilesSelected}
       />
 
-      {inPhotos ? (
-        <>
-          <div className="thread-workspace-head">
-            <div className="thread-workspace-toprow">
-              <button
-                type="button"
-                className="thread-workspace-back"
-                onClick={() => onBack?.()}
-              >
-                ← All threads
-              </button>
-              <div className="thread-mode-switch" role="tablist" aria-label="Thread mode">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected
-                  className="thread-mode-btn is-active"
-                  onClick={() => setThreadMode('photos')}
-                >
-                  Photos
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={false}
-                  className="thread-mode-btn"
-                  onClick={() => setThreadMode('chat')}
-                >
-                  Chat
-                </button>
-              </div>
-            </div>
-            <div className="thread-workspace-title">{thread.name}</div>
-            <div className="thread-workspace-path">
-              <button type="button" onClick={() => goToPathIndex(0)}>Home</button>
-              {folderPath.map((folder, index) => (
-                <span key={folder.id}>
-                  {' / '}
-                  <button type="button" onClick={() => goToPathIndex(index + 1)}>{folder.name}</button>
-                </span>
-              ))}
-            </div>
-          </div>
+      <header className="thread-phone-head">
+        <button type="button" className="thread-phone-back" onClick={handleWorkspaceBack}>
+          {backLabel}
+        </button>
+        <div className="thread-phone-title">{thread.name}</div>
+        {canEditLook ? (
+          <button type="button" className={`thread-phone-icon${wallpaperOpen ? ' is-active' : ''}`} onClick={() => setWallpaperOpen((open) => !open)} title="Wallpaper" aria-label="Change wallpaper">
+            ðŸŽ¨
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className={`thread-phone-icon${inPhotos ? ' is-active' : ''}`}
+          onClick={() => setThreadMode(inPhotos ? 'chat' : 'photos')}
+          title={inPhotos ? 'Chat' : 'Photos'}
+          aria-label={inPhotos ? 'Open chat' : 'Open photos'}
+        >
+          {inPhotos ? 'ðŸ’¬' : 'ðŸ–¼'}
+        </button>
+      </header>
 
-          <div className="thread-explorer">
-            <div className="thread-explorer-toolbar">
-              <span>{pathLabel}{uploadSession?.active && uploadSession.completed + uploadSession.failed < uploadSession.total ? ' · Uploading…' : ''}</span>
-              <span>Tap photo to open · Swipe in viewer</span>
+      <div className="thread-phone-body">
+        {inPhotos ? (
+          <div className="thread-photos">
+            {swipePhotos.length ? (
+              <div className="thread-photo-film">
+                {swipePhotos.map((image) => (
+                  <button key={image.id} type="button" className="thread-photo-card" onClick={() => openPhotoAt(image.id)}>
+                    {isVideoMedia(image) ? (
+                      // eslint-disable-next-line jsx-a11y/media-has-caption
+                      <video src={image.imageUrl} muted playsInline preload="metadata" />
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={image.imageUrl} alt={image.caption || ''} />
+                    )}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <div className="thread-photos-toolbar">
+              <span>
+                <button type="button" onClick={() => goToPathIndex(0)}>Home</button>
+                {folderPath.map((folder, index) => (
+                  <span key={folder.id}>
+                    {' / '}
+                    <button type="button" onClick={() => goToPathIndex(index + 1)}>{folder.name}</button>
+                  </span>
+                ))}
+              </span>
+              <span>{pathLabel}{uploadSession?.active && uploadSession.completed + uploadSession.failed < uploadSession.total ? ' Â· Uploadingâ€¦' : ''}</span>
             </div>
             <div
               className="thread-explorer-body"
@@ -606,15 +703,13 @@ export default function ThreadWorkspaceModule({
                 currentFolders.length ? (
                   <div className="thread-explorer-grid">
                     {currentFolders.map((folder) => {
-                      const childCount = (folderTree.get(folder.id) || []).length;
-                      const mediaCount = (folder.items || []).filter((item) => item.imageId).length;
                       const coverId = (folder.items || []).find((item) => item.imageId)?.imageId;
                       const cover = coverId ? imageById[coverId] : null;
                       return (
                         <button
                           key={folder.id}
                           type="button"
-                          className={`thread-explorer-item${selectedFolderId === folder.id ? ' is-selected' : ''}`}
+                          className="thread-explorer-item"
                           onClick={() => openFolder(folder)}
                           onContextMenu={(event) => openContextMenu(event, { target: 'folder', folder })}
                         >
@@ -626,44 +721,31 @@ export default function ThreadWorkspaceModule({
                               threadEmoji(folder.name)
                             )}
                           </div>
-                          <div className="thread-explorer-label">{folder.name}</div>
-                          <div className="thread-explorer-label" style={{ color: '#64748b', fontWeight: 600 }}>
-                            {mediaCount} files{childCount ? ` · ${childCount} folders` : ''}
-                          </div>
                         </button>
                       );
                     })}
                   </div>
                 ) : (
                   <div className="thread-explorer-empty">
-                    <div style={{ fontSize: 32 }}>📁</div>
-                    <div>No folders yet.</div>
-                    <div>Right-click here to create a folder.</div>
+                    <div style={{ fontSize: 32 }}>ðŸ“</div>
+                    <div>No albums yet. Long-press to create a folder.</div>
                   </div>
                 )
               ) : (
                 <>
                   {(currentFolders.length || currentMedia.length) ? (
                     <div className="thread-explorer-grid">
-                      {currentFolders.map((folder) => {
-                        const childCount = (folderTree.get(folder.id) || []).length;
-                        const mediaCount = (folder.items || []).filter((item) => item.imageId).length;
-                        return (
-                          <button
-                            key={folder.id}
-                            type="button"
-                            className={`thread-explorer-item${selectedFolderId === folder.id ? ' is-selected' : ''}`}
-                            onClick={() => openFolder(folder)}
-                            onContextMenu={(event) => openContextMenu(event, { target: 'folder', folder })}
-                          >
-                            <div className="thread-explorer-icon">{threadEmoji(folder.name)}</div>
-                            <div className="thread-explorer-label">{folder.name}</div>
-                            <div className="thread-explorer-label" style={{ color: '#64748b', fontWeight: 600 }}>
-                              {mediaCount} files{childCount ? ` · ${childCount} folders` : ''}
-                            </div>
-                          </button>
-                        );
-                      })}
+                      {currentFolders.map((folder) => (
+                        <button
+                          key={folder.id}
+                          type="button"
+                          className="thread-explorer-item"
+                          onClick={() => openFolder(folder)}
+                          onContextMenu={(event) => openContextMenu(event, { target: 'folder', folder })}
+                        >
+                          <div className="thread-explorer-icon">{threadEmoji(folder.name)}</div>
+                        </button>
+                      ))}
                       {currentMedia.map((image) => (
                         <button
                           key={image.id}
@@ -680,7 +762,6 @@ export default function ThreadWorkspaceModule({
                               <img src={image.imageUrl} alt={image.caption || ''} />
                             )}
                           </div>
-                          <div className="thread-explorer-label">{image.caption?.trim() || (isVideoMedia(image) ? 'Video' : 'Photo')}</div>
                         </button>
                       ))}
                     </div>
@@ -688,7 +769,6 @@ export default function ThreadWorkspaceModule({
                     <div className="thread-explorer-empty">
                       <div style={{ fontSize: 32 }}>{threadEmoji(currentFolder.name)}</div>
                       <div>{currentFolder.name} is empty.</div>
-                      <div>Right-click to upload photos/videos or create a subfolder.</div>
                     </div>
                   )}
                 </>
@@ -702,7 +782,6 @@ export default function ThreadWorkspaceModule({
                     void submitNewFolder(pendingFolderName, creatingFolder.parentId);
                   }}
                 >
-                  <span style={{ fontSize: 12, color: '#94a3b8' }}>{creatingFolder.label}:</span>
                   <input
                     autoFocus
                     value={pendingFolderName}
@@ -710,101 +789,109 @@ export default function ThreadWorkspaceModule({
                     placeholder="Folder name"
                   />
                   <button type="submit">Create</button>
-                  <button
-                    type="button"
-                    className="thread-workspace-back"
-                    onClick={() => { setCreatingFolder(null); setPendingFolderName(''); }}
-                  >
-                    Cancel
-                  </button>
                 </form>
               ) : null}
             </div>
           </div>
-
-          <ExplorerContextMenu
-            menu={menu}
-            onClose={() => setMenu(null)}
-            onAction={handleMenuAction}
-          />
-
-          <ThreadUploadProgress
-            session={uploadSession}
-            onDismiss={() => setUploadSession(null)}
-          />
-
-          {commentError ? <div className="thread-comment-error">{commentError}</div> : null}
-
-          {lightboxIndex != null && currentMedia.length ? (
-            <ChatMediaLightbox
+        ) : (
+          <div className="thread-chat-shell">
+            <ThreadInlineChat
+              groupId={thread.id}
+              groupName={thread.name}
+              username={username}
+              userId={userId}
+              avatar={avatar}
               theme={theme}
-              items={currentMedia}
-              startIndex={lightboxIndex}
-              onClose={() => setLightboxIndex(null)}
-              onDownload={(item) => {
-                if (item?.imageUrl) window.open(item.imageUrl, '_blank', 'noopener,noreferrer');
-              }}
-              commentDrafts={commentDrafts}
-              onCommentDraftChange={(imageId, value) => {
-                setCommentDrafts((previous) => ({ ...previous, [imageId]: value }));
-              }}
-              onPostComment={handlePostComment}
-              canComment={canComment}
-              postingComment={postingComment}
+              embedded
             />
+          </div>
+        )}
+      </div>
+
+      {wallpaperOpen ? (
+        <div className="thread-wallpaper-sheet">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <strong>Chat wallpaper</strong>
+            <button type="button" className="thread-phone-back" onClick={() => setWallpaperOpen(false)}>Done</button>
+          </div>
+          <div className="thread-wallpaper-grid">
+            {THREAD_WALLPAPERS.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                className={`thread-wallpaper-tile${thread.wallpaperUrl === preset.id ? ' is-active' : ''}`}
+                style={{ background: preset.css }}
+                disabled={savingWallpaper}
+                onClick={() => void applyWallpaper(preset.id)}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+          {wallpaperPhotos.length ? (
+            <>
+              <div style={{ fontSize: 12, fontWeight: 800, color: '#94a3b8' }}>From this thread</div>
+              <div className="thread-wallpaper-grid">
+                {wallpaperPhotos.map((image) => (
+                  <button
+                    key={image.id}
+                    type="button"
+                    className={`thread-wallpaper-tile${thread.wallpaperUrl === image.imageUrl ? ' is-active' : ''}`}
+                    style={{
+                      backgroundImage: `url("${image.imageUrl}")`,
+                      backgroundSize: 'cover',
+                      backgroundPosition: 'center',
+                    }}
+                    disabled={savingWallpaper}
+                    onClick={() => void applyWallpaper(image.imageUrl)}
+                  />
+                ))}
+              </div>
+            </>
           ) : null}
-        </>
+          <button
+            type="button"
+            className="thread-phone-back"
+            disabled={savingWallpaper}
+            onClick={() => void applyWallpaper('')}
+          >
+            Use default
+          </button>
+        </div>
       ) : null}
 
-      {inChat && typeof document !== 'undefined'
-        ? createPortal(
-          <div className="thread-chat-overlay" role="dialog" aria-modal="true" aria-label={`${thread.name} chat`}>
-            <div className="thread-chat-overlay-head">
-              <div className="thread-workspace-toprow">
-                <button
-                  type="button"
-                  className="thread-workspace-back"
-                  onClick={() => onBack?.()}
-                >
-                  ← All threads
-                </button>
-                <div className="thread-mode-switch" role="tablist" aria-label="Thread mode">
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={false}
-                    className="thread-mode-btn"
-                    onClick={() => setThreadMode('photos')}
-                  >
-                    Photos
-                  </button>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected
-                    className="thread-mode-btn is-active"
-                  >
-                    Chat
-                  </button>
-                </div>
-              </div>
-              <div className="thread-workspace-title">{thread.name}</div>
-            </div>
-            <div className="thread-chat-shell">
-              <ThreadInlineChat
-                groupId={thread.id}
-                groupName={thread.name}
-                username={username}
-                userId={userId}
-                avatar={avatar}
-                theme={theme}
-                embedded
-              />
-            </div>
-          </div>,
-          document.body,
-        )
-        : null}
-    </div>
+      <ExplorerContextMenu
+        menu={menu}
+        onClose={() => setMenu(null)}
+        onAction={handleMenuAction}
+      />
+
+      <ThreadUploadProgress
+        session={uploadSession}
+        onDismiss={() => setUploadSession(null)}
+      />
+
+      {commentError ? <div className="thread-comment-error">{commentError}</div> : null}
+
+      {lightboxIndex != null && swipePhotos.length ? (
+        <ChatMediaLightbox
+          theme={theme}
+          items={swipePhotos}
+          startIndex={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+          onDownload={(item) => {
+            if (item?.imageUrl) window.open(item.imageUrl, '_blank', 'noopener,noreferrer');
+          }}
+          commentDrafts={commentDrafts}
+          onCommentDraftChange={(imageId, value) => {
+            setCommentDrafts((previous) => ({ ...previous, [imageId]: value }));
+          }}
+          onPostComment={handlePostComment}
+          canComment={canComment}
+          postingComment={postingComment}
+        />
+      ) : null}
+    </div>,
+    document.body,
   );
 }

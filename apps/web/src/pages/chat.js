@@ -7,6 +7,7 @@ import { MobileBottomNav } from '../lib/MobileNav';
 import { subscribeToWebPush } from '../lib/webPush';
 import { CallParticipantStrip, VideoCallPanel } from '../lib/VideoCallPanel';
 import { useTheme } from '../lib/ThemePicker';
+import { THREAD_WALLPAPERS, resolveThreadWallpaper } from '../lib/threadWallpapers';
 
 function resolveChatSocketClient() {
   const sharedOptions = {
@@ -493,14 +494,15 @@ function createStyles(theme) {
       flexShrink: 0,
     },
     hamburger: {
-      width: '30px',
-      height: '30px',
-      borderRadius: '10px',
+      width: '40px',
+      height: '40px',
+      borderRadius: '12px',
       border: `1px solid ${theme.cardBorder}`,
       background: theme.cardBg,
       color: theme.textPrimary,
       cursor: 'pointer',
-      fontSize: '14px',
+      fontSize: '18px',
+      fontWeight: 800,
       display: 'grid',
       placeItems: 'center',
       flexShrink: 0,
@@ -1831,6 +1833,19 @@ export default function ChatPage() {
     return payload;
   }
 
+  async function handleUpdateWallpaper(wallpaperUrl) {
+    if (!selectedGroup || !user?.username) return;
+    try {
+      await submitJson(`/groups/${selectedGroup.id}/wallpaper`, 'PUT', {
+        actorUsername: user.username,
+        wallpaperUrl: wallpaperUrl || '',
+      });
+      reportStatus('Wallpaper updated.');
+    } catch (error) {
+      reportError(error.message || 'Could not update wallpaper.');
+    }
+  }
+
   async function handleBuddyRequest(targetUsername) {
     if (!String(targetUsername || '').trim() || !user?.username) return;
     try {
@@ -2859,8 +2874,45 @@ export default function ChatPage() {
   }
 
   function renderSettingsPanel() {
-    return isGroupOwner ? (
+    const wallpaperBlock = canInviteToGroup ? (
+      <div style={styles.formRow}>
+        <p style={styles.label}>Chat wallpaper</p>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '8px' }}>
+          {THREAD_WALLPAPERS.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              onClick={() => void handleUpdateWallpaper(preset.id)}
+              style={{
+                border: selectedGroup?.wallpaperUrl === preset.id ? `2px solid ${theme.blue}` : `1px solid ${theme.cardBorder}`,
+                borderRadius: '12px',
+                height: '56px',
+                background: preset.css,
+                color: '#fff',
+                fontSize: '11px',
+                fontWeight: 800,
+                cursor: 'pointer',
+                textAlign: 'left',
+                padding: '8px',
+              }}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+        <button type="button" style={{ ...styles.btn, ...styles.btnSecondary, marginTop: '8px' }} onClick={() => void handleUpdateWallpaper('')}>
+          Use default
+        </button>
+      </div>
+    ) : null;
+
+    if (!isGroupOwner) {
+      return wallpaperBlock || <p style={styles.helperText}>Only the group owner can manage settings.</p>;
+    }
+
+    return (
       <>
+        {wallpaperBlock}
         <form style={styles.formRow} onSubmit={handleSaveGroupSettings}>
           <p style={styles.label}>Group Settings</p>
           <label style={styles.helperText}>
@@ -2904,7 +2956,7 @@ export default function ChatPage() {
           <button type="submit" style={{ ...styles.btn, ...styles.btnSecondary }}>Update Member</button>
         </form>
       </>
-    ) : <p style={styles.helperText}>Only the group owner can manage settings.</p>;
+    );
   }
 
   // ── render ──────────────────────────────────────────────────────────────
@@ -3053,7 +3105,7 @@ export default function ChatPage() {
         <div className={`chat-top-shell${activeChat ? ' chat-top-shell--thread' : ''}`}>
           <div style={styles.topBar} className="chat-top-bar">
             {activeChat ? (
-              <button type="button" className="chat-back-btn" style={styles.hamburger} onClick={leaveActiveThread} aria-label="Back to threads">←</button>
+              <button type="button" className="chat-back-btn" style={{ ...styles.hamburger, width: 'auto', minWidth: 84, padding: '0 12px', fontSize: 13 }} onClick={leaveActiveThread} aria-label="Back to threads">← Back</button>
             ) : (
               <button type="button" className="hamburger-btn" style={styles.hamburger} onClick={() => setShowSidebar(true)}>☰</button>
             )}
@@ -3093,6 +3145,9 @@ export default function ChatPage() {
                   {showMobileInviteTool ? (
                     <button type="button" title="Invite" className="chat-mobile-tool" onClick={() => openInviteModal()}>🔗</button>
                   ) : null}
+                  {canInviteToGroup ? (
+                    <button type="button" title="Wallpaper" className="chat-mobile-tool" onClick={() => setActivePanelTab(activePanelTab === 'settings' ? '' : 'settings')}>🎨</button>
+                  ) : null}
                   <button type="button" title="Video call" className="chat-mobile-tool chat-mobile-tool--call" onClick={() => handleJoinCall(threadCallUrl)}>📞</button>
                 </div>
               ) : null}
@@ -3122,7 +3177,7 @@ export default function ChatPage() {
                   <button type="button" title="Albums" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(activePanelTab === 'albums' ? styles.iconBtnActive : {}) }} onClick={() => openThreadPanel(activePanelTab === 'albums' ? '' : 'albums')}>📸</button>
                   <button type="button" title="Bookmarks" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(activePanelTab === 'bookmarks' ? styles.iconBtnActive : {}) }} onClick={() => openThreadPanel(activePanelTab === 'bookmarks' ? '' : 'bookmarks')}>🔖</button>
                   <button type="button" title="Invite" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(showInviteModal ? styles.iconBtnActive : {}) }} onClick={() => (showInviteModal ? closeInviteModal() : openInviteModal())}>🔗</button>
-                  {isGroupOwner && <button type="button" title="Settings" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(activePanelTab === 'settings' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'settings' ? '' : 'settings')}>⚙️</button>}
+                  {(isGroupOwner || canInviteToGroup) && <button type="button" title="Settings" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(activePanelTab === 'settings' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'settings' ? '' : 'settings')}>⚙️</button>}
                 </>
               )}
             </div>
@@ -3239,7 +3294,10 @@ export default function ChatPage() {
           {!showVideoCall && !showChatHub && !mobilePanelOpen && (!isAlbumsPanelOpen || !isNarrowScreen) ? (
           <>
           {renderThreadBrowseStrip()}
-          <div ref={messagesContainerRef} className={`chat-messages${activeChat ? ' chat-messages--thread' : ''}`} style={styles.messages}>
+          <div ref={messagesContainerRef} className={`chat-messages${activeChat ? ' chat-messages--thread' : ''}`} style={{
+            ...styles.messages,
+            ...(activeChat?.type === 'group' && selectedGroup ? resolveThreadWallpaper(selectedGroup) : {}),
+          }}>
             {visibleMessages.length ? visibleMessages.map((message) => {
               const isOwn = message.user === user?.username;
               const parsed = parseReplyEnvelope(message.text || message.gif || '');
@@ -3356,7 +3414,7 @@ export default function ChatPage() {
                 { id: 'invite', icon: '🔗', label: 'Invite' },
                 { id: 'members', icon: '👥', label: 'People' },
                 { id: 'bookmarks', icon: '🔖', label: 'Saved' },
-                ...(isGroupOwner ? [{ id: 'settings', icon: '⚙️', label: 'Admin' }] : []),
+                ...(isGroupOwner || canInviteToGroup ? [{ id: 'settings', icon: '🎨', label: 'Look' }] : []),
               ].map((item) => {
                 const isAlbums = item.id === 'albums' && isAlbumsPanelOpen;
                 const isActive = item.id === '' ? !activePanelTab && !showInviteModal : (item.id === 'albums' ? isAlbums : item.id === 'invite' ? showInviteModal : activePanelTab === item.id);
@@ -3787,7 +3845,9 @@ export default function ChatPage() {
           .chat-messages--thread {
             padding: 10px 10px 6px !important;
             gap: 8px !important;
-            background: ${theme.pageBg};
+            background-size: cover !important;
+            background-position: center !important;
+            background-repeat: no-repeat !important;
           }
           .chat-messages--thread .msg-row-own,
           .chat-messages--thread .msg-row-other {

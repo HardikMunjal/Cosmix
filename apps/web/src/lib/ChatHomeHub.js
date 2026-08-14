@@ -180,25 +180,25 @@ export function ChatHomeHub({
             ${theme.pageBg};
         }
         .chat-hub-hero {
-          border-radius: 22px;
-          padding: 18px 16px;
+          border-radius: 16px;
+          padding: 12px 14px;
           border: 1px solid ${theme.cardBorder};
           background: linear-gradient(135deg, ${theme.blue}18, ${theme.purple}14);
           display: grid;
-          gap: 10px;
-          margin-bottom: 16px;
+          gap: 6px;
+          margin-bottom: 12px;
         }
         .chat-hub-hero-title {
           margin: 0;
-          font-size: clamp(20px, 4vw, 26px);
+          font-size: 18px;
           font-weight: 900;
           color: ${theme.textHeading};
           line-height: 1.15;
         }
         .chat-hub-hero-text {
           margin: 0;
-          font-size: 13px;
-          line-height: 1.55;
+          font-size: 12px;
+          line-height: 1.45;
           color: ${theme.textSecondary};
         }
         .chat-hub-tabs {
@@ -280,9 +280,9 @@ export function ChatHomeHub({
           min-width: 0;
         }
         .chat-hub-thread-thumb {
-          width: 52px;
-          height: 52px;
-          border-radius: 14px;
+          width: 44px;
+          height: 44px;
+          border-radius: 12px;
           overflow: hidden;
           position: relative;
           flex-shrink: 0;
@@ -442,8 +442,8 @@ export function ChatHomeHub({
             padding: 20px 20px calc(24px + env(safe-area-inset-bottom, 0px));
           }
           .chat-hub-thread-list {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 12px;
+            grid-template-columns: 1fr;
+            gap: 8px;
           }
           .chat-hub-thread-row {
             margin-left: 0 !important;
@@ -456,7 +456,7 @@ export function ChatHomeHub({
         }
         @media (min-width: 1100px) {
           .chat-hub-thread-list {
-            grid-template-columns: repeat(3, minmax(0, 1fr));
+            grid-template-columns: 1fr;
           }
         }
         @media (min-width: 900px) {

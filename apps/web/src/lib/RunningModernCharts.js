@@ -1307,7 +1307,7 @@ export function TopFastestSplits({ title = 'Fastest 1 km splits', rows = [], the
   if (!list.length) {
     return (
       <div style={{ padding: 14, borderRadius: 16, border: `1px solid ${theme.cardBorder}`, color: theme.textMuted, fontSize: 12 }}>
-        {title}: sync GPS runs to fill 1 km splits.
+        {title}: no stored 1 km splits yet. After GPS sync, each run’s fastest kilometre ranks here.
       </div>
     );
   }
@@ -1417,6 +1417,143 @@ export function TopFastestSplits({ title = 'Fastest 1 km splits', rows = [], the
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+export function SplitRankBars({ title = 'Fastest 1 km ranking', rows = [], theme, limit = 10 }) {
+  const list = (rows || []).slice(0, limit);
+  const cardStyle = {
+    padding: 14,
+    borderRadius: 18,
+    background: theme.cardBg,
+    border: `1px solid ${theme.cardBorder}`,
+    boxShadow: theme.chartDepth,
+    display: 'grid',
+    gap: 10,
+    minWidth: 0,
+  };
+  if (!list.length) {
+    return (
+      <div style={cardStyle}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>{title}</div>
+        <div style={{ fontSize: 12, color: theme.textMuted }}>Stored GPS splits will rank here after sync.</div>
+      </div>
+    );
+  }
+  const speeds = list.map((row) => Number(row.splitSpeedKmh || (row.splitPace > 0 ? 60 / row.splitPace : 0)));
+  const maxSpeed = Math.max(...speeds, 0.01);
+  const fmtPace = (minPerKm, seconds) => {
+    const sec = Number(seconds);
+    if (Number.isFinite(sec) && sec > 0) {
+      return `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}`;
+    }
+    const n = Number(minPerKm);
+    if (!(n > 0)) return '--';
+    return `${Math.floor(n)}:${String(Math.round((n - Math.floor(n)) * 60)).padStart(2, '0')}`;
+  };
+
+  return (
+    <div style={cardStyle}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading, letterSpacing: '0.04em', textTransform: 'uppercase' }}>{title}</div>
+      <div style={{ fontSize: 11, color: theme.textMuted }}>Bar length is split speed. #1 is your fastest stored kilometre.</div>
+      <div style={{ display: 'grid', gap: 8 }}>
+        {list.map((row, index) => {
+          const speed = speeds[index];
+          const width = Math.max(8, (speed / maxSpeed) * 100);
+          return (
+            <div key={row.id || `${row.date}-${row.splitKm}-${index}`} style={{ display: 'grid', gridTemplateColumns: '28px 1fr 72px', gap: 8, alignItems: 'center' }}>
+              <span style={{ fontSize: 12, fontWeight: 800, color: index === 0 ? CHART_SOFT.green : theme.textMuted }}>#{index + 1}</span>
+              <div>
+                <div style={{ height: 10, borderRadius: 99, background: theme.cardBorder, overflow: 'hidden' }}>
+                  <div style={{ width: `${width}%`, height: '100%', background: index === 0 ? CHART_SOFT.green : CHART_SOFT.cyan, borderRadius: 99 }} />
+                </div>
+                <div style={{ fontSize: 10, color: theme.textMuted, marginTop: 3 }}>
+                  {row.date ? String(row.date).slice(0, 10) : ''}
+                  {row.splitKm ? ` · Km ${row.splitKm}` : ''}
+                  {speed ? ` · ${speed.toFixed(1)} km/h` : ''}
+                </div>
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading, textAlign: 'right' }}>
+                {fmtPace(row.splitPace, row.splitSeconds)}
+                <span style={{ fontSize: 10, color: theme.textMuted, fontWeight: 700 }}>/km</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Last activity: km-wise heart rate + speed. */
+export function KmHrSpeedChart({
+  title = 'Last walk · km splits',
+  subtitle = '',
+  splits = [],
+  theme,
+}) {
+  const rows = (splits || []).filter((row) => Number(row.km) > 0 && (Number(row.hr) > 0 || Number(row.speed) > 0));
+  const cardStyle = {
+    padding: 14,
+    borderRadius: 18,
+    background: theme.cardBg,
+    border: `1px solid ${theme.cardBorder}`,
+    boxShadow: theme.chartDepth,
+    display: 'grid',
+    gap: 8,
+    minWidth: 0,
+  };
+  if (rows.length < 1) {
+    return (
+      <div style={cardStyle}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>{title}</div>
+        {subtitle ? <div style={{ fontSize: 11, color: theme.textMuted }}>{subtitle}</div> : null}
+        <div style={{ fontSize: 12, color: theme.textMuted }}>Need GPS splits for this walk.</div>
+      </div>
+    );
+  }
+
+  const w = 360;
+  const h = 148;
+  const pad = { t: 14, r: 36, b: 24, l: 32 };
+  const plotW = w - pad.l - pad.r;
+  const plotH = h - pad.t - pad.b;
+  const hrs = rows.map((r) => Number(r.hr) || 0).filter((v) => v > 0);
+  const speeds = rows.map((r) => Number(r.speed) || 0).filter((v) => v > 0);
+  const hrMin = hrs.length ? Math.min(...hrs) - 4 : 80;
+  const hrMax = hrs.length ? Math.max(...hrs) + 4 : 140;
+  const spMin = speeds.length ? Math.max(0, Math.min(...speeds) - 0.4) : 0;
+  const spMax = speeds.length ? Math.max(...speeds) + 0.4 : 8;
+  const xFor = (i) => pad.l + (rows.length === 1 ? plotW / 2 : (i / (rows.length - 1)) * plotW);
+  const yHr = (v) => pad.t + plotH - ((Number(v) - hrMin) / Math.max(0.001, hrMax - hrMin)) * plotH;
+  const ySp = (v) => pad.t + plotH - ((Number(v) - spMin) / Math.max(0.001, spMax - spMin)) * plotH;
+  const hrCoords = rows.map((r, i) => (Number(r.hr) > 0 ? { x: xFor(i), y: yHr(r.hr) } : null)).filter(Boolean);
+  const spCoords = rows.map((r, i) => (Number(r.speed) > 0 ? { x: xFor(i), y: ySp(r.speed) } : null)).filter(Boolean);
+  const pathFor = (coords) => coords.map((c, i) => `${i === 0 ? 'M' : 'L'}${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' ');
+
+  return (
+    <div style={cardStyle}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: theme.textHeading }}>{title}</div>
+      {subtitle ? <div style={{ fontSize: 11, color: theme.textMuted, lineHeight: 1.4 }}>{subtitle}</div> : null}
+      <svg viewBox={`0 0 ${w} ${h}`} width="100%" height="168" role="img" aria-label={title}>
+        <line x1={pad.l} y1={pad.t} x2={pad.l} y2={pad.t + plotH} stroke={CHART_SOFT.hr} strokeWidth="1.4" opacity="0.7" />
+        <line x1={pad.l + plotW} y1={pad.t} x2={pad.l + plotW} y2={pad.t + plotH} stroke={CHART_SOFT.cyan} strokeWidth="1.4" opacity="0.7" />
+        <line x1={pad.l} y1={pad.t + plotH} x2={pad.l + plotW} y2={pad.t + plotH} stroke={theme.cardBorder} strokeWidth="1" />
+        {hrCoords.length > 1 ? <path d={pathFor(hrCoords)} fill="none" stroke={CHART_SOFT.hr} strokeWidth="2.4" strokeLinejoin="round" /> : null}
+        {spCoords.length > 1 ? <path d={pathFor(spCoords)} fill="none" stroke={CHART_SOFT.cyan} strokeWidth="2.4" strokeLinejoin="round" /> : null}
+        {hrCoords.map((c, i) => <circle key={`hr-${i}`} cx={c.x} cy={c.y} r="3.2" fill={CHART_SOFT.hr} />)}
+        {spCoords.map((c, i) => <circle key={`sp-${i}`} cx={c.x} cy={c.y} r="3.2" fill={CHART_SOFT.cyan} />)}
+        {rows.map((row, i) => (
+          <text key={`km-${row.km}`} x={xFor(i)} y={h - 6} textAnchor="middle" fontSize="9" fill={theme.textMuted}>{`Km ${row.km}`}</text>
+        ))}
+        <text x={4} y={pad.t + 4} fontSize="9" fill={CHART_SOFT.hr}>bpm</text>
+        <text x={w - 4} y={pad.t + 4} fontSize="9" fill={CHART_SOFT.cyan} textAnchor="end">km/h</text>
+      </svg>
+      <div style={{ display: 'flex', gap: 14, fontSize: 11, fontWeight: 700 }}>
+        <span style={{ color: CHART_SOFT.hr }}>● Heart rate</span>
+        <span style={{ color: CHART_SOFT.cyan }}>● Speed</span>
       </div>
     </div>
   );

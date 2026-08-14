@@ -1000,6 +1000,8 @@ export class StravaService {
         const summary = payload.summary || {};
         const date = String(summary.date || '').slice(0, 10);
         if (date && date < cutoff) continue;
+        const kind = String(summary.type || summary.sport_type || '').toLowerCase();
+        if (kind === 'walk' || kind === 'hike' || kind === 'yoga') continue;
         const bestSplit = summary.bestSplitPaceMinPerKm
           ? {
               bestSplitPaceMinPerKm: Number(summary.bestSplitPaceMinPerKm),
@@ -1056,6 +1058,9 @@ export class StravaService {
       );
       for (const row of result?.rows || []) {
         const payload = row.payload || {};
+        const summary = payload.summary || {};
+        const kind = String(summary.type || summary.sport_type || '').toLowerCase();
+        if (kind === 'walk' || kind === 'hike' || kind === 'yoga') continue;
         const polyline = this.simplifyPolyline(
           Array.isArray(payload.polyline) && payload.polyline.length
             ? payload.polyline
@@ -1886,6 +1891,7 @@ export class StravaService {
         maxHeartRate: null,
         bestSplitPaceMinPerKm: null,
         bestSplitRun: null,
+        fastestSplits: [],
         recentRuns: [],
         fastestRuns: [],
         paceByMinuteBuckets: [],
@@ -1909,6 +1915,28 @@ export class StravaService {
     const bestSplitRun = [...runs]
       .filter((run) => Number(run.bestSplitPaceMinPerKm || 0) > 0)
       .sort((a, b) => Number(a.bestSplitPaceMinPerKm) - Number(b.bestSplitPaceMinPerKm))[0] || null;
+    const fastestSplits = [...runs]
+      .filter((run) => {
+        const pace = Number(run.bestSplitPaceMinPerKm || 0);
+        return pace > 1.5 && pace < 20;
+      })
+      .sort((a, b) => Number(a.bestSplitPaceMinPerKm) - Number(b.bestSplitPaceMinPerKm))
+      .slice(0, 20)
+      .map((run, index) => ({
+        rank: index + 1,
+        id: run.id || run.stravaId,
+        stravaId: run.stravaId || run.id,
+        name: run.name || 'Run',
+        date: run.date,
+        distanceKm: Number(run.distanceKm || 0),
+        bestSplitPaceMinPerKm: Number(run.bestSplitPaceMinPerKm),
+        bestSplitKm: Number(run.bestSplitKm || 0) || null,
+        bestSplitSeconds: Number(run.bestSplitSeconds || 0) || null,
+        bestSplitAvgHeartrate: Number(run.bestSplitAvgHeartrate || 0) || null,
+        splitSpeedKmh: round(60 / Number(run.bestSplitPaceMinPerKm), 2),
+        shoeId: run.shoeId || '',
+        avgHeartrate: Number(run.avgHeartrate || 0) || null,
+      }));
     const elevationGainM = round(runs.reduce((sum, run) => sum + (run.elevationGainM || 0), 0), 1);
     const hrRuns = runs.filter((run) => Number(run.avgHeartrate || 0) > 0);
     const avgHeartRate = hrRuns.length
@@ -2027,6 +2055,7 @@ export class StravaService {
       maxHeartRate,
       bestSplitPaceMinPerKm: bestSplitRun?.bestSplitPaceMinPerKm || null,
       bestSplitRun,
+      fastestSplits,
       recentRuns: runs.slice(0, 12),
       fastestRuns,
       paceByMinuteBuckets,
