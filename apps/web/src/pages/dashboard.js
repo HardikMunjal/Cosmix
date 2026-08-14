@@ -2087,19 +2087,33 @@ export default function Dashboard() {
       setServerNotifications((current) => current.filter((n) => n.id !== item.id));
     }
     setShowNotifications(false);
+
+    const rawUrl = String(item?.url || '').trim();
     const groupId = String(item?.groupId || '').trim();
-    if (groupId) {
-      setSelectedThreadId(groupId);
-      setActiveTab('threads');
-      if (router.isReady) {
-        router.push(
-          { pathname: '/dashboard', query: { tab: 'threads', thread: groupId } },
-          undefined,
-          { shallow: true },
-        );
-      }
+    const sender = String(item?.senderUsername || '').trim();
+    const isChatMessage = item?.type === 'chat_message' || item?.kind === 'chat';
+
+    if (rawUrl.startsWith('/chat')) {
+      router.push(rawUrl);
       return;
     }
+
+    if (isChatMessage || groupId || sender) {
+      if (groupId) {
+        router.push({ pathname: '/chat', query: { thread: groupId } });
+        return;
+      }
+      if (sender) {
+        router.push({ pathname: '/chat', query: { dm: sender } });
+        return;
+      }
+    }
+
+    if (item?.type === 'friend_request') {
+      router.push({ pathname: '/chat', query: { tab: 'friends' } });
+      return;
+    }
+
     router.push('/chat');
   }, [notificationsApiBase, router, user]);
 
@@ -2410,6 +2424,8 @@ export default function Dashboard() {
         description: item.description,
         postId: item.postId,
         groupId: item.groupId || null,
+        senderUsername: item.senderUsername || null,
+        url: item.url || null,
         linkTab: item.linkTab,
         createdAt: item.createdAt,
         viewed: Boolean(item.viewed),

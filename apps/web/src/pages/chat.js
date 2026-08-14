@@ -1071,6 +1071,7 @@ export default function ChatPage() {
   const userRef = useRef(null);
   const urlHydratedRef = useRef(false);
   const skipUrlSyncRef = useRef(false);
+  const appliedChatQueryRef = useRef('');
 
   const chatApiBase = '/chat-api/chat';
 
@@ -1520,13 +1521,21 @@ export default function ChatPage() {
   }, [user?.username]);
 
   useEffect(() => {
-    if (!router.isReady || !bootstrapReady || !user?.username || urlHydratedRef.current) return;
+    if (!router.isReady || !bootstrapReady || !user?.username) return;
 
-    skipUrlSyncRef.current = true;
     const threadId = typeof router.query.thread === 'string' ? router.query.thread.trim() : '';
     const dmUser = typeof router.query.dm === 'string' ? router.query.dm.trim() : '';
     const view = typeof router.query.view === 'string' ? router.query.view.trim() : '';
     const tab = typeof router.query.tab === 'string' ? router.query.tab.trim() : '';
+    const queryKey = `${threadId}|${dmUser}|${view}|${tab}`;
+    if (appliedChatQueryRef.current === queryKey) return;
+    if (skipUrlSyncRef.current && urlHydratedRef.current) {
+      appliedChatQueryRef.current = queryKey;
+      return;
+    }
+
+    skipUrlSyncRef.current = true;
+    appliedChatQueryRef.current = queryKey;
 
     if (tab === 'friends') setHubTab('friends');
 
@@ -1536,24 +1545,25 @@ export default function ChatPage() {
         const nextChat = { type: 'group', id: group.id, name: group.name, label: group.name };
         activeChatRef.current = nextChat;
         setActiveChat(nextChat);
-        if (view === 'invite') setShowInviteModal(true);
-        else if (view) setActivePanelTab(view);
+        setShowInviteModal(view === 'invite');
+        setActivePanelTab(view && view !== 'invite' ? view : '');
       }
     } else if (dmUser) {
       const friend = bootstrap.friends.find((entry) => normalizeUsername(entry) === normalizeUsername(dmUser));
-      if (friend) {
-        const nextChat = {
-          type: 'dm',
-          id: buildDmId(user.username, friend),
-          name: friend,
-          label: friend,
-        };
-        activeChatRef.current = nextChat;
-        setActiveChat(nextChat);
-      }
-    } else if (view === 'create') {
+      const peer = friend || dmUser;
+      const nextChat = {
+        type: 'dm',
+        id: buildDmId(user.username, peer),
+        name: peer,
+        label: peer,
+      };
+      activeChatRef.current = nextChat;
+      setActiveChat(nextChat);
+      setActivePanelTab('');
+      setShowInviteModal(false);
+    } else if (!urlHydratedRef.current && view === 'create') {
       setShowCreateThreadModal(true);
-    } else if (view === 'join') {
+    } else if (!urlHydratedRef.current && view === 'join') {
       setShowJoinThreadModal(true);
     }
 

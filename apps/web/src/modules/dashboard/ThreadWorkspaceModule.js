@@ -75,7 +75,7 @@ export default function ThreadWorkspaceModule({
   onUploadToFolder,
   onRefresh,
 }) {
-  const [threadMode, setThreadMode] = useState('photos'); // photos | chat
+  const [threadMode, setThreadMode] = useState('chat'); // chat | photos
   const [folderPath, setFolderPath] = useState([]);
   const [selectedFolderId, setSelectedFolderId] = useState('');
   const [menu, setMenu] = useState(null);
@@ -97,7 +97,7 @@ export default function ThreadWorkspaceModule({
     setLightboxIndex(null);
     setCommentDrafts({});
     setCommentError('');
-    setThreadMode('photos');
+    setThreadMode('chat');
   }, [thread?.id]);
 
   const folderTree = useMemo(() => buildFolderTree(thread?.folders || []), [thread?.folders]);

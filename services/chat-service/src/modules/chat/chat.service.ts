@@ -1653,7 +1653,7 @@ export class ChatService {
                     ? `${sender} sent a GIF`
                     : `${sender}: ${String(chatMessage.text || 'New message').slice(0, 140)}`;
             const title = `New message in ${chatMessage.chat.name}`;
-            const url = `/dashboard?tab=threads&thread=${encodeURIComponent(groupId)}`;
+            const url = `/chat?thread=${encodeURIComponent(groupId)}`;
             await this.createInboxNotifications(recipients, {
                 groupId,
                 groupName: chatMessage.chat.name,
@@ -1700,7 +1700,7 @@ export class ChatService {
                         payload.senderUsername || null,
                         payload.title,
                         payload.body,
-                        payload.url || '/dashboard?tab=threads',
+                        payload.url || '/chat',
                         now,
                     ],
                 );
@@ -1734,7 +1734,7 @@ export class ChatService {
                 groupName: row.group_name,
                 senderUsername: row.sender_username,
                 url: row.url,
-                linkTab: 'threads',
+                linkTab: 'chat',
                 createdAt: row.created_at?.toISOString?.() || String(row.created_at || ''),
                 viewed: Boolean(row.viewed),
             }));
@@ -2885,12 +2885,21 @@ export class ChatService {
             );
             if (chatMessage.chat.type === 'dm') {
                 const dmPeer = this.normalizeUsername(chatMessage.chat.name);
+                const dmUrl = `/chat?dm=${encodeURIComponent(senderUsername)}`;
+                void this.createInboxNotifications([dmPeer], {
+                    senderUsername,
+                    title: `New message from ${senderUsername}`,
+                    body: chatMessage.gif && !chatMessage.text
+                        ? `${senderUsername} sent a GIF`
+                        : String(chatMessage.text || 'Sent you a message.').slice(0, 140),
+                    url: dmUrl,
+                });
                 void this.sendPushToUsers([chatMessage.chat.name], {
                     title: `New message from ${senderUsername}`,
                     body: chatMessage.gif && !chatMessage.text
                         ? `${senderUsername} sent a GIF`
                         : String(chatMessage.text || 'Sent you a message.').slice(0, 140),
-                    url: `/chat?dm=${encodeURIComponent(dmPeer)}`,
+                    url: dmUrl,
                     tag: `dm-${chatMessage.id}`,
                 }, {
                     type: 'dm',
@@ -2905,12 +2914,21 @@ export class ChatService {
         this.messages.push(chatMessage);
         if (chatMessage.chat.type === 'dm') {
             const dmPeer = this.normalizeUsername(chatMessage.chat.name);
+            const dmUrl = `/chat?dm=${encodeURIComponent(senderUsername)}`;
+            void this.createInboxNotifications([dmPeer], {
+                senderUsername,
+                title: `New message from ${senderUsername}`,
+                body: chatMessage.gif && !chatMessage.text
+                    ? `${senderUsername} sent a GIF`
+                    : String(chatMessage.text || 'Sent you a message.').slice(0, 140),
+                url: dmUrl,
+            });
             void this.sendPushToUsers([chatMessage.chat.name], {
                 title: `New message from ${senderUsername}`,
                 body: chatMessage.gif && !chatMessage.text
                     ? `${senderUsername} sent a GIF`
                     : String(chatMessage.text || 'Sent you a message.').slice(0, 140),
-                url: `/chat?dm=${encodeURIComponent(dmPeer)}`,
+                url: dmUrl,
                 tag: `dm-${chatMessage.id}`,
             }, {
                 type: 'dm',
