@@ -6,7 +6,8 @@ import { ChatHomeHub } from '../lib/ChatHomeHub';
 import { MobileBottomNav } from '../lib/MobileNav';
 import { subscribeToWebPush } from '../lib/webPush';
 import { CallParticipantStrip, VideoCallPanel } from '../lib/VideoCallPanel';
-import { useTheme } from '../lib/ThemePicker';
+import { CHAT_THEME } from '../lib/chatTheme';
+import { searchGifs, suggestGifQueries } from '../lib/gifCatalog';
 import { THREAD_WALLPAPERS, resolveThreadWallpaper } from '../lib/threadWallpapers';
 
 function resolveChatSocketClient() {
@@ -548,9 +549,9 @@ function createStyles(theme) {
       fontFamily: theme.font,
     },
     iconBtnActive: {
-      background: theme.blue,
-      color: '#fff',
-      border: `1px solid ${theme.blue}`,
+      background: '#fafafa',
+      color: '#09090b',
+      border: '1px solid #fafafa',
     },
     connDot: {
       width: '8px',
@@ -571,6 +572,7 @@ function createStyles(theme) {
       display: 'flex',
       flexDirection: 'column',
       gap: '4px',
+      background: '#050505',
     },
     msgRow: {
       display: 'flex',
@@ -601,14 +603,14 @@ function createStyles(theme) {
     msgBubbleOwn: {
       padding: '9px 13px',
       borderRadius: '18px 18px 4px 18px',
-      background: `linear-gradient(135deg, ${theme.blue}, ${theme.purple})`,
-      color: '#fff',
+      background: '#fafafa',
+      color: '#09090b',
       wordBreak: 'break-word',
     },
     msgBubbleOther: {
       padding: '9px 13px',
       borderRadius: '18px 18px 18px 4px',
-      background: theme.cardBg,
+      background: '#171717',
       color: theme.textPrimary,
       border: `1px solid ${theme.cardBorder}`,
       wordBreak: 'break-word',
@@ -714,13 +716,28 @@ function createStyles(theme) {
       height: '42px',
       borderRadius: '14px',
       border: 'none',
-      background: `linear-gradient(135deg, ${theme.blue}, ${theme.purple})`,
-      color: '#fff',
+      background: '#fafafa',
+      color: '#09090b',
       cursor: 'pointer',
       fontSize: '18px',
       display: 'grid',
       placeItems: 'center',
       flexShrink: 0,
+    },
+    composerToolBtn: {
+      width: '42px',
+      height: '42px',
+      borderRadius: '14px',
+      border: `1px solid ${theme.cardBorder}`,
+      background: theme.cardBg,
+      color: theme.textHeading,
+      cursor: 'pointer',
+      fontSize: '11px',
+      fontWeight: 800,
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0,
+      fontFamily: theme.font,
     },
     sidePanel: {
       width: '280px',
@@ -988,7 +1005,7 @@ async function readJsonResponse(response) {
 
 export default function ChatPage() {
   const router = useRouter();
-  const { theme } = useTheme();
+  const theme = CHAT_THEME;
   const styles = useMemo(() => createStyles(theme), [theme]);
 
   const [user, setUser] = useState(null);
@@ -998,6 +1015,10 @@ export default function ChatPage() {
   const [onlineUsers, setOnlineUsers] = useState([]);
   const [typingUsers, setTypingUsers] = useState([]);
   const [composerText, setComposerText] = useState('');
+  const [gifOpen, setGifOpen] = useState(false);
+  const [gifQuery, setGifQuery] = useState('');
+  const [gifResults, setGifResults] = useState([]);
+  const [gifLoading, setGifLoading] = useState(false);
   const [buddySearch, setBuddySearch] = useState('');
   const [buddyResults, setBuddyResults] = useState([]);
   const [buddySearchState, setBuddySearchState] = useState('idle');
@@ -1197,6 +1218,25 @@ export default function ChatPage() {
     window.addEventListener('resize', syncViewport);
     return () => window.removeEventListener('resize', syncViewport);
   }, []);
+
+  useEffect(() => {
+    if (!gifOpen) return undefined;
+    let cancelled = false;
+    setGifLoading(true);
+    const handle = window.setTimeout(() => {
+      searchGifs(gifQuery, 96)
+        .then((list) => {
+          if (!cancelled) setGifResults(list);
+        })
+        .finally(() => {
+          if (!cancelled) setGifLoading(false);
+        });
+    }, gifQuery.trim() ? 280 : 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [gifOpen, gifQuery]);
 
   useEffect(() => {
     activeChatRef.current = activeChat;
@@ -2523,6 +2563,28 @@ export default function ChatPage() {
     setComposerText('');
   }
 
+  function handleSendGif(gif) {
+    const chatSocket = socketRef.current;
+    if (!gif?.url) return;
+    if (!chatSocket?.connected) {
+      reportError('Not connected to chat. Please wait while reconnecting...');
+      return;
+    }
+    if (!activeChat) return;
+    const outbound = queueOutboundMessage({ type: 'gif', text: '', gif: gif.url });
+    if (!outbound) return;
+    chatSocket.emit('message', {
+      type: 'gif',
+      gif: gif.url,
+      text: '',
+      chat: { type: activeChat.type, id: activeChat.id, name: activeChat.name },
+      timestamp: outbound.timestamp,
+      clientMessageId: outbound.clientMessageId,
+    });
+    setGifOpen(false);
+    setGifQuery('');
+  }
+
   function openWhatsAppShare() {
     if (!selectedGroup || typeof window === 'undefined') return;
     const inviteUrl = new URL(`/j/${encodeURIComponent(String(selectedGroup.shareToken || '').trim())}`, window.location.origin).toString();
@@ -3314,11 +3376,21 @@ export default function ChatPage() {
                       <div style={{
                         ...(isOwn ? styles.msgBubbleOwn : styles.msgBubbleOther),
                         ...(message.pending ? { opacity: 0.72 } : {}),
+                        ...((message.type === 'gif' || message.gif || message.image) ? { padding: 4, background: isOwn ? '#fafafa' : '#171717' } : {}),
                       }}>
                         {parsed.replyToMessageId && (
                           <div style={isOwn ? styles.replyQuote : styles.replyQuoteOther}>↩ Reply to {parsed.replyToUser}</div>
                         )}
-                        <div style={styles.msgText}>{parsed.body || (message.text || message.gif || '')}</div>
+                        {message.image || message.type === 'gif' || message.gif ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={message.image || message.gif}
+                            alt={message.type === 'image' ? 'Photo' : 'GIF'}
+                            style={{ display: 'block', maxWidth: 220, maxHeight: 220, width: '100%', borderRadius: 14, objectFit: 'cover' }}
+                          />
+                        ) : (
+                          <div style={styles.msgText}>{parsed.body || (message.text || '')}</div>
+                        )}
                         {activeReplyMessageId === message.id && (
                           <div style={styles.inlineReplyBox}>
                             <div style={styles.replyQuoteOther}>Replying to {message.user}</div>
@@ -3434,7 +3506,49 @@ export default function ChatPage() {
           ) : null}
 
           {activeChat && (!isNarrowScreen || !mobilePanelOpen) ? (
+          <>
+          {gifOpen ? (
+            <div className="chat-gif-panel">
+              <input
+                className="chat-gif-search"
+                value={gifQuery}
+                onChange={(event) => setGifQuery(event.target.value)}
+                placeholder="Search GIFs — love, run, lol, fire…"
+                autoFocus
+              />
+              <div className="chat-gif-chips">
+                {suggestGifQueries(gifQuery).slice(0, 16).map((query) => (
+                  <button key={query} type="button" className="chat-gif-chip" onClick={() => setGifQuery(query)}>
+                    {query}
+                  </button>
+                ))}
+              </div>
+              {gifLoading ? (
+                <div className="chat-gif-status">Searching GIFs…</div>
+              ) : gifResults.length ? (
+                <div className="chat-gif-grid">
+                  {gifResults.map((gif) => (
+                    <button key={gif.id} type="button" className="chat-gif-cell" onClick={() => handleSendGif(gif)}>
+                      <img src={gif.preview || gif.url} alt="" loading="lazy" />
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="chat-gif-status">No GIFs for that yet — try a chip like “baby crying”.</div>
+              )}
+            </div>
+          ) : null}
           <form className="chat-composer" style={styles.composer} onSubmit={handleSendMessage}>
+            <button
+              type="button"
+              className="chat-gif-btn"
+              style={{ ...styles.composerToolBtn, ...(gifOpen ? { background: '#fafafa', color: '#09090b', borderColor: '#fafafa' } : {}) }}
+              onClick={() => setGifOpen((open) => !open)}
+              aria-label="Send a GIF"
+              aria-pressed={gifOpen}
+            >
+              GIF
+            </button>
             <textarea
               ref={composerRef}
               style={styles.composerInput}
@@ -3447,6 +3561,7 @@ export default function ChatPage() {
             />
             <button type="submit" className="chat-send-btn" style={styles.sendBtn} disabled={!activeChat || !composerText.trim()}>➤</button>
           </form>
+          </>
           ) : null}
         </div>
       </main>
@@ -4010,6 +4125,100 @@ export default function ChatPage() {
           .chat-messages {
             padding-bottom: 12px;
           }
+        }
+        .chat-gif-panel {
+          margin: 0 12px 8px;
+          max-height: 240px;
+          overflow: auto;
+          border-radius: 16px;
+          border: 1px solid ${theme.cardBorder};
+          background: #0a0a0a;
+          padding: 10px;
+          display: grid;
+          gap: 8px;
+        }
+        .chat-gif-search {
+          width: 100%;
+          border: 1px solid ${theme.inputBorder};
+          background: ${theme.inputBg};
+          color: ${theme.textPrimary};
+          border-radius: 12px;
+          padding: 10px 12px;
+          font-size: 13px;
+          font-family: ${theme.font};
+          outline: none;
+          box-sizing: border-box;
+        }
+        .chat-gif-chips {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+        }
+        .chat-gif-chip {
+          border: 1px solid ${theme.cardBorder};
+          background: ${theme.cardBg};
+          color: ${theme.textSecondary};
+          border-radius: 999px;
+          padding: 5px 10px;
+          font-size: 11px;
+          font-weight: 700;
+          cursor: pointer;
+          font-family: ${theme.font};
+        }
+        .chat-gif-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+          gap: 6px;
+        }
+        .chat-gif-cell {
+          border: none;
+          padding: 0;
+          border-radius: 10px;
+          overflow: hidden;
+          cursor: pointer;
+          background: #111;
+          aspect-ratio: 1;
+        }
+        .chat-gif-cell img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+        .chat-gif-status {
+          font-size: 12px;
+          color: ${theme.textMuted};
+          padding: 8px;
+        }
+        .chat-messages {
+          background: #050505;
+        }
+        .chat-thread-dock {
+          display: flex;
+          gap: 6px;
+          padding: 8px 12px 0;
+          overflow-x: auto;
+        }
+        .chat-thread-dock-btn {
+          appearance: none;
+          border: 1px solid ${theme.cardBorder};
+          background: ${theme.cardBg};
+          color: ${theme.textSecondary};
+          border-radius: 999px;
+          padding: 8px 12px;
+          font-size: 11px;
+          font-weight: 800;
+          cursor: pointer;
+          font-family: ${theme.font};
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          white-space: nowrap;
+        }
+        .chat-thread-dock-btn--active {
+          background: #fafafa;
+          color: #09090b;
+          border-color: #fafafa;
         }
       `}</style>
     </div>

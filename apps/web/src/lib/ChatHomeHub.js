@@ -174,31 +174,29 @@ export function ChatHomeHub({
           overflow-y: auto;
           -webkit-overflow-scrolling: touch;
           padding: 16px 14px calc(96px + env(safe-area-inset-bottom, 0px));
-          background:
-            radial-gradient(circle at 0% 0%, rgba(56,189,248,0.12), transparent 42%),
-            radial-gradient(circle at 100% 8%, rgba(167,139,250,0.14), transparent 38%),
-            ${theme.pageBg};
+          background: ${theme.pageBg};
         }
         .chat-hub-hero {
-          border-radius: 16px;
-          padding: 12px 14px;
+          border-radius: 20px;
+          padding: 18px 16px;
           border: 1px solid ${theme.cardBorder};
-          background: linear-gradient(135deg, ${theme.blue}18, ${theme.purple}14);
+          background: linear-gradient(180deg, #141414, #0a0a0a);
           display: grid;
-          gap: 6px;
-          margin-bottom: 12px;
+          gap: 8px;
+          margin-bottom: 16px;
         }
         .chat-hub-hero-title {
           margin: 0;
-          font-size: 18px;
+          font-size: clamp(20px, 4vw, 26px);
           font-weight: 900;
           color: ${theme.textHeading};
           line-height: 1.15;
+          letter-spacing: -0.03em;
         }
         .chat-hub-hero-text {
           margin: 0;
-          font-size: 12px;
-          line-height: 1.45;
+          font-size: 13px;
+          line-height: 1.55;
           color: ${theme.textSecondary};
         }
         .chat-hub-tabs {
@@ -219,9 +217,9 @@ export function ChatHomeHub({
           font-family: inherit;
         }
         .chat-hub-tab.is-active {
-          background: ${theme.blue}22;
-          border-color: ${theme.blue};
-          color: ${theme.blue};
+          background: #fafafa;
+          border-color: #fafafa;
+          color: #09090b;
         }
         .chat-hub-actions {
           display: flex;
@@ -239,30 +237,39 @@ export function ChatHomeHub({
           font-family: inherit;
         }
         .chat-hub-btn-primary {
-          background: linear-gradient(135deg, ${theme.blue}, ${theme.purple});
-          color: #fff;
+          background: #fafafa;
+          color: #09090b;
         }
         .chat-hub-btn-secondary {
           background: ${theme.cardBg};
           color: ${theme.textHeading};
           border: 1px solid ${theme.cardBorder};
         }
-        .chat-hub-thread-list { display: grid; gap: 10px; }
-        .chat-hub-thread-row {
+        .chat-hub-thread-list {
           display: grid;
-          grid-template-columns: auto 1fr;
-          gap: 8px;
-          align-items: center;
-          border-radius: 16px;
+          grid-template-columns: 1fr;
+          gap: 12px;
+        }
+        .chat-hub-thread-row {
+          position: relative;
+          display: grid;
+          gap: 0;
+          align-items: stretch;
+          border-radius: 20px;
           border: 1px solid ${theme.cardBorder};
           background: ${theme.cardBg};
-          padding: 8px 10px;
-          transition: border-color 0.15s ease, box-shadow 0.15s ease;
+          padding: 0;
+          overflow: hidden;
+          transition: border-color 0.18s ease, transform 0.18s ease;
           min-width: 0;
         }
+        .chat-hub-thread-row:hover {
+          border-color: ${theme.cardBorderHover};
+          transform: translateY(-2px);
+        }
         .chat-hub-thread-row.is-drop-target {
-          border-color: ${theme.blue};
-          box-shadow: 0 0 0 2px ${theme.blue}33;
+          border-color: #fafafa;
+          box-shadow: 0 0 0 2px rgba(255,255,255,0.18);
         }
         .chat-hub-thread-row.is-dragging { opacity: 0.55; }
         .chat-hub-thread-open {
@@ -270,9 +277,7 @@ export function ChatHomeHub({
           background: transparent;
           padding: 0;
           display: grid;
-          grid-template-columns: auto 1fr;
-          gap: 10px;
-          align-items: center;
+          grid-template-rows: 118px auto;
           text-align: left;
           cursor: pointer;
           color: inherit;
@@ -280,9 +285,9 @@ export function ChatHomeHub({
           min-width: 0;
         }
         .chat-hub-thread-thumb {
-          width: 44px;
-          height: 44px;
-          border-radius: 12px;
+          width: 100%;
+          height: 118px;
+          border-radius: 0;
           overflow: hidden;
           position: relative;
           flex-shrink: 0;
@@ -293,27 +298,37 @@ export function ChatHomeHub({
           height: 100%;
           object-fit: cover;
         }
+        .chat-hub-thread-copy {
+          padding: 12px 14px 14px;
+          display: grid;
+          gap: 4px;
+          min-width: 0;
+        }
         .chat-hub-thread-name {
-          font-size: 14px;
+          font-size: 15px;
           font-weight: 900;
           color: ${theme.textHeading};
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
+          letter-spacing: -0.02em;
         }
-        .chat-hub-thread-meta { font-size: 10px; color: ${theme.textMuted}; line-height: 1.4; }
+        .chat-hub-thread-meta { font-size: 11px; color: ${theme.textMuted}; line-height: 1.45; }
         .chat-hub-drag-handle {
-          border: 1px solid ${theme.cardBorder};
-          background: ${theme.panelBg};
-          color: ${theme.textMuted};
+          position: absolute;
+          top: 10px;
+          left: 10px;
+          z-index: 2;
+          border: 1px solid rgba(255,255,255,0.12);
+          background: rgba(0,0,0,0.62);
+          color: #fafafa;
           border-radius: 10px;
-          width: 34px;
-          height: 34px;
+          width: 32px;
+          height: 32px;
           display: grid;
           place-items: center;
           cursor: grab;
-          font-size: 14px;
-          flex-shrink: 0;
+          font-size: 13px;
         }
         .chat-hub-drop-root {
           border: 1px dashed ${theme.cardBorder};
@@ -442,8 +457,8 @@ export function ChatHomeHub({
             padding: 20px 20px calc(24px + env(safe-area-inset-bottom, 0px));
           }
           .chat-hub-thread-list {
-            grid-template-columns: 1fr;
-            gap: 8px;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px;
           }
           .chat-hub-thread-row {
             margin-left: 0 !important;
@@ -456,7 +471,7 @@ export function ChatHomeHub({
         }
         @media (min-width: 1100px) {
           .chat-hub-thread-list {
-            grid-template-columns: 1fr;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
           }
         }
         @media (min-width: 900px) {
@@ -572,7 +587,7 @@ export function ChatHomeHub({
                     </button>
                     <button type="button" className="chat-hub-thread-open" onClick={() => onOpenThread(group)}>
                       <ThreadCoverThumb group={group} unread={unread} />
-                      <div style={{ minWidth: 0 }}>
+                      <div className="chat-hub-thread-copy">
                         <div className="chat-hub-thread-name">{depth ? `${'↳ '.repeat(Math.min(depth, 3))}${group.name}` : group.name}</div>
                         <div className="chat-hub-thread-meta">
                           {members} member{members === 1 ? '' : 's'} · {albums} album{albums === 1 ? '' : 's'} · {media} photo{media === 1 ? '' : 's'}

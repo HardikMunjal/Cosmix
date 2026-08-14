@@ -8,13 +8,13 @@ import { THREAD_WALLPAPERS, resolveThreadWallpaper } from '../../lib/threadWallp
 
 function threadEmoji(name) {
   const lower = String(name || '').toLowerCase();
-  if (lower.includes('cricket')) return 'ðŸ';
-  if (lower.includes('football') || lower.includes('soccer')) return 'âš½';
-  if (lower.includes('goa') || lower.includes('beach')) return 'ðŸ–ï¸';
-  if (lower.includes('family')) return 'ðŸ‘¨â€ðŸ‘©â€ðŸ‘§';
-  if (lower.includes('day')) return 'ðŸ“…';
-  if (lower.includes('trip') || lower.includes('travel')) return 'ðŸ”ï¸';
-  return 'ðŸ“';
+  if (lower.includes('cricket')) return '🏏';
+  if (lower.includes('football') || lower.includes('soccer')) return '⚽';
+  if (lower.includes('goa') || lower.includes('beach')) return '🏖️';
+  if (lower.includes('family')) return '👨‍👩‍👧';
+  if (lower.includes('day')) return '📅';
+  if (lower.includes('trip') || lower.includes('travel')) return '🏔️';
+  return '🧵';
 }
 
 function isVideoMedia(image) {
@@ -348,12 +348,12 @@ export default function ThreadWorkspaceModule({
   if (!thread || typeof document === 'undefined') return null;
 
   const backLabel = wallpaperOpen
-    ? 'â† Back'
+    ? '← Back'
     : (inPhotos && folderPath.length)
-      ? 'â† Back'
+      ? '← Back'
       : inPhotos
-        ? 'â† Chat'
-        : 'â† Threads';
+        ? '← Chat'
+        : '← Threads';
   const wallpaperPhotos = (thread.images || []).filter((image) => image?.imageUrl && !isVideoMedia(image)).slice(0, 12);
 
   return createPortal(
@@ -378,7 +378,7 @@ export default function ThreadWorkspaceModule({
           align-items: center;
           gap: 8px;
           padding: calc(8px + env(safe-area-inset-top, 0px)) 10px 8px;
-          background: linear-gradient(180deg, rgba(2,6,23,0.78), rgba(2,6,23,0.28));
+          background: #0a0a0a;
           border-bottom: 1px solid rgba(255,255,255,0.08);
         }
         .thread-phone-back {
@@ -690,7 +690,7 @@ export default function ThreadWorkspaceModule({
                   </span>
                 ))}
               </span>
-              <span>{pathLabel}{uploadSession?.active && uploadSession.completed + uploadSession.failed < uploadSession.total ? ' Â· Uploadingâ€¦' : ''}</span>
+              <span>{pathLabel}{uploadSession?.active && uploadSession.completed + uploadSession.failed < uploadSession.total ? ' · Uploading…' : ''}</span>
             </div>
             <div
               className="thread-explorer-body"

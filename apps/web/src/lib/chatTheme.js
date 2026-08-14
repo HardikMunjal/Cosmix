@@ -1,0 +1,31 @@
+import { themes } from './themes';
+
+/** True-black chrome for chat + thread surfaces, independent of the global page theme. */
+export const CHAT_THEME = {
+  ...themes.dark,
+  id: 'chat-black',
+  label: 'Black',
+  pageBg: '#050505',
+  pageBgSolid: '#050505',
+  textPrimary: '#f4f4f5',
+  textSecondary: '#a1a1aa',
+  textMuted: '#71717a',
+  textHeading: '#fafafa',
+  cardBg: '#111111',
+  cardBgGradient: 'linear-gradient(180deg, #141414, #0a0a0a)',
+  cardBorder: 'rgba(255,255,255,0.08)',
+  cardBorderHover: 'rgba(255,255,255,0.18)',
+  panelBg: '#0a0a0a',
+  inputBg: '#111111',
+  inputBorder: 'rgba(255,255,255,0.12)',
+  divider: 'rgba(255,255,255,0.08)',
+  badgeBg: '#141414',
+  shadow: 'rgba(0,0,0,0.55)',
+  btnPrimaryBg: '#fafafa',
+  btnPrimaryBorder: '#fafafa',
+  btnPrimaryText: '#09090b',
+  btnSecondaryBg: '#141414',
+  btnSecondaryBorder: 'rgba(255,255,255,0.12)',
+  btnSecondaryText: '#f4f4f5',
+  font: "'Inter', system-ui, -apple-system, sans-serif",
+};

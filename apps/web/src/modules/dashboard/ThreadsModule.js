@@ -46,6 +46,7 @@ function ThreadCover({ group }) {
       ) : (
         <div className="dashboard-thread-cover-fallback" aria-hidden="true">{threadEmoji(group.name)}</div>
       )}
+      <div className="dashboard-thread-cover-scrim" />
     </div>
   );
 }
@@ -106,41 +107,42 @@ export default function ThreadsModule({
       <style>{`
         .dashboard-threads {
           display: grid;
-          gap: 10px;
+          gap: 14px;
         }
         .dashboard-threads-toolbar {
           display: flex;
           flex-wrap: wrap;
-          gap: 8px;
+          gap: 10px;
           align-items: center;
         }
         .dashboard-threads-search {
           flex: 1;
-          min-width: 140px;
+          min-width: 180px;
           appearance: none;
-          border: 1px solid rgba(255,255,255,0.12);
+          border: 1px solid rgba(255,255,255,0.1);
           background: #0a0a0a;
           color: #f4f4f5;
-          border-radius: 12px;
-          padding: 8px 12px;
+          border-radius: 14px;
+          padding: 11px 14px;
           font-size: 13px;
           font-family: inherit;
           outline: none;
         }
         .dashboard-threads-search:focus {
           border-color: rgba(255,255,255,0.28);
+          box-shadow: 0 0 0 3px rgba(255,255,255,0.06);
         }
         .dashboard-threads-search::placeholder { color: #71717a; }
         .dashboard-threads-actions {
           display: flex;
-          gap: 6px;
+          gap: 8px;
           flex-wrap: wrap;
         }
         .dashboard-threads-btn {
           appearance: none;
           border: none;
-          border-radius: 10px;
-          padding: 8px 12px;
+          border-radius: 12px;
+          padding: 10px 14px;
           font-size: 12px;
           font-weight: 800;
           cursor: pointer;
@@ -157,35 +159,32 @@ export default function ThreadsModule({
         }
         .dashboard-threads-grid {
           display: grid;
-          gap: 6px;
+          grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+          gap: 14px;
         }
         .dashboard-thread-card {
           appearance: none;
           border: 1px solid rgba(255,255,255,0.08);
-          border-radius: 14px;
+          border-radius: 22px;
           overflow: hidden;
           background: #0a0a0a;
-          padding: 8px 10px;
+          padding: 0;
           cursor: pointer;
           text-align: left;
           color: inherit;
           font-family: inherit;
           display: grid;
-          grid-template-columns: 48px minmax(0, 1fr) auto;
-          gap: 10px;
-          align-items: center;
+          grid-template-rows: 132px auto;
+          transition: transform 0.18s ease, border-color 0.18s ease;
         }
         .dashboard-thread-card:hover {
-          border-color: rgba(255,255,255,0.2);
-          background: #111;
+          transform: translateY(-3px);
+          border-color: rgba(255,255,255,0.22);
         }
         .dashboard-thread-cover {
           position: relative;
-          width: 48px;
-          height: 48px;
-          border-radius: 12px;
+          height: 132px;
           overflow: hidden;
-          flex-shrink: 0;
         }
         .dashboard-thread-cover img,
         .dashboard-thread-cover video {
@@ -199,47 +198,72 @@ export default function ThreadsModule({
           inset: 0;
           display: grid;
           place-items: center;
-          font-size: 22px;
+          font-size: 42px;
+        }
+        .dashboard-thread-cover-scrim {
+          position: absolute;
+          inset: auto 0 0 0;
+          height: 48%;
+          background: linear-gradient(180deg, transparent, rgba(0,0,0,0.88));
         }
         .dashboard-thread-body {
           display: grid;
-          gap: 2px;
-          min-width: 0;
+          gap: 8px;
+          padding: 14px 14px 16px;
         }
         .dashboard-thread-name {
-          font-size: 14px;
-          font-weight: 800;
+          font-size: 16px;
+          font-weight: 900;
           color: #f8fafc;
           line-height: 1.2;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
+          letter-spacing: -0.02em;
         }
         .dashboard-thread-desc {
-          font-size: 11px;
+          font-size: 12px;
           color: #94a3b8;
+          line-height: 1.45;
+          min-height: 34px;
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
           overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
         }
         .dashboard-thread-meta {
-          font-size: 11px;
-          font-weight: 700;
-          color: #71717a;
-          white-space: nowrap;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+        }
+        .dashboard-thread-chip {
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
+          padding: 5px 8px;
+          border-radius: 999px;
+          border: 1px solid rgba(255,255,255,0.1);
+          background: rgba(255,255,255,0.06);
+          color: #d4d4d8;
+        }
+        .dashboard-thread-chip--owner {
+          border-color: rgba(255,255,255,0.18);
+          background: rgba(255,255,255,0.1);
+          color: #fafafa;
         }
         .dashboard-threads-empty {
-          border-radius: 16px;
+          border-radius: 20px;
           border: 1px dashed rgba(255,255,255,0.16);
-          padding: 24px 16px;
+          padding: 36px 20px;
           text-align: center;
           display: grid;
-          gap: 8px;
+          gap: 10px;
           justify-items: center;
           background: #0a0a0a;
         }
         .dashboard-threads-empty-title {
-          font-size: 16px;
+          font-size: 18px;
           font-weight: 900;
           color: #fafafa;
         }
@@ -248,6 +272,11 @@ export default function ThreadsModule({
           line-height: 1.5;
           max-width: 360px;
           color: #a1a1aa;
+        }
+        @media (max-width: 560px) {
+          .dashboard-threads-grid {
+            grid-template-columns: 1fr;
+          }
         }
       `}</style>
 
@@ -292,7 +321,7 @@ export default function ThreadsModule({
         </div>
       ) : (
         <div className="dashboard-threads-grid">
-          {filtered.map(({ group, members, media, createdLabel, isOwner }) => (
+          {filtered.map(({ group, members, media, albums, children, createdLabel, isOwner }) => (
             <button
               key={group.id}
               type="button"
@@ -303,14 +332,17 @@ export default function ThreadsModule({
               <div className="dashboard-thread-body">
                 <div className="dashboard-thread-name">{group.name || 'Untitled thread'}</div>
                 <div className="dashboard-thread-desc">
-                  {group.description?.trim()
-                    || [members ? `${members} member${members === 1 ? '' : 's'}` : null, media ? `${media} photos` : null, createdLabel]
-                      .filter(Boolean)
-                      .join(' · ')
-                    || 'Open to chat'}
+                  {group.description?.trim() || 'Open to chat, albums, and trip memories.'}
+                </div>
+                <div className="dashboard-thread-meta">
+                  {members > 0 ? <span className="dashboard-thread-chip">{members} member{members === 1 ? '' : 's'}</span> : null}
+                  {media > 0 ? <span className="dashboard-thread-chip">{media} photo{media === 1 ? '' : 's'}</span> : null}
+                  {albums > 0 ? <span className="dashboard-thread-chip">{albums} album{albums === 1 ? '' : 's'}</span> : null}
+                  {children > 0 ? <span className="dashboard-thread-chip">{children} nested</span> : null}
+                  {createdLabel ? <span className="dashboard-thread-chip">{createdLabel}</span> : null}
+                  {isOwner ? <span className="dashboard-thread-chip dashboard-thread-chip--owner">Yours</span> : null}
                 </div>
               </div>
-              <div className="dashboard-thread-meta">{isOwner ? 'Yours' : '›'}</div>
             </button>
           ))}
         </div>

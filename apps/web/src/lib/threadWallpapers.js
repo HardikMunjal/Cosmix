@@ -1,10 +1,10 @@
 export const THREAD_WALLPAPERS = [
-  { id: 'preset:midnight', label: 'Midnight', css: 'linear-gradient(165deg, #020617 0%, #0f172a 46%, #1e293b 100%)' },
-  { id: 'preset:dusk', label: 'Dusk', css: 'linear-gradient(165deg, #1e1b4b 0%, #4c1d95 48%, #9f1239 100%)' },
-  { id: 'preset:ocean', label: 'Ocean', css: 'linear-gradient(165deg, #082f49 0%, #0e7490 50%, #155e75 100%)' },
-  { id: 'preset:forest', label: 'Forest', css: 'linear-gradient(165deg, #052e16 0%, #166534 48%, #14532d 100%)' },
-  { id: 'preset:sand', label: 'Sand', css: 'linear-gradient(165deg, #431407 0%, #9a3412 46%, #a16207 100%)' },
-  { id: 'preset:rose', label: 'Rose', css: 'linear-gradient(165deg, #4a044e 0%, #9d174d 50%, #be123c 100%)' },
+  { id: 'preset:midnight', label: 'Black', css: '#050505' },
+  { id: 'preset:graphite', label: 'Graphite', css: 'linear-gradient(180deg, #0a0a0a 0%, #171717 100%)' },
+  { id: 'preset:slate', label: 'Slate', css: 'linear-gradient(165deg, #020617 0%, #0f172a 100%)' },
+  { id: 'preset:dusk', label: 'Dusk', css: 'linear-gradient(165deg, #0b0b12 0%, #1e1b4b 100%)' },
+  { id: 'preset:ocean', label: 'Ocean', css: 'linear-gradient(165deg, #05080c 0%, #082f49 100%)' },
+  { id: 'preset:forest', label: 'Forest', css: 'linear-gradient(165deg, #050805 0%, #052e16 100%)' },
 ];
 
 export function resolveThreadWallpaper(thread) {
@@ -12,29 +12,20 @@ export function resolveThreadWallpaper(thread) {
   if (raw.startsWith('preset:')) {
     const preset = THREAD_WALLPAPERS.find((item) => item.id === raw);
     return {
-      background: preset?.css || THREAD_WALLPAPERS[0].css,
+      background: preset?.css || '#050505',
       backgroundImage: 'none',
     };
   }
   if (/^(https?:\/\/|\/|blob:)/i.test(raw)) {
     return {
-      background: '#020617',
-      backgroundImage: `linear-gradient(180deg, rgba(2,6,23,0.28), rgba(2,6,23,0.72)), url("${raw}")`,
-      backgroundSize: 'cover',
-      backgroundPosition: 'center',
-    };
-  }
-  const cover = String(thread?.coverImageUrl || '').trim();
-  if (/^(https?:\/\/|\/|blob:)/i.test(cover) && thread?.coverMediaType !== 'video') {
-    return {
-      background: '#020617',
-      backgroundImage: `linear-gradient(180deg, rgba(2,6,23,0.35), rgba(2,6,23,0.78)), url("${cover}")`,
+      background: '#050505',
+      backgroundImage: `linear-gradient(180deg, rgba(5,5,5,0.35), rgba(5,5,5,0.82)), url("${raw}")`,
       backgroundSize: 'cover',
       backgroundPosition: 'center',
     };
   }
   return {
-    background: THREAD_WALLPAPERS[0].css,
+    background: '#050505',
     backgroundImage: 'none',
   };
 }

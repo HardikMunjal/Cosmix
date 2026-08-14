@@ -402,22 +402,19 @@ export default function ThreadInlineChat({
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@500;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
         .cx-chat {
-          --cx-ink: #f8fafc;
-          --cx-muted: #94a3b8;
-          --cx-line: rgba(125, 211, 252, 0.18);
-          --cx-cyan: #22d3ee;
-          --cx-pink: #f472b6;
-          --cx-amber: #fbbf24;
-          --cx-violet: #a78bfa;
+          --cx-ink: #fafafa;
+          --cx-muted: #a1a1aa;
+          --cx-line: rgba(255,255,255,0.08);
+          --cx-cyan: #e4e4e7;
+          --cx-pink: #d4d4d8;
+          --cx-amber: #fafafa;
+          --cx-violet: #a1a1aa;
           display: grid;
           grid-template-rows: auto 1fr auto auto auto;
           gap: 0;
           border-radius: 22px;
           border: 1px solid var(--cx-line);
-          background:
-            radial-gradient(120% 70% at 0% 0%, rgba(34,211,238,0.16), transparent 42%),
-            radial-gradient(90% 60% at 100% 10%, rgba(244,114,182,0.14), transparent 40%),
-            linear-gradient(180deg, #0b1220 0%, #05070f 100%);
+          background: #050505;
           overflow: hidden;
           min-height: 360px;
           font-family: "Outfit", "Space Grotesk", "Segoe UI", sans-serif;
@@ -445,16 +442,13 @@ export default function ThreadInlineChat({
           gap: 12px;
           padding: 14px 16px;
           border-bottom: 1px solid var(--cx-line);
-          background: rgba(8, 14, 28, 0.85);
+          background: #0a0a0a;
         }
         .cx-chat-title {
           font-size: 17px;
           font-weight: 800;
           letter-spacing: -0.03em;
-          background: linear-gradient(120deg, #fff 10%, #67e8f9 55%, #f9a8d4 100%);
-          -webkit-background-clip: text;
-          background-clip: text;
-          color: transparent;
+          color: #fafafa;
         }
         .cx-chat-sub {
           font-size: 11px;
@@ -517,15 +511,15 @@ export default function ThreadInlineChat({
         }
         .cx-chat-bubble.is-own {
           border-bottom-right-radius: 6px;
-          background: linear-gradient(145deg, rgba(34,211,238,0.28), rgba(167,139,250,0.3));
-          border: 1px solid rgba(125,211,252,0.28);
-          color: #f8fafc;
-          box-shadow: 0 10px 28px rgba(34,211,238,0.12);
+          background: #fafafa;
+          border: 1px solid #fafafa;
+          color: #09090b;
+          box-shadow: none;
         }
         .cx-chat-bubble.is-other {
           border-bottom-left-radius: 6px;
-          background: rgba(15, 23, 42, 0.88);
-          border: 1px solid rgba(148,163,184,0.16);
+          background: #171717;
+          border: 1px solid rgba(255,255,255,0.08);
           color: var(--cx-ink);
         }
         .cx-chat-meta {
@@ -561,7 +555,7 @@ export default function ThreadInlineChat({
           min-height: 18px;
           padding: 0 16px 6px;
           font-size: 12px;
-          color: #67e8f9;
+          color: #a1a1aa;
           font-weight: 600;
           letter-spacing: 0.02em;
         }
@@ -576,7 +570,7 @@ export default function ThreadInlineChat({
           gap: 10px;
           padding: 12px 14px calc(14px + env(safe-area-inset-bottom, 0px));
           border-top: 1px solid var(--cx-line);
-          background: linear-gradient(180deg, rgba(8,14,28,0.92), rgba(2,6,16,0.98));
+          background: #0a0a0a;
           flex-shrink: 0;
         }
         .cx-attach-wrap {
@@ -590,9 +584,9 @@ export default function ThreadInlineChat({
           cursor: pointer;
           font-size: 22px;
           font-weight: 800;
-          color: #041018;
-          background: linear-gradient(135deg, #22d3ee, #a78bfa 55%, #f472b6);
-          box-shadow: 0 10px 24px rgba(34,211,238,0.28);
+          color: #09090b;
+          background: #fafafa;
+          box-shadow: none;
           display: grid;
           place-items: center;
           transition: transform 0.15s ease, filter 0.15s ease;
@@ -675,9 +669,9 @@ export default function ThreadInlineChat({
           align-items: end;
         }
         .cx-chat-input {
-          border: 1px solid rgba(125,211,252,0.22);
-          background: rgba(2,6,23,0.72);
-          color: #f8fafc;
+          border: 1px solid rgba(255,255,255,0.12);
+          background: #111111;
+          color: #fafafa;
           border-radius: 16px;
           padding: 13px 14px;
           font-size: 14px;
@@ -685,8 +679,8 @@ export default function ThreadInlineChat({
           outline: none;
         }
         .cx-chat-input:focus {
-          border-color: rgba(34,211,238,0.55);
-          box-shadow: 0 0 0 3px rgba(34,211,238,0.14);
+          border-color: rgba(255,255,255,0.28);
+          box-shadow: 0 0 0 3px rgba(255,255,255,0.08);
         }
         .cx-chat-send {
           border: none;
@@ -696,8 +690,8 @@ export default function ThreadInlineChat({
           font-size: 13px;
           font-weight: 800;
           cursor: pointer;
-          background: linear-gradient(120deg, #22d3ee, #818cf8 55%, #f472b6);
-          color: #041018;
+          background: #fafafa;
+          color: #09090b;
           letter-spacing: 0.03em;
           font-family: "Space Grotesk", sans-serif;
           text-transform: uppercase;
@@ -710,17 +704,17 @@ export default function ThreadInlineChat({
           max-height: 240px;
           overflow: auto;
           border-radius: 16px;
-          border: 1px solid rgba(244,114,182,0.28);
-          background: rgba(2,6,23,0.85);
+          border: 1px solid rgba(255,255,255,0.1);
+          background: #0a0a0a;
           padding: 10px;
           display: grid;
           gap: 8px;
         }
         .cx-gif-search {
           width: 100%;
-          border: 1px solid rgba(244,114,182,0.28);
-          background: rgba(15,23,42,0.9);
-          color: #f8fafc;
+          border: 1px solid rgba(255,255,255,0.12);
+          background: #111111;
+          color: #fafafa;
           border-radius: 12px;
           padding: 10px 12px;
           font-size: 13px;
