@@ -39,6 +39,11 @@ import {
   CHART_SOFT,
 } from '../lib/RunningModernCharts';
 import { sportWellnessPoints } from '../lib/wellnessScoring';
+import {
+  ActivityBreakdownCard,
+  buildSportActivityRows,
+  buildWeeklySumBuckets,
+} from '../lib/activityOverviewCharts';
 import { hrZoneForBpm } from '../lib/hrZones';
 import { loadRunningSurfaceId, saveRunningSurfaceId, mergeRunningSurface } from '../lib/runningThemes';
 import { buildMarathonReadiness, loadMarathonGoal } from '../lib/marathonReadiness';
@@ -145,74 +150,6 @@ function computeSportStats(entries = [], minKey, distKey = null) {
   const weeklyMins = rows.filter((r) => (r.date || '') >= weekAgoStr).reduce((s, r) => s + r.minutes, 0);
 
   return { rows, totalMinutes, totalDistance, longestSession, recent, weeklyMins, count: rows.length };
-}
-
-function buildSportActivityRows(entries = [], { arrayKey, minutesKey, distanceKey = null, defaultName = 'Session' } = {}) {
-  const rows = [];
-  [...(entries || [])].forEach((entry) => {
-    const activities = Array.isArray(entry?.[arrayKey]) ? entry[arrayKey] : [];
-    if (activities.length) {
-      activities.forEach((act) => {
-        const minutes = Number(act.minutes || 0);
-        const distance = Number(act.distanceKm || 0);
-        if (minutes <= 0 && distance <= 0) return;
-        const pace = distance > 0 && minutes > 0 ? minutes / distance : (Number(act.paceMinPerKm) || null);
-        rows.push({
-          date: act.date || entry.date,
-          minutes,
-          distance,
-          name: act.name || defaultName,
-          avgHeartrate: Number(act.avgHeartrate || 0) || null,
-          maxHeartrate: Number(act.maxHeartrate || 0) || null,
-          avgSpeedKmh: Number(act.avgSpeedKmh || 0) || null,
-          paceMinPerKm: pace,
-          calories: Number(act.calories || 0) || null,
-          stravaId: Number(act.id || act.stravaId || 0) || null,
-          source: 'strava',
-        });
-      });
-      return;
-    }
-
-    const dayMinutes = Number(entry?.[minutesKey] || 0);
-    const dayDistance = distanceKey ? Number(entry?.[distanceKey] || 0) : 0;
-    if (dayMinutes <= 0 && dayDistance <= 0) return;
-    rows.push({
-      date: entry.date,
-      minutes: dayMinutes,
-      distance: dayDistance,
-      name: defaultName,
-      avgHeartrate: Number(entry.stravaAvgHeartRate || entry.heartRateAvg || 0) || null,
-      maxHeartrate: Number(entry.stravaMaxHeartRate || entry.heartRateMax || 0) || null,
-      avgSpeedKmh: null,
-      paceMinPerKm: dayDistance > 0 && dayMinutes > 0 ? dayMinutes / dayDistance : null,
-      stravaId: null,
-      source: entry.source || 'manual',
-    });
-  });
-  return rows.sort((a, b) => String(b.date).localeCompare(String(a.date)));
-}
-
-function buildWeeklySumBuckets(rows = [], valueFn, weeks = 12) {
-  const weekMap = new Map();
-  (rows || []).forEach((row) => {
-    const date = String(row.date || '').slice(0, 10);
-    const value = Number(valueFn(row) || 0);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !(value > 0)) return;
-    const d = new Date(`${date}T12:00:00`);
-    const monday = new Date(d);
-    monday.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-    const key = monday.toISOString().slice(0, 10);
-    weekMap.set(key, (weekMap.get(key) || 0) + value);
-  });
-  return [...weekMap.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .slice(-weeks)
-    .map(([week, value]) => ({
-      date: week,
-      label: new Date(`${week}T12:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
-      value: Number(value.toFixed(1)),
-    }));
 }
 
 function walkPaceHrBands(rows = []) {
@@ -1528,6 +1465,14 @@ function RunningTab({
     return fromInsights;
   }, [stravaInsights]);
 
+  const weeklyRunKm = useMemo(() => buildWeeklySumBuckets(runRows, (r) => r.distance, 12), [runRows]);
+  const weeklyRunMins = useMemo(() => buildWeeklySumBuckets(runRows, (r) => r.minutes, 12), [runRows]);
+  const weeklyRunKmTrend = useMemo(() => ({
+    points: weeklyRunKm.map((w) => ({ date: w.date, label: w.label, y: w.value })),
+    overallAvg: weeklyRunKm.length ? weeklyRunKm.reduce((s, w) => s + w.value, 0) / weeklyRunKm.length : null,
+    last10Avg: weeklyRunKm.length ? weeklyRunKm[weeklyRunKm.length - 1].value : null,
+  }), [weeklyRunKm]);
+
   const fastestSplits = useMemo(
     () => computeFastestKmSplits(entries, runningShoes, 15, extraSplitRuns),
     [entries, runningShoes, extraSplitRuns],
@@ -1563,6 +1508,40 @@ function RunningTab({
             theme={theme}
           />
         </div>
+      ) : null}
+
+      {!noData && (weeklyRunKm.length || weeklyRunMins.length) ? (
+        <CollapsibleBlock title="Week-wise runs" theme={theme} defaultOpen>
+          <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
+            {weeklyRunKm.length >= 2 ? (
+              <RunTrendChart
+                title="Weekly running distance"
+                subtitle="Sum of km each week"
+                points={weeklyRunKmTrend.points}
+                overallAvg={weeklyRunKmTrend.overallAvg}
+                last10Avg={weeklyRunKmTrend.last10Avg}
+                theme={theme}
+                accent={CHART_SOFT.orange}
+                valueFmt={(v) => `${Number(v).toFixed(1)}`}
+                unitLabel=" km"
+              />
+            ) : null}
+            <DepthBars
+              title="Km by week"
+              items={weeklyRunKm.slice(-8).map((w) => ({ label: w.label, value: w.value }))}
+              theme={theme}
+              accent={theme.orange}
+              unit=" km"
+            />
+            <DepthBars
+              title="Run minutes by week"
+              items={weeklyRunMins.slice(-8).map((w) => ({ label: w.label, value: Math.round(w.value) }))}
+              theme={theme}
+              accent={CHART_SOFT.green}
+              unit="m"
+            />
+          </div>
+        </CollapsibleBlock>
       ) : null}
 
       {(stravaInsights?.connected || stravaInsights?.runCount > 0) ? (
@@ -2335,7 +2314,7 @@ function YogaTab({ entries = [], name, theme, userId = null }) {
 }
 
 
-function OverviewTab({ wellStats, wellSummary, allSportStats, entries = [], name, theme }) {
+function OverviewTab({ wellStats, wellSummary, allSportStats, entries = [], name, theme, onActivityClick }) {
   const walkRows = useMemo(() => buildSportActivityRows(entries, {
     arrayKey: 'stravaWalks',
     minutesKey: 'walkingMinutes',
@@ -2399,34 +2378,13 @@ function OverviewTab({ wellStats, wellSummary, allSportStats, entries = [], name
       </div>
 
       <div>
-        <SectionLabel theme={theme}>{name}&apos;s Activity Breakdown</SectionLabel>
-        {activities.length === 0 ? (
-          <EmptyState sport="any sport" theme={theme} />
-        ) : (
-          <div style={{ background: theme.cardBg, border: `1px solid ${theme.cardBorder}`, borderRadius: '20px', overflow: 'hidden' }}>
-            <div style={{ padding: '16px 20px', borderBottom: `1px solid ${theme.cardBorder}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontWeight: 800, fontSize: '14px', color: theme.textHeading }}>All Sports</span>
-              <span style={{ fontSize: '13px', color: theme.textSecondary }}>{fmtMins(totalActivityMins)} total activity</span>
-            </div>
-            {activities.map((a) => {
-              const pct = totalActivityMins > 0 ? Math.round((a.mins / totalActivityMins) * 100) : 0;
-              return (
-                <div key={a.key} style={{ padding: '14px 20px', borderTop: `1px solid ${theme.cardBorder}`, display: 'grid', gridTemplateColumns: '32px 1fr 80px 70px 52px', gap: '10px', alignItems: 'center' }}>
-                  <span style={{ fontSize: '20px' }}>{a.emoji}</span>
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: '13px', color: theme.textHeading, marginBottom: '5px' }}>{a.label}</div>
-                    <div style={{ height: '5px', borderRadius: '3px', background: theme.cardBorder, overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${pct}%`, background: a.accent, borderRadius: '3px', transition: 'width 0.5s' }} />
-                    </div>
-                  </div>
-                  <span style={{ fontSize: '12px', color: theme.textSecondary, textAlign: 'right' }}>{a.sessions} sessions</span>
-                  <span style={{ fontSize: '12px', color: theme.textMuted, textAlign: 'right' }}>{a.distance > 0 ? `${Number(a.distance).toFixed(1)} km` : fmtMins(a.mins)}</span>
-                  <span style={{ fontSize: '13px', fontWeight: 700, color: a.accent, textAlign: 'right' }}>{pct}%</span>
-                </div>
-              );
-            })}
-          </div>
-        )}
+        <ActivityBreakdownCard
+          name={name}
+          activities={activities}
+          totalMins={totalActivityMins}
+          theme={theme}
+          onActivityClick={onActivityClick}
+        />
       </div>
 
       <div className="sport-3col" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0,1fr))', gap: 10 }}>
@@ -2621,6 +2579,15 @@ export default function RunningAnalytics() {
     });
     return () => { cancelled = true; };
   }, [user?.id]);
+
+  useEffect(() => {
+    if (!router.isReady) return;
+    const sport = String(router.query.sport || '').toLowerCase();
+    const known = [...PRIMARY_TABS, ...MORE_SPORT_TABS].map((tab) => tab.id);
+    if (!known.includes(sport)) return;
+    setActiveTab(sport);
+    if (MORE_SPORT_TABS.some((tab) => tab.id === sport)) setShowOtherSports(true);
+  }, [router.isReady, router.query.sport]);
 
   useEffect(() => {
     if (!router.isReady || !user?.id) return;
@@ -2976,7 +2943,18 @@ export default function RunningAnalytics() {
 
         {/* ── Tab Content ── */}
         {activeTab === 'overview' && (
-          <OverviewTab wellStats={wellStats} wellSummary={wellSummary} allSportStats={allSportStats} entries={entries} name={name} theme={theme} />
+          <OverviewTab
+            wellStats={wellStats}
+            wellSummary={wellSummary}
+            allSportStats={allSportStats}
+            entries={entries}
+            name={name}
+            theme={theme}
+            onActivityClick={(sport) => {
+              setActiveTab(sport);
+              if (MORE_SPORT_TABS.some((tab) => tab.id === sport)) setShowOtherSports(true);
+            }}
+          />
         )}
         {activeTab === 'running' && (
           <RunningTab

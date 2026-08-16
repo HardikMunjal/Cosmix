@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { daysUntil, isUpcomingTrip, tripDateLabel } from './tripEvent';
 
 function threadEmoji(name) {
   const lower = String(name || '').toLowerCase();
@@ -120,6 +121,9 @@ export function ChatHomeHub({
   onJoinThread,
   onAcceptBuddy,
   onMoveThread,
+  onDeleteThread,
+  onChangeCover,
+  currentUsername,
   connectionState,
   isBootstrapLoading = false,
 }) {
@@ -330,7 +334,25 @@ export function ChatHomeHub({
           cursor: grab;
           font-size: 13px;
         }
-        .chat-hub-drop-root {
+        .chat-hub-thread-delete,
+        .chat-hub-thread-cover {
+          position: absolute;
+          top: 10px;
+          z-index: 2;
+          border: 1px solid rgba(255,255,255,0.12);
+          background: rgba(0,0,0,0.62);
+          color: #fafafa;
+          border-radius: 10px;
+          height: 32px;
+          padding: 0 8px;
+          display: grid;
+          place-items: center;
+          cursor: pointer;
+          font-size: 12px;
+          font-family: inherit;
+        }
+        .chat-hub-thread-cover { right: 46px; }
+        .chat-hub-thread-delete { right: 10px; }
           border: 1px dashed ${theme.cardBorder};
           border-radius: 14px;
           padding: 10px 12px;
@@ -560,7 +582,14 @@ export function ChatHomeHub({
                 </div>
               ) : null}
               <div className="chat-hub-thread-list">
-                {threadStats.map(({ group, depth, albums, media, members, unread, childCount }) => (
+                {threadStats.map(({ group, depth, albums, media, members, unread, childCount }) => {
+                  const actor = String(currentUsername || '').toLowerCase();
+                  const isOwner = (group.memberships || []).some((membership) => String(membership.username || '').toLowerCase() === actor && membership.role === 'owner');
+                  const canEditCover = (group.memberships || []).some((membership) => String(membership.username || '').toLowerCase() === actor && (membership.role === 'owner' || membership.role === 'admin' || membership.canInvite));
+                  const dateLabel = tripDateLabel(group);
+                  const upcoming = isUpcomingTrip(group);
+                  const countdown = daysUntil(group.eventStartAt);
+                  return (
                   <div
                     key={group.id}
                     className={`chat-hub-thread-row${draggingThreadId === group.id ? ' is-dragging' : ''}${dropTargetId === group.id ? ' is-drop-target' : ''}`}
@@ -585,6 +614,26 @@ export function ChatHomeHub({
                     >
                       ⋮⋮
                     </button>
+                    {canEditCover && onChangeCover ? (
+                      <button
+                        type="button"
+                        className="chat-hub-thread-cover"
+                        aria-label={`Change cover for ${group.name}`}
+                        onClick={(event) => { event.stopPropagation(); onChangeCover(group); }}
+                      >
+                        📷
+                      </button>
+                    ) : null}
+                    {isOwner && onDeleteThread ? (
+                      <button
+                        type="button"
+                        className="chat-hub-thread-delete"
+                        aria-label={`Delete ${group.name}`}
+                        onClick={(event) => { event.stopPropagation(); onDeleteThread(group); }}
+                      >
+                        ⌫
+                      </button>
+                    ) : null}
                     <button type="button" className="chat-hub-thread-open" onClick={() => onOpenThread(group)}>
                       <ThreadCoverThumb group={group} unread={unread} />
                       <div className="chat-hub-thread-copy">
@@ -593,13 +642,22 @@ export function ChatHomeHub({
                           {members} member{members === 1 ? '' : 's'} · {albums} album{albums === 1 ? '' : 's'} · {media} photo{media === 1 ? '' : 's'}
                           {childCount ? ` · ${childCount} nested` : ''}
                         </div>
+                        {dateLabel ? (
+                          <div className="chat-hub-thread-meta">
+                            {group.threadKind === 'memory' ? 'Memory · ' : ''}{dateLabel}
+                            {upcoming && countdown != null ? ` · ${countdown === 0 ? 'today' : `${countdown}d to go`}` : ''}
+                          </div>
+                        ) : group.threadKind === 'memory' ? (
+                          <div className="chat-hub-thread-meta">Past event / memories</div>
+                        ) : null}
                         {group.description ? (
                           <div className="chat-hub-thread-meta" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{group.description}</div>
                         ) : null}
                       </div>
                     </button>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </>
           ) : (

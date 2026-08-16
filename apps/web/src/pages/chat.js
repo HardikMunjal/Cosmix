@@ -1,7 +1,7 @@
 import { useRouter } from 'next/router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getCachedClientUser, logoutClientSession, persistClientUser } from '../lib/auth-client';
-import { ChatAlbumGallery, buildFolderTree } from '../lib/ChatAlbumGallery';
+import { ChatAlbumGallery } from '../lib/ChatAlbumGallery';
 import { ChatHomeHub } from '../lib/ChatHomeHub';
 import { MobileBottomNav } from '../lib/MobileNav';
 import { subscribeToWebPush } from '../lib/webPush';
@@ -9,6 +9,9 @@ import { CallParticipantStrip, VideoCallPanel } from '../lib/VideoCallPanel';
 import { CHAT_THEME } from '../lib/chatTheme';
 import { searchGifs, suggestGifQueries } from '../lib/gifCatalog';
 import { THREAD_WALLPAPERS, resolveThreadWallpaper } from '../lib/threadWallpapers';
+import { CreateThreadModal } from '../lib/CreateThreadModal';
+import { ThreadDetailsPanel, ThreadOpenPicker } from '../lib/ThreadDetailsPanel';
+import { isPastTripDate } from '../lib/tripEvent';
 
 function resolveChatSocketClient() {
   const sharedOptions = {
@@ -388,10 +391,8 @@ function createStyles(theme) {
       overflowY: 'auto',
     },
     threadFolderScroll: {
-      flex: 1,
-      overflowY: 'auto',
-      padding: '14px 12px 20px',
-      WebkitOverflowScrolling: 'touch',
+      overflow: 'visible',
+      padding: 0,
     },
     threadFolderHeader: {
       display: 'flex',
@@ -578,15 +579,18 @@ function createStyles(theme) {
       display: 'flex',
       gap: '8px',
       alignItems: 'flex-end',
+      width: '100%',
+      maxWidth: '100%',
+      minWidth: 0,
     },
     msgRowOwn: {
       flexDirection: 'row-reverse',
       alignSelf: 'flex-end',
-      maxWidth: '76%',
+      maxWidth: '86%',
     },
     msgRowOther: {
       alignSelf: 'flex-start',
-      maxWidth: '76%',
+      maxWidth: '86%',
     },
     msgAvatar: {
       width: '28px',
@@ -1032,6 +1036,13 @@ export default function ChatPage() {
     description: '',
     parentGroupId: '',
     friendRoles: {},
+    threadKind: 'trip',
+    destination: '',
+    eventStartAt: '',
+    eventEndAt: '',
+    budgetEstimate: '',
+    showWeather: true,
+    showNews: true,
   });
   const [threadCoverFile, setThreadCoverFile] = useState(null);
   const [threadCoverPreview, setThreadCoverPreview] = useState('');
@@ -1047,6 +1058,11 @@ export default function ChatPage() {
     clearMessagesAfterHours: '',
     onlyAdminsCreateFolders: false,
     onlyAdminsBookmarkMessages: false,
+    threadKind: 'trip',
+    destination: '',
+    eventStartAt: '',
+    eventEndAt: '',
+    budgetEstimate: '',
   });
   const [folderForm, setFolderForm] = useState({ name: '', description: '' });
   const [folderSelections, setFolderSelections] = useState({});
@@ -1064,6 +1080,7 @@ export default function ChatPage() {
   const [showCreateThreadModal, setShowCreateThreadModal] = useState(false);
   const [showJoinThreadModal, setShowJoinThreadModal] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
+  const [threadPickerGroup, setThreadPickerGroup] = useState(null);
   const [bootstrapReady, setBootstrapReady] = useState(false);
   const [callParticipants, setCallParticipants] = useState([]);
   const [joinedCallRoom, setJoinedCallRoom] = useState('');
@@ -1080,6 +1097,7 @@ export default function ChatPage() {
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const threadCoverInputRef = useRef(null);
+  const coverTargetGroupRef = useRef(null);
   const composerRef = useRef(null);
   const inviteHandledRef = useRef(false);
   const activeChatRef = useRef(null);
@@ -1115,8 +1133,10 @@ export default function ChatPage() {
     () => {
       if (!activeChat) return [];
       const scoped = messages.filter((message) => chatMatchesActive(activeChat, message.chat));
-      if (!showBookmarkedOnly || activeChat.type !== 'group') return scoped;
-      return scoped.filter((message) => bookmarkedMessageIds.has(message.id));
+      const filtered = (!showBookmarkedOnly || activeChat.type !== 'group')
+        ? scoped
+        : scoped.filter((message) => bookmarkedMessageIds.has(message.id));
+      return filtered.length > 80 ? filtered.slice(-80) : filtered;
     },
     [messages, activeChat, showBookmarkedOnly, bookmarkedMessageIds],
   );
@@ -1303,9 +1323,25 @@ export default function ChatPage() {
     if (window.Notification.permission !== 'granted' || !document.hidden) return;
 
     try {
-      new window.Notification(title, { body, tag: tag || title });
+      playSpaceNotifySound();
+      new window.Notification(title, {
+        body,
+        tag: tag || title,
+        icon: '/icons/cosmix-universe-logo.png',
+        badge: '/icons/cosmix-universe-logo-192.png',
+      });
     } catch (_) {
       // Ignore notification API failures.
+    }
+  }
+
+  function playSpaceNotifySound() {
+    try {
+      const audio = new Audio('/sounds/cosmix-space.wav');
+      audio.volume = 0.72;
+      void audio.play();
+    } catch (_) {
+      // Ignore autoplay blocks.
     }
   }
 
@@ -1452,14 +1488,15 @@ export default function ChatPage() {
     }));
   }
 
-  async function loadBootstrapSnapshot() {
+  async function loadBootstrapSnapshot(options = {}) {
     if (!user?.username) return null;
-    const response = await fetch(`${chatApiBase}/bootstrap?username=${encodeURIComponent(user.username)}`);
+    const lite = options.lite ? '&media=0' : '';
+    const response = await fetch(`${chatApiBase}/bootstrap?username=${encodeURIComponent(user.username)}${lite}`);
     return readJsonResponse(response);
   }
 
-  async function fetchBootstrap(preferredChat = null) {
-    const payload = await loadBootstrapSnapshot();
+  async function fetchBootstrap(preferredChat = null, options = {}) {
+    const payload = await loadBootstrapSnapshot(options);
     if (!payload) return null;
     applyBootstrap(payload, preferredChat);
     return payload;
@@ -1489,6 +1526,23 @@ export default function ChatPage() {
 
     return () => window.clearInterval(interval);
   }, [chatApiBase, user?.username]);
+
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !navigator.serviceWorker) return undefined;
+    const onMessage = (event) => {
+      const url = String(event.data?.url || '');
+      if (event.data?.type !== 'COSMIX_OPEN' || !url) return;
+      try {
+        const next = new URL(url, window.location.origin);
+        if (next.origin !== window.location.origin) return;
+        router.replace(`${next.pathname}${next.search}`);
+      } catch (_) {
+        // Ignore malformed notification URLs.
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', onMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage);
+  }, [router]);
 
   useEffect(() => {
     let active = true;
@@ -1548,9 +1602,12 @@ export default function ChatPage() {
   useEffect(() => {
     if (!user?.username) return;
     setBootstrapReady(false);
-    fetchBootstrap().then(() => {
+    fetchBootstrap(null, { lite: true }).then(() => {
       setBootstrapReady(true);
       setStatusMessage('Ready');
+      return loadBootstrapSnapshot({ lite: false }).then((full) => {
+        if (full) applyBootstrap(full);
+      });
     }).catch((error) => {
       setBootstrapReady(true);
       const message = String(error?.message || 'Could not load chat data.');
@@ -1588,7 +1645,7 @@ export default function ChatPage() {
         activeChatRef.current = nextChat;
         setActiveChat(nextChat);
         setShowInviteModal(view === 'invite');
-        setActivePanelTab(view && view !== 'invite' ? view : '');
+        setActivePanelTab(view && view !== 'invite' && view !== 'chat' ? view : '');
       }
     } else if (dmUser) {
       const friend = bootstrap.friends.find((entry) => normalizeUsername(entry) === normalizeUsername(dmUser));
@@ -1752,11 +1809,11 @@ export default function ChatPage() {
 
   useEffect(() => {
     const chatSocket = socketRef.current;
-    if (!chatSocket?.connected || connectionState !== 'connected') return;
-    bootstrap.groups.forEach((group) => {
-      chatSocket.emit('join_room', { room: group.id });
-    });
-  }, [bootstrap.groups, connectionState]);
+    if (!chatSocket?.connected || connectionState !== 'connected' || !activeChat) return;
+    if (activeChat.type === 'group' && activeChat.id) {
+      chatSocket.emit('join_room', { room: activeChat.id });
+    }
+  }, [activeChat, connectionState]);
 
   useEffect(() => {
     const chatSocket = socketRef.current;
@@ -1828,6 +1885,11 @@ export default function ChatPage() {
       clearMessagesAfterHours: selectedGroup.settings?.clearMessagesAfterHours == null ? '' : String(selectedGroup.settings.clearMessagesAfterHours),
       onlyAdminsCreateFolders: selectedGroup.settings?.onlyAdminsCreateFolders === true,
       onlyAdminsBookmarkMessages: selectedGroup.settings?.onlyAdminsBookmarkMessages === true,
+      threadKind: selectedGroup.threadKind === 'memory' ? 'memory' : 'trip',
+      destination: selectedGroup.destination || '',
+      eventStartAt: selectedGroup.eventStartAt || '',
+      eventEndAt: selectedGroup.eventEndAt || '',
+      budgetEstimate: selectedGroup.budgetEstimate || '',
     });
     setShowBookmarkedOnly(false);
   }, [selectedGroup]);
@@ -1969,9 +2031,17 @@ export default function ChatPage() {
       description: '',
       parentGroupId: parentGroupId || '',
       friendRoles: {},
+      threadKind: 'trip',
+      destination: '',
+      eventStartAt: '',
+      eventEndAt: '',
+      budgetEstimate: '',
+      showWeather: true,
+      showNews: true,
     });
     setThreadCoverFile(null);
     setThreadCoverPreview('');
+    coverTargetGroupRef.current = null;
     setShowCreateThreadModal(true);
     setShowSidebar(false);
     setSidebarPanel('');
@@ -2028,9 +2098,9 @@ export default function ChatPage() {
           actorUsername: user.username,
           name: groupForm.name.trim(),
           description: groupForm.description.trim(),
-          parentGroupId: groupForm.parentGroupId || null,
+          parentGroupId: null,
           memberUsernames: Object.entries(groupForm.friendRoles || {})
-            .filter(([, role]) => role === 'member')
+            .filter(([, role]) => role === 'member' || role === 'admin')
             .map(([username]) => username),
           adminUsernames: Object.entries(groupForm.friendRoles || {})
             .filter(([, role]) => role === 'admin')
@@ -2038,6 +2108,11 @@ export default function ChatPage() {
           viewerUsernames: Object.entries(groupForm.friendRoles || {})
             .filter(([, role]) => role === 'viewer')
             .map(([username]) => username),
+          threadKind: (!isPastTripDate(groupForm.eventStartAt) && (groupForm.showWeather || groupForm.showNews)) ? 'trip' : 'memory',
+          destination: groupForm.destination.trim(),
+          eventStartAt: groupForm.eventStartAt || null,
+          eventEndAt: null,
+          budgetEstimate: groupForm.budgetEstimate.trim(),
         },
         (nextPayload) => {
           const createdGroupId = nextPayload.createdGroupId
@@ -2080,6 +2155,13 @@ export default function ChatPage() {
         description: '',
         parentGroupId: '',
         friendRoles: {},
+        threadKind: 'trip',
+        destination: '',
+        eventStartAt: '',
+        eventEndAt: '',
+        budgetEstimate: '',
+        showWeather: true,
+        showNews: true,
       });
       setThreadCoverFile(null);
       setThreadCoverPreview('');
@@ -2103,11 +2185,89 @@ export default function ChatPage() {
 
   function handleThreadCoverPick(event) {
     const file = Array.from(event.target.files || [])[0];
+    event.target.value = '';
     if (!file) return;
+    const existingGroup = coverTargetGroupRef.current;
+    if (existingGroup) {
+      coverTargetGroupRef.current = null;
+      void applyThreadCover(existingGroup.id, file);
+      return;
+    }
     setThreadCoverFile(file);
     const previewUrl = URL.createObjectURL(file);
     setThreadCoverPreview(previewUrl);
-    event.target.value = '';
+  }
+
+  async function applyThreadCover(groupId, file) {
+    if (!user?.username || !groupId || !file) return;
+    try {
+      const uploaded = await uploadThreadMedia(file, groupId, 'cover');
+      await submitJson(`/groups/${groupId}/cover`, 'PUT', {
+        actorUsername: user.username,
+        coverImageUrl: uploaded.url,
+        coverS3Key: uploaded.key,
+        coverMediaType: uploaded.mediaType || 'image',
+      });
+      reportStatus('Cover photo updated.');
+    } catch (error) {
+      reportError(error.message || 'Could not update cover photo.');
+    }
+  }
+
+  function promptThreadCover(group) {
+    coverTargetGroupRef.current = group;
+    threadCoverInputRef.current?.click();
+  }
+
+  async function handleDeleteThread(group) {
+    if (!group?.id || !user?.username) return;
+    const nestedCount = (bootstrap.groups || []).filter((entry) => entry.parentGroupId === group.id).length;
+    const nestedNote = nestedCount
+      ? `\nThis will also delete ${nestedCount} nested thread${nestedCount === 1 ? '' : 's'} and their albums.`
+      : '';
+    const confirmed = window.confirm(`Delete thread "${group.name}"?${nestedNote}\n\nThis cannot be undone.`);
+    if (!confirmed) return;
+    try {
+      const payload = await submitJson(`/groups/${group.id}`, 'DELETE', { actorUsername: user.username }, () => null);
+      const remainingIds = new Set((payload.groups || []).map((entry) => entry.id));
+      if (activeChat?.type === 'group' && !remainingIds.has(activeChat.id)) {
+        leaveActiveThread();
+      }
+      reportStatus('Thread deleted.');
+    } catch (error) {
+      reportError(error.message || 'Could not delete thread.');
+    }
+  }
+
+  async function handleSaveTripDetails(event) {
+    event.preventDefault();
+    if (!selectedGroup || !user?.username) return;
+    try {
+      await submitJson(`/groups/${selectedGroup.id}/trip`, 'PUT', {
+        actorUsername: user.username,
+        threadKind: groupSettingsForm.threadKind || 'trip',
+        destination: String(groupSettingsForm.destination || '').trim(),
+        eventStartAt: groupSettingsForm.eventStartAt || '',
+        eventEndAt: null,
+        budgetEstimate: String(groupSettingsForm.budgetEstimate || '').trim(),
+      });
+      reportStatus('Trip details saved.');
+    } catch (error) {
+      reportError(error.message || 'Could not save trip details.');
+    }
+  }
+
+  async function handleSaveBudget(budgetJson) {
+    if (!selectedGroup || !user?.username) return;
+    await submitJson(`/groups/${selectedGroup.id}/trip`, 'PUT', {
+      actorUsername: user.username,
+      threadKind: selectedGroup.threadKind || 'trip',
+      destination: selectedGroup.destination || '',
+      eventStartAt: selectedGroup.eventStartAt || '',
+      eventEndAt: null,
+      budgetEstimate: budgetJson,
+    });
+    reportStatus('Budget updated.');
   }
 
   async function handleUpdateVisibility(event) {
@@ -2445,71 +2605,39 @@ export default function ChatPage() {
   }
 
   function enterThread(group, mode = 'chat') {
-    setShowThreadModeModal(false);
-    setThreadModePickerGroup(null);
     selectChat({ type: 'group', id: group.id, name: group.name, label: group.name });
     setShowInviteModal(false);
-    setActivePanelTab(mode === 'albums' ? 'albums' : '');
+    setActivePanelTab(mode === 'albums' ? 'albums' : mode === 'details' ? 'details' : '');
+    setThreadPickerGroup(null);
     setShowSidebar(false);
   }
 
   function openThread(group, mode = null) {
-    enterThread(group, mode === 'albums' ? 'albums' : 'chat');
+    if (mode === 'albums' || mode === 'details' || mode === 'chat') {
+      enterThread(group, mode === 'chat' ? 'chat' : mode);
+      return;
+    }
+    setThreadPickerGroup(group);
   }
 
   function renderThreadBrowseStrip() {
     if (!selectedGroup || activeChat?.type !== 'group' || showChatHub) return null;
-    const rootFolders = buildFolderTree(selectedGroup.folders || []).get(null) || [];
-    if (!childGroups.length && !rootFolders.length) return null;
+    if (!childGroups.length) return null;
 
     return (
-      <div className="chat-thread-browse" style={{ padding: '12px 14px', borderBottom: `1px solid ${theme.cardBorder}`, background: theme.panelBg, display: 'grid', gap: '12px' }}>
-        {childGroups.length ? (
-          <div style={styles.threadFolderScroll}>
-            <div style={styles.threadFolderHeader}>
-              <div style={styles.threadFolderTitle}>Sub-threads</div>
-              <div style={styles.threadFolderSubtitle}>Open a nested thread without leaving this space</div>
-            </div>
-            <div style={styles.threadFolderGrid}>
-              {childGroups.map((group) => (
-                <button key={group.id} type="button" style={styles.threadFolderCard} onClick={() => selectGroup(group)}>
-                  <div style={styles.threadFolderCover}>🧵</div>
-                  <div style={styles.threadFolderBody}>
-                    <div style={styles.threadFolderName}>{group.name}</div>
-                    <div style={styles.threadFolderMeta}>{(group.memberships || []).length} members</div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-        {rootFolders.length ? (
-          <div style={styles.threadFolderScroll}>
-            <div style={styles.threadFolderHeader}>
-              <div style={styles.threadFolderTitle}>Album folders</div>
-              <div style={styles.threadFolderSubtitle}>Browse photos and create nested folders from Albums</div>
-            </div>
-            <div style={styles.threadFolderGrid}>
-              {rootFolders.map((folder) => (
-                <button
-                  key={folder.id}
-                  type="button"
-                  style={styles.threadFolderCard}
-                  onClick={() => {
-                    setActivePanelTab('albums');
-                    setSelectedUploadFolderId(folder.id);
-                  }}
-                >
-                  <div style={styles.threadFolderCover}>📁</div>
-                  <div style={styles.threadFolderBody}>
-                    <div style={styles.threadFolderName}>{folder.name}</div>
-                    <div style={styles.threadFolderMeta}>{(folder.items || []).length} items</div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
+      <div className="chat-thread-browse" style={styles.threadSubStrip}>
+        <span style={{ fontSize: 11, fontWeight: 800, color: theme.textMuted, flexShrink: 0 }}>Nested</span>
+        {childGroups.map((group) => (
+          <button
+            key={group.id}
+            type="button"
+            className="chat-thread-subchip"
+            style={styles.threadSubChip}
+            onClick={() => selectGroup(group)}
+          >
+            {group.name}
+          </button>
+        ))}
       </div>
     );
   }
@@ -2656,9 +2784,11 @@ export default function ChatPage() {
     ? `https://meet.jit.si/cosmix-thread-${String(selectedGroup.id).replace(/[^a-zA-Z0-9-]/g, '-')}`
     : '';
   const isAlbumsPanelOpen = activePanelTab === 'albums' || activePanelTab === 'folders' || activePanelTab === 'media';
+  const isDetailsPanelOpen = activePanelTab === 'details';
   const onMobileThreadChatView = !activePanelTab && !showInviteModal;
   const showMobileChatTool = selectedGroup && isNarrowScreen && !onMobileThreadChatView;
   const showMobileAlbumsTool = selectedGroup && isNarrowScreen && !isAlbumsPanelOpen;
+  const showMobileDetailsTool = selectedGroup && isNarrowScreen && !isDetailsPanelOpen;
   const showMobileInviteTool = selectedGroup && isNarrowScreen && !showInviteModal;
 
   // ── panel render helpers ────────────────────────────────────────────────
@@ -2969,12 +3099,42 @@ export default function ChatPage() {
     ) : null;
 
     if (!isGroupOwner) {
-      return wallpaperBlock || <p style={styles.helperText}>Only the group owner can manage settings.</p>;
+      return (
+        <>
+          {wallpaperBlock}
+          {canInviteToGroup ? (
+            <div style={styles.formRow}>
+              <p style={styles.label}>Cover photo</p>
+              <button type="button" style={{ ...styles.btn, ...styles.btnSecondary }} onClick={() => promptThreadCover(selectedGroup)}>
+                {selectedGroup.coverImageUrl ? 'Change cover photo' : 'Add cover photo'}
+              </button>
+            </div>
+          ) : null}
+          {wallpaperBlock || canInviteToGroup ? null : <p style={styles.helperText}>Only the group owner can manage settings.</p>}
+        </>
+      );
     }
 
     return (
       <>
         {wallpaperBlock}
+        <div style={styles.formRow}>
+          <p style={styles.label}>Cover photo</p>
+          <button type="button" style={{ ...styles.btn, ...styles.btnSecondary }} onClick={() => promptThreadCover(selectedGroup)}>
+            {selectedGroup.coverImageUrl ? 'Change cover photo' : 'Add cover photo'}
+          </button>
+        </div>
+        <form style={styles.formRow} onSubmit={handleSaveTripDetails}>
+          <p style={styles.label}>Trip / event details</p>
+          <input style={styles.input} value={groupSettingsForm.destination} onChange={(e) => setGroupSettingsForm((p) => ({ ...p, destination: e.target.value }))} placeholder="Place (search a city)" />
+          <input style={styles.input} type="date" value={groupSettingsForm.eventStartAt} onChange={(e) => setGroupSettingsForm((p) => ({ ...p, eventStartAt: e.target.value }))} aria-label="Travel date" />
+          <label style={styles.helperText}>
+            <input type="checkbox" checked={groupSettingsForm.threadKind !== 'memory'} onChange={(e) => setGroupSettingsForm((p) => ({ ...p, threadKind: e.target.checked ? 'trip' : 'memory' }))} />
+            {' '}Weather & news
+          </label>
+          <input style={styles.input} value={groupSettingsForm.budgetEstimate} onChange={(e) => setGroupSettingsForm((p) => ({ ...p, budgetEstimate: e.target.value }))} placeholder="Budget estimate (optional)" />
+          <button type="submit" style={styles.btn}>Save trip details</button>
+        </form>
         <form style={styles.formRow} onSubmit={handleSaveGroupSettings}>
           <p style={styles.label}>Group Settings</p>
           <label style={styles.helperText}>
@@ -3017,6 +3177,12 @@ export default function ChatPage() {
           </div>
           <button type="submit" style={{ ...styles.btn, ...styles.btnSecondary }}>Update Member</button>
         </form>
+        <div style={styles.formRow}>
+          <p style={styles.label}>Danger zone</p>
+          <button type="button" style={{ ...styles.btn, background: '#7f1d1d', borderColor: '#7f1d1d' }} onClick={() => handleDeleteThread(selectedGroup)}>
+            Delete thread
+          </button>
+        </div>
       </>
     );
   }
@@ -3036,6 +3202,7 @@ export default function ChatPage() {
 
   return (
     <div className="chat-root" style={styles.root}>
+      <input ref={threadCoverInputRef} type="file" accept="image/*,video/*" style={{ display: 'none' }} onChange={handleThreadCoverPick} />
       {/* Mobile backdrop */}
       {isNarrowScreen && showSidebar ? <div style={styles.backdrop} className="sidebar-backdrop" onClick={() => setShowSidebar(false)} /> : null}
 
@@ -3204,6 +3371,9 @@ export default function ChatPage() {
                   {showMobileAlbumsTool ? (
                     <button type="button" title="Albums" className="chat-mobile-tool" onClick={() => openThreadPanel('albums')}>📸</button>
                   ) : null}
+                  {showMobileDetailsTool ? (
+                    <button type="button" title="Details" className="chat-mobile-tool" onClick={() => openThreadPanel('details')}>🧭</button>
+                  ) : null}
                   {showMobileInviteTool ? (
                     <button type="button" title="Invite" className="chat-mobile-tool" onClick={() => openInviteModal()}>🔗</button>
                   ) : null}
@@ -3237,6 +3407,7 @@ export default function ChatPage() {
                 <>
                   <button type="button" title="Members" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(activePanelTab === 'members' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'members' ? '' : 'members')}>👥</button>
                   <button type="button" title="Albums" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(activePanelTab === 'albums' ? styles.iconBtnActive : {}) }} onClick={() => openThreadPanel(activePanelTab === 'albums' ? '' : 'albums')}>📸</button>
+                  <button type="button" title="Details" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(activePanelTab === 'details' ? styles.iconBtnActive : {}) }} onClick={() => openThreadPanel(activePanelTab === 'details' ? '' : 'details')}>🧭</button>
                   <button type="button" title="Bookmarks" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(activePanelTab === 'bookmarks' ? styles.iconBtnActive : {}) }} onClick={() => openThreadPanel(activePanelTab === 'bookmarks' ? '' : 'bookmarks')}>🔖</button>
                   <button type="button" title="Invite" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(showInviteModal ? styles.iconBtnActive : {}) }} onClick={() => (showInviteModal ? closeInviteModal() : openInviteModal())}>🔗</button>
                   {(isGroupOwner || canInviteToGroup) && <button type="button" title="Settings" className="chat-top-icon chat-top-icon--desktop" style={{ ...styles.iconBtn, ...(activePanelTab === 'settings' ? styles.iconBtnActive : {}) }} onClick={() => setActivePanelTab(activePanelTab === 'settings' ? '' : 'settings')}>⚙️</button>}
@@ -3309,6 +3480,9 @@ export default function ChatPage() {
               onJoinThread={() => openJoinThreadModal()}
               onAcceptBuddy={handleAcceptBuddy}
               onMoveThread={handleMoveThread}
+              onDeleteThread={handleDeleteThread}
+              onChangeCover={promptThreadCover}
+              currentUsername={user?.username}
               isBootstrapLoading={!bootstrapReady}
             />
             </>
@@ -3353,9 +3527,16 @@ export default function ChatPage() {
             </div>
           ) : null}
 
-          {!showVideoCall && !showChatHub && !mobilePanelOpen && (!isAlbumsPanelOpen || !isNarrowScreen) ? (
-          <>
+          {!showVideoCall && !showChatHub && !mobilePanelOpen && !isDetailsPanelOpen && (!isAlbumsPanelOpen || !isNarrowScreen) ? (
+          <div className="chat-thread-pane">
           {renderThreadBrowseStrip()}
+          {selectedGroup && activeChat?.type === 'group' ? (
+            <div style={{ display: 'flex', gap: 8, padding: '0 12px 8px', flexShrink: 0 }}>
+              <button type="button" className="chat-mobile-tool" onClick={() => setShowBookmarkedOnly((value) => !value)} style={{ width: 'auto', padding: '6px 10px', fontSize: 11 }}>
+                {showBookmarkedOnly ? 'Show all messages' : '🔖 Bookmarked only'}
+              </button>
+            </div>
+          ) : null}
           <div ref={messagesContainerRef} className={`chat-messages${activeChat ? ' chat-messages--thread' : ''}`} style={{
             ...styles.messages,
             ...(activeChat?.type === 'group' && selectedGroup ? resolveThreadWallpaper(selectedGroup) : {}),
@@ -3364,7 +3545,7 @@ export default function ChatPage() {
               const isOwn = message.user === user?.username;
               const parsed = parseReplyEnvelope(message.text || message.gif || '');
               return (
-                <div key={message.id || `${message.user}-${message.timestamp}`} className="msg-group" style={{ display: 'flex', flexDirection: 'column' }}>
+                <div key={message.id || `${message.user}-${message.timestamp}`} className="msg-group" style={{ display: 'flex', flexDirection: 'column', width: '100%', maxWidth: '100%', minWidth: 0 }}>
                   <div className={isOwn ? 'msg-row-own' : 'msg-row-other'} style={{ ...styles.msgRow, ...(isOwn ? styles.msgRowOwn : styles.msgRowOther) }}>
                     {!isOwn && (
                       <div style={{ ...styles.msgAvatar, background: getUserColor(message.user || 'user', theme) }}>
@@ -3449,20 +3630,29 @@ export default function ChatPage() {
             )}
             <div ref={messagesEndRef} />
           </div>
-          </>
+          </div>
           ) : null}
 
           {activePanelTab && selectedGroup && activePanelTab !== 'invite' ? (
-            <div className={`side-panel${activePanelTab === 'albums' || activePanelTab === 'folders' || activePanelTab === 'media' ? ' side-panel--albums' : ''}${mobilePanelOpen ? ' side-panel--mobile-full' : ''}`} style={mobilePanelOpen ? { ...styles.sidePanel, width: '100%', borderLeft: 'none' } : styles.sidePanel}>
+            <div className={`side-panel${activePanelTab === 'albums' || activePanelTab === 'folders' || activePanelTab === 'media' || activePanelTab === 'details' ? ' side-panel--albums' : ''}${mobilePanelOpen || isDetailsPanelOpen ? ' side-panel--mobile-full' : ''}`} style={(mobilePanelOpen || isDetailsPanelOpen) ? { ...styles.sidePanel, width: '100%', borderLeft: 'none' } : styles.sidePanel}>
               <div className="side-panel-header-wrap" style={styles.sidePanelHeader}>
                 <p style={styles.sidePanelTitle}>
-                  {activePanelTab === 'members' ? '👥 Members' : activePanelTab === 'albums' || activePanelTab === 'folders' || activePanelTab === 'media' ? '📸 Albums' : activePanelTab === 'bookmarks' ? '🔖 Bookmarks' : activePanelTab === 'invite' ? '🔗 Share' : '⚙️ Settings'}
+                  {activePanelTab === 'members' ? '👥 Members' : activePanelTab === 'albums' || activePanelTab === 'folders' || activePanelTab === 'media' ? '📸 Albums' : activePanelTab === 'details' ? '🧭 Details' : activePanelTab === 'bookmarks' ? '🔖 Bookmarks' : activePanelTab === 'invite' ? '🔗 Share' : '⚙️ Settings'}
                 </p>
-                <button type="button" style={styles.sidePanelClose} onClick={() => setActivePanelTab('')} aria-label="Close panel">{isNarrowScreen ? '← Back' : '✕'}</button>
+                <button type="button" style={styles.sidePanelClose} onClick={() => setActivePanelTab('')} aria-label="Close panel">{isNarrowScreen || isDetailsPanelOpen ? '← Back' : '✕'}</button>
               </div>
               <div className="side-panel-content" style={styles.sidePanelContent}>
                 {activePanelTab === 'members' && renderMembersPanel()}
                 {(activePanelTab === 'albums' || activePanelTab === 'folders' || activePanelTab === 'media') && renderAlbumsPanel()}
+                {activePanelTab === 'details' && (
+                  <ThreadDetailsPanel
+                    group={selectedGroup}
+                    theme={theme}
+                    styles={styles}
+                    canEdit={Boolean(canPostToGroup)}
+                    onSaveBudget={handleSaveBudget}
+                  />
+                )}
                 {activePanelTab === 'bookmarks' && renderBookmarksPanel()}
                 {activePanelTab === 'settings' && renderSettingsPanel()}
               </div>
@@ -3483,6 +3673,7 @@ export default function ChatPage() {
               {[
                 { id: '', icon: '💬', label: 'Chat' },
                 { id: 'albums', icon: '📸', label: 'Albums' },
+                { id: 'details', icon: '🧭', label: 'Details' },
                 { id: 'invite', icon: '🔗', label: 'Invite' },
                 { id: 'members', icon: '👥', label: 'People' },
                 { id: 'bookmarks', icon: '🔖', label: 'Saved' },
@@ -3505,7 +3696,7 @@ export default function ChatPage() {
             </div>
           ) : null}
 
-          {activeChat && (!isNarrowScreen || !mobilePanelOpen) ? (
+          {activeChat && (!isNarrowScreen || !mobilePanelOpen) && !isDetailsPanelOpen ? (
           <>
           {gifOpen ? (
             <div className="chat-gif-panel">
@@ -3566,137 +3757,30 @@ export default function ChatPage() {
         </div>
       </main>
 
+      {threadPickerGroup ? (
+        <ThreadOpenPicker
+          group={threadPickerGroup}
+          theme={theme}
+          styles={styles}
+          onPick={(mode) => openThread(threadPickerGroup, mode)}
+          onClose={() => setThreadPickerGroup(null)}
+        />
+      ) : null}
+
       {showCreateThreadModal ? (
-        <div style={styles.modalBackdrop} onClick={() => setShowCreateThreadModal(false)} role="presentation">
-          <form
-            style={styles.modalPanel}
-            onSubmit={handleCreateGroup}
-            onClick={(event) => event.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="create-thread-title"
-          >
-            <div style={styles.modalHead}>
-              <div>
-                <h2 id="create-thread-title" style={styles.modalTitle}>Create trip thread</h2>
-                <p style={{ ...styles.helperText, margin: '6px 0 0' }}>Example: Goa with family — then nest Day 1 albums inside.</p>
-              </div>
-              <button type="button" style={styles.modalCloseBtn} aria-label="Close" onClick={() => setShowCreateThreadModal(false)}>✕</button>
-            </div>
-            <button type="button" style={{ ...styles.btn, ...styles.btnSecondary, width: 'auto', padding: '10px 12px', marginBottom: '10px' }} onClick={() => threadCoverInputRef.current?.click()}>
-              {threadCoverPreview ? 'Change cover photo/video' : '📷 Add cover photo/video'}
-            </button>
-            <input ref={threadCoverInputRef} type="file" accept="image/*,video/*" style={{ display: 'none' }} onChange={handleThreadCoverPick} />
-            {threadCoverPreview ? (
-              <div style={{ borderRadius: '14px', overflow: 'hidden', border: `1px solid ${theme.cardBorder}`, marginBottom: '10px' }}>
-                {threadCoverFile && threadCoverFile.type.startsWith('video/') ? (
-                  <video src={threadCoverPreview} style={{ width: '100%', maxHeight: '160px', objectFit: 'cover', display: 'block' }} muted playsInline />
-                ) : (
-                  <img src={threadCoverPreview} alt="Thread cover preview" style={{ width: '100%', maxHeight: '160px', objectFit: 'cover', display: 'block' }} />
-                )}
-              </div>
-            ) : (
-              <p style={styles.helperText}>Cover appears on the invite link when you share on WhatsApp.</p>
-            )}
-            <input style={styles.input} value={groupForm.name} onChange={(e) => setGroupForm((p) => ({ ...p, name: e.target.value }))} placeholder="Thread name (e.g. Goa family 2026)" autoFocus />
-            <textarea style={{ ...styles.input, minHeight: '72px', resize: 'vertical' }} value={groupForm.description} onChange={(e) => setGroupForm((p) => ({ ...p, description: e.target.value }))} placeholder="What is this thread about?" />
-            <select style={styles.select} value={groupForm.parentGroupId} onChange={(e) => setGroupForm((p) => ({ ...p, parentGroupId: e.target.value }))}>
-              <option value="">Top-level thread</option>
-              {flattenedGroups.map(({ group, depth }) => (
-                <option key={group.id} value={group.id}>{`${'— '.repeat(depth)}${group.name}`}</option>
-              ))}
-            </select>
-            <details style={{
-              border: `1px solid ${theme.inputBorder}`,
-              borderRadius: '12px',
-              background: theme.inputBg,
-              overflow: 'hidden',
-            }}>
-              <summary style={{
-                padding: '10px 12px',
-                color: theme.textPrimary,
-                fontSize: '13px',
-                fontWeight: 700,
-                cursor: 'pointer',
-                listStylePosition: 'inside',
-              }}>
-                Select friends ({Object.keys(groupForm.friendRoles || {}).length} selected)
-              </summary>
-              <div style={{
-                display: 'grid',
-                gap: '8px',
-                maxHeight: '240px',
-                overflowY: 'auto',
-                padding: '4px 10px 10px',
-              }}>
-                {bootstrap.friends.length ? bootstrap.friends.map((friend) => {
-                  const role = groupForm.friendRoles?.[friend] || '';
-                  const selected = Boolean(role);
-                  const setFriendRole = (nextRole) => {
-                    setGroupForm((previous) => {
-                      const friendRoles = { ...(previous.friendRoles || {}) };
-                      if (nextRole) friendRoles[friend] = nextRole;
-                      else delete friendRoles[friend];
-                      return { ...previous, friendRoles };
-                    });
-                  };
-                  return (
-                    <div
-                      key={friend}
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: 'minmax(0, 1fr) auto',
-                        gap: '10px',
-                        alignItems: 'center',
-                        padding: '9px 10px',
-                        borderRadius: '10px',
-                        border: `1px solid ${selected ? theme.blue : theme.cardBorder}`,
-                        background: selected ? `${theme.blue}12` : theme.cardBg,
-                      }}
-                    >
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, cursor: 'pointer' }}>
-                        <input
-                          type="checkbox"
-                          checked={selected}
-                          onChange={(event) => setFriendRole(event.target.checked ? 'member' : '')}
-                        />
-                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', fontSize: '13px', fontWeight: 700, color: theme.textPrimary }}>
-                          @{friend}
-                        </span>
-                      </label>
-                      {selected ? (
-                        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                          <label style={{ display: 'flex', gap: '4px', alignItems: 'center', color: theme.textMuted, fontSize: '11px', cursor: 'pointer' }}>
-                            <input
-                              type="checkbox"
-                              checked={role === 'admin'}
-                              onChange={(event) => setFriendRole(event.target.checked ? 'admin' : 'member')}
-                            />
-                            Admin
-                          </label>
-                          <label style={{ display: 'flex', gap: '4px', alignItems: 'center', color: theme.textMuted, fontSize: '11px', cursor: 'pointer' }}>
-                            <input
-                              type="checkbox"
-                              checked={role === 'viewer'}
-                              onChange={(event) => setFriendRole(event.target.checked ? 'viewer' : 'member')}
-                            />
-                            Viewer only
-                          </label>
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                }) : (
-                  <p style={styles.helperText}>Add friends first, then select them for this thread.</p>
-                )}
-              </div>
-            </details>
-            <p style={{ ...styles.helperText, margin: '2px 0 0' }}>
-              Selected friends are members by default. Admin can manage the thread; Viewer only cannot post.
-            </p>
-            <button type="submit" style={{ ...styles.btn, marginTop: '4px' }} disabled={creatingThread}>{creatingThread ? 'Creating…' : 'Create Thread'}</button>
-          </form>
-        </div>
+        <CreateThreadModal
+          theme={theme}
+          styles={styles}
+          friends={bootstrap.friends}
+          groupForm={groupForm}
+          setGroupForm={setGroupForm}
+          threadCoverPreview={threadCoverPreview}
+          threadCoverFile={threadCoverFile}
+          onPickCover={() => threadCoverInputRef.current?.click()}
+          onClose={() => setShowCreateThreadModal(false)}
+          onSubmit={handleCreateGroup}
+          creatingThread={creatingThread}
+        />
       ) : null}
 
       {showInviteModal && selectedGroup ? (
@@ -3851,6 +3935,31 @@ export default function ChatPage() {
           min-height: 0;
           display: flex;
           flex-direction: column;
+        }
+        .chat-thread-pane {
+          flex: 1;
+          min-width: 0;
+          min-height: 0;
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+        }
+        .chat-messages {
+          flex: 1;
+          min-height: 0;
+          min-width: 0;
+          scrollbar-width: thin;
+          scrollbar-color: rgba(255,255,255,0.18) transparent;
+        }
+        .chat-messages::-webkit-scrollbar {
+          width: 8px;
+        }
+        .chat-messages::-webkit-scrollbar-thumb {
+          background: rgba(255,255,255,0.18);
+          border-radius: 999px;
+        }
+        .chat-thread-browse {
+          flex-shrink: 0;
         }
         .chat-push-banner {
           display: flex;

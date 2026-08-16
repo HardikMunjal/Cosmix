@@ -103,6 +103,11 @@ type GroupRecord = {
     coverS3Key: string | null;
     coverMediaType: 'image' | 'video' | null;
     wallpaperUrl: string | null;
+    threadKind: 'trip' | 'memory';
+    destination: string;
+    eventStartAt: string | null;
+    eventEndAt: string | null;
+    budgetEstimate: string;
     createdAt: string;
     updatedAt: string;
 };
@@ -185,6 +190,11 @@ type GroupView = {
     coverS3Key: string | null;
     coverMediaType: 'image' | 'video' | null;
     wallpaperUrl: string | null;
+    threadKind: 'trip' | 'memory';
+    destination: string;
+    eventStartAt: string | null;
+    eventEndAt: string | null;
+    budgetEstimate: string;
     createdAt: string;
     memberships: GroupMembershipView[];
     images: GroupImageView[];
@@ -252,6 +262,11 @@ type GroupRow = {
     cover_s3_key: string | null;
     cover_media_type: string | null;
     wallpaper_url: string | null;
+    thread_kind: string | null;
+    destination: string | null;
+    event_start_at: Date | string | null;
+    event_end_at: Date | string | null;
+    budget_estimate: string | null;
     created_at: Date;
     updated_at: Date;
 };
@@ -647,6 +662,56 @@ export class ChatService {
             .replace(/^-+|-+$/g, '') || 'group';
     }
 
+    private dateOnly(value: unknown): string | null {
+        const raw = String(value || '').trim();
+        if (!raw) return null;
+        const match = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+        if (match) return match[1];
+        const parsed = new Date(raw);
+        if (Number.isNaN(parsed.getTime())) return null;
+        return parsed.toISOString().slice(0, 10);
+    }
+
+    private normalizeThreadKind(value: unknown): 'trip' | 'memory' {
+        return String(value || '').trim().toLowerCase() === 'memory' ? 'memory' : 'trip';
+    }
+
+    private parseTripFields(payload: {
+        threadKind?: string | null;
+        destination?: string | null;
+        eventStartAt?: string | null;
+        eventEndAt?: string | null;
+        budgetEstimate?: string | null;
+    }) {
+        const eventStartAt = this.dateOnly(payload.eventStartAt);
+        let eventEndAt = this.dateOnly(payload.eventEndAt);
+        if (eventStartAt && eventEndAt && eventEndAt < eventStartAt) {
+            eventEndAt = eventStartAt;
+        }
+        return {
+            threadKind: this.normalizeThreadKind(payload.threadKind),
+            destination: String(payload.destination || '').trim(),
+            eventStartAt,
+            eventEndAt,
+            budgetEstimate: String(payload.budgetEstimate || '').trim(),
+        };
+    }
+
+    private collectDescendantGroupIds(allGroups: Array<{ id: string; parentGroupId: string | null }>, rootId: string) {
+        const ids = [rootId];
+        const queue = [rootId];
+        while (queue.length) {
+            const current = queue.shift() as string;
+            for (const group of allGroups) {
+                if (group.parentGroupId === current && !ids.includes(group.id)) {
+                    ids.push(group.id);
+                    queue.push(group.id);
+                }
+            }
+        }
+        return ids;
+    }
+
     private buildShareToken() {
         return crypto.randomBytes(8).toString('hex');
     }
@@ -859,6 +924,11 @@ export class ChatService {
             coverS3Key: group.coverS3Key ?? null,
             coverMediaType: group.coverMediaType ?? null,
             wallpaperUrl: group.wallpaperUrl ?? null,
+            threadKind: group.threadKind || 'trip',
+            destination: group.destination || '',
+            eventStartAt: group.eventStartAt ?? null,
+            eventEndAt: group.eventEndAt ?? null,
+            budgetEstimate: group.budgetEstimate || '',
             createdAt: group.createdAt,
             memberships: memberships
                 .slice()
@@ -992,6 +1062,11 @@ export class ChatService {
                 ALTER TABLE chat_groups ADD COLUMN IF NOT EXISTS cover_s3_key TEXT;
                 ALTER TABLE chat_groups ADD COLUMN IF NOT EXISTS cover_media_type TEXT;
                 ALTER TABLE chat_groups ADD COLUMN IF NOT EXISTS wallpaper_url TEXT;
+                ALTER TABLE chat_groups ADD COLUMN IF NOT EXISTS thread_kind TEXT;
+                ALTER TABLE chat_groups ADD COLUMN IF NOT EXISTS destination TEXT;
+                ALTER TABLE chat_groups ADD COLUMN IF NOT EXISTS event_start_at DATE;
+                ALTER TABLE chat_groups ADD COLUMN IF NOT EXISTS event_end_at DATE;
+                ALTER TABLE chat_groups ADD COLUMN IF NOT EXISTS budget_estimate TEXT;
 
                 CREATE INDEX IF NOT EXISTS idx_chat_groups_parent ON chat_groups(parent_group_id);
                 CREATE INDEX IF NOT EXISTS idx_chat_groups_created_by ON chat_groups(created_by);
@@ -1226,7 +1301,8 @@ export class ChatService {
         }
     }
 
-    async getBootstrap(username: string): Promise<BootstrapPayload> {
+    async getBootstrap(username: string, options: { includeMedia?: boolean } = {}): Promise<BootstrapPayload> {
+        const includeMedia = options.includeMedia !== false;
         const normalizedUsername = this.normalizeUsername(username);
         const pushPreferences = await this.getPushPreferences(normalizedUsername);
         if (this.hasDatabase()) {
@@ -1246,19 +1322,23 @@ export class ChatService {
                 const [groupsResult, membershipsResult, imagesResult] = await Promise.all([
                     pool?.query('SELECT * FROM chat_groups WHERE id = ANY($1::text[]) ORDER BY created_at DESC', [groupIds]),
                     pool?.query('SELECT * FROM chat_group_memberships WHERE group_id = ANY($1::text[]) ORDER BY created_at ASC', [groupIds]),
-                    pool?.query('SELECT * FROM chat_group_images WHERE group_id = ANY($1::text[]) ORDER BY created_at DESC', [groupIds]),
+                    includeMedia
+                        ? pool?.query('SELECT * FROM chat_group_images WHERE group_id = ANY($1::text[]) ORDER BY created_at DESC', [groupIds])
+                        : Promise.resolve({ rows: [] }),
                 ]);
                 const groupRows = (groupsResult?.rows || []) as GroupRow[];
                 const membershipRows = (membershipsResult?.rows || []) as GroupMembershipRow[];
                 const imageRows = (imagesResult?.rows || []) as GroupImageRow[];
                 const imageIds = imageRows.map((row) => row.id);
                 const [commentsResult, settingsResult, foldersResult, folderItemsResult, bookmarksResult] = await Promise.all([
-                    imageIds.length
+                    includeMedia && imageIds.length
                         ? pool?.query('SELECT * FROM chat_group_image_comments WHERE image_id = ANY($1::text[]) ORDER BY created_at ASC', [imageIds])
                         : Promise.resolve({ rows: [] }),
                     pool?.query('SELECT * FROM chat_group_settings WHERE group_id = ANY($1::text[])', [groupIds]),
                     pool?.query('SELECT * FROM chat_group_folders WHERE group_id = ANY($1::text[]) ORDER BY created_at DESC', [groupIds]),
-                    pool?.query('SELECT * FROM chat_group_folder_items WHERE group_id = ANY($1::text[]) ORDER BY created_at DESC', [groupIds]),
+                    includeMedia
+                        ? pool?.query('SELECT * FROM chat_group_folder_items WHERE group_id = ANY($1::text[]) ORDER BY created_at DESC', [groupIds])
+                        : Promise.resolve({ rows: [] }),
                     pool?.query('SELECT * FROM chat_message_bookmarks WHERE group_id = ANY($1::text[]) ORDER BY created_at DESC', [groupIds]),
                 ]);
                 const commentRows = (commentsResult?.rows || []) as GroupImageCommentRow[];
@@ -1279,6 +1359,11 @@ export class ChatService {
                         coverS3Key: groupRow.cover_s3_key ?? null,
                         coverMediaType: (groupRow.cover_media_type === 'video' ? 'video' : groupRow.cover_media_type === 'image' ? 'image' : null),
                         wallpaperUrl: groupRow.wallpaper_url ?? null,
+                        threadKind: this.normalizeThreadKind(groupRow.thread_kind),
+                        destination: groupRow.destination || '',
+                        eventStartAt: this.dateOnly(groupRow.event_start_at),
+                        eventEndAt: this.dateOnly(groupRow.event_end_at),
+                        budgetEstimate: groupRow.budget_estimate || '',
                         createdAt: groupRow.created_at.toISOString(),
                         updatedAt: groupRow.updated_at.toISOString(),
                     },
@@ -1683,6 +1768,45 @@ export class ChatService {
         }
     }
 
+    private async notifyGroupAlbumPush(groupId: string, senderUsername: string, mediaType: 'image' | 'video') {
+        try {
+            const sender = this.normalizeUsername(senderUsername);
+            const recipients = (await this.groupMemberUsernames(groupId)).filter((username) => (
+                this.normalizeUsername(username).toLowerCase() !== sender.toLowerCase()
+            ));
+            const group = this.hasDatabase()
+                ? await (async () => {
+                    const pool = await this.ensureSchema();
+                    const result = await pool?.query('SELECT name FROM chat_groups WHERE id = $1 LIMIT 1', [groupId]);
+                    return String(result?.rows?.[0]?.name || 'thread');
+                })()
+                : (this.groups.find((entry) => entry.id === groupId)?.name || 'thread');
+            const title = `New ${mediaType === 'video' ? 'video' : 'photo'} in ${group}`;
+            const body = `${sender} added a ${mediaType === 'video' ? 'video' : 'photo'} to albums`;
+            const url = `/chat?thread=${encodeURIComponent(groupId)}&view=albums`;
+            await this.createInboxNotifications(recipients, {
+                groupId,
+                groupName: group,
+                senderUsername: sender,
+                title,
+                body,
+                url,
+            });
+            void this.sendPushToUsers(recipients, {
+                title,
+                body,
+                url,
+                tag: `album-${groupId}-${Date.now()}`,
+            }, {
+                type: 'group',
+                senderUsername: sender,
+                groupId,
+            });
+        } catch (_) {
+            // Album push must not block uploads.
+        }
+    }
+
     private async createInboxNotifications(
         usernames: string[],
         payload: { groupId?: string; groupName?: string; senderUsername?: string; title: string; body: string; url?: string },
@@ -1884,6 +2008,11 @@ export class ChatService {
             coverS3Key?: string | null;
             coverMediaType?: 'image' | 'video' | null;
             joinPassword?: string | null;
+            threadKind?: string | null;
+            destination?: string | null;
+            eventStartAt?: string | null;
+            eventEndAt?: string | null;
+            budgetEstimate?: string | null;
         },
     ) {
         const actor = this.normalizeUsername(actorUsername);
@@ -1921,6 +2050,7 @@ export class ChatService {
                     && !adminUsernames.includes(username)
                     && !memberUsernames.includes(username)),
         ));
+        const trip = this.parseTripFields(payload);
         const groupRecord: GroupRecord = {
             id: groupId,
             name,
@@ -1933,6 +2063,11 @@ export class ChatService {
             coverS3Key,
             coverMediaType,
             wallpaperUrl: null,
+            threadKind: trip.threadKind,
+            destination: trip.destination,
+            eventStartAt: trip.eventStartAt,
+            eventEndAt: trip.eventEndAt,
+            budgetEstimate: trip.budgetEstimate,
             createdAt: now,
             updatedAt: now,
         };
@@ -1950,8 +2085,10 @@ export class ChatService {
             await pool?.query(
                 `INSERT INTO chat_groups (
                     id, name, slug, description, parent_group_id, created_by, share_token,
-                    cover_image_url, cover_s3_key, cover_media_type, created_at, updated_at
-                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)`,
+                    cover_image_url, cover_s3_key, cover_media_type,
+                    thread_kind, destination, event_start_at, event_end_at, budget_estimate,
+                    created_at, updated_at
+                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $16)`,
                 [
                     groupRecord.id,
                     groupRecord.name,
@@ -1963,6 +2100,11 @@ export class ChatService {
                     groupRecord.coverImageUrl,
                     groupRecord.coverS3Key,
                     groupRecord.coverMediaType,
+                    groupRecord.threadKind,
+                    groupRecord.destination,
+                    groupRecord.eventStartAt,
+                    groupRecord.eventEndAt,
+                    groupRecord.budgetEstimate,
                     groupRecord.createdAt,
                 ],
             );
@@ -2047,6 +2189,94 @@ export class ChatService {
         group.updatedAt = now;
         const bootstrap = await this.getBootstrap(actor);
         return { ...bootstrap, updatedGroupId: groupId };
+    }
+
+    async updateGroupTrip(
+        actorUsername: string,
+        groupId: string,
+        payload: {
+            threadKind?: string | null;
+            destination?: string | null;
+            eventStartAt?: string | null;
+            eventEndAt?: string | null;
+            budgetEstimate?: string | null;
+        },
+    ) {
+        const actor = this.normalizeUsername(actorUsername);
+        await this.assertGroupPermission(actor, groupId, 'post');
+        const trip = this.parseTripFields(payload);
+        const now = this.nowIso();
+
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            await pool?.query(
+                `UPDATE chat_groups
+                 SET thread_kind = $1, destination = $2, event_start_at = $3, event_end_at = $4,
+                     budget_estimate = $5, updated_at = $6
+                 WHERE id = $7`,
+                [trip.threadKind, trip.destination, trip.eventStartAt, trip.eventEndAt, trip.budgetEstimate, now, groupId],
+            );
+            const bootstrap = await this.getBootstrap(actor);
+            return { ...bootstrap, updatedGroupId: groupId };
+        }
+
+        const group = this.groups.find((entry) => entry.id === groupId);
+        if (!group) {
+            throw new NotFoundException('Group not found.');
+        }
+        group.threadKind = trip.threadKind;
+        group.destination = trip.destination;
+        group.eventStartAt = trip.eventStartAt;
+        group.eventEndAt = trip.eventEndAt;
+        group.budgetEstimate = trip.budgetEstimate;
+        group.updatedAt = now;
+        const bootstrap = await this.getBootstrap(actor);
+        return { ...bootstrap, updatedGroupId: groupId };
+    }
+
+    async deleteGroup(actorUsername: string, groupId: string) {
+        const actor = this.normalizeUsername(actorUsername);
+        await this.assertGroupOwner(actor, groupId);
+
+        const allGroups = this.hasDatabase()
+            ? await (async () => {
+                const pool = await this.ensureSchema();
+                const result = await pool?.query('SELECT id, parent_group_id FROM chat_groups');
+                return (result?.rows || []).map((row: { id: string; parent_group_id: string | null }) => ({
+                    id: row.id,
+                    parentGroupId: row.parent_group_id || null,
+                }));
+            })()
+            : this.groups.map((group) => ({ id: group.id, parentGroupId: group.parentGroupId }));
+
+        const groupIds = this.collectDescendantGroupIds(allGroups, groupId);
+
+        if (this.hasDatabase()) {
+            const pool = await this.ensureSchema();
+            await pool?.query('DELETE FROM chat_group_image_comments WHERE group_id = ANY($1::text[])', [groupIds]);
+            await pool?.query('DELETE FROM chat_group_folder_items WHERE group_id = ANY($1::text[])', [groupIds]);
+            await pool?.query('DELETE FROM chat_group_folders WHERE group_id = ANY($1::text[])', [groupIds]);
+            await pool?.query('DELETE FROM chat_group_images WHERE group_id = ANY($1::text[])', [groupIds]);
+            await pool?.query('DELETE FROM chat_message_bookmarks WHERE group_id = ANY($1::text[])', [groupIds]);
+            await pool?.query(`DELETE FROM chat_messages WHERE chat_type = 'group' AND chat_id = ANY($1::text[])`, [groupIds]);
+            await pool?.query('DELETE FROM chat_group_settings WHERE group_id = ANY($1::text[])', [groupIds]);
+            await pool?.query('DELETE FROM chat_group_memberships WHERE group_id = ANY($1::text[])', [groupIds]);
+            await pool?.query('DELETE FROM chat_inbox_notifications WHERE group_id = ANY($1::text[])', [groupIds]);
+            await pool?.query('DELETE FROM chat_groups WHERE id = ANY($1::text[])', [groupIds]);
+            return this.getBootstrap(actor);
+        }
+
+        const idSet = new Set(groupIds);
+        this.comments = this.comments.filter((entry) => !idSet.has(entry.groupId));
+        this.folderItems = this.folderItems.filter((entry) => !idSet.has(entry.groupId));
+        this.folders = this.folders.filter((entry) => !idSet.has(entry.groupId));
+        this.images = this.images.filter((entry) => !idSet.has(entry.groupId));
+        this.bookmarks = this.bookmarks.filter((entry) => !idSet.has(entry.groupId));
+        this.messages = this.messages.filter((entry) => !(entry.chat?.type === 'group' && idSet.has(entry.chat?.id)));
+        this.groupSettings = this.groupSettings.filter((entry) => !idSet.has(entry.groupId));
+        this.memberships = this.memberships.filter((entry) => !idSet.has(entry.groupId));
+        this.groups = this.groups.filter((entry) => !idSet.has(entry.id));
+        return this.getBootstrap(actor);
     }
 
     async updateGroupWallpaper(
@@ -2796,10 +3026,12 @@ export class ChatService {
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
                 [imageRecord.id, imageRecord.groupId, imageRecord.imageUrl, imageRecord.s3Key, imageRecord.caption, imageRecord.mediaType, imageRecord.uploadedBy, imageRecord.createdAt],
             );
+            void this.notifyGroupAlbumPush(groupId, actor, mediaType);
             return this.getBootstrap(actor);
         }
 
         this.images.push(imageRecord);
+        void this.notifyGroupAlbumPush(groupId, actor, mediaType);
         return this.getBootstrap(actor);
     }
 

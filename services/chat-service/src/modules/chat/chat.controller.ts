@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Put, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
 import { ChatService } from './chat.service';
 
 @Controller('chat')
@@ -89,8 +89,8 @@ export class ChatController {
   }
 
   @Get('bootstrap')
-  getBootstrap(@Query('username') username: string) {
-    return this.chatService.getBootstrap(username);
+  getBootstrap(@Query('username') username: string, @Query('media') media?: string) {
+    return this.chatService.getBootstrap(username, { includeMedia: media !== '0' });
   }
 
   @Post('friends/request')
@@ -117,6 +117,11 @@ export class ChatController {
       coverImageUrl?: string | null;
       coverS3Key?: string | null;
       coverMediaType?: 'image' | 'video' | null;
+      threadKind?: string | null;
+      destination?: string | null;
+      eventStartAt?: string | null;
+      eventEndAt?: string | null;
+      budgetEstimate?: string | null;
     },
   ) {
     return this.chatService.createGroup(body.actorUsername, body);
@@ -134,6 +139,30 @@ export class ChatController {
     },
   ) {
     return this.chatService.updateGroupCover(body.actorUsername, groupId, body);
+  }
+
+  @Put('groups/:groupId/trip')
+  updateGroupTrip(
+    @Param('groupId') groupId: string,
+    @Body()
+    body: {
+      actorUsername: string;
+      threadKind?: string | null;
+      destination?: string | null;
+      eventStartAt?: string | null;
+      eventEndAt?: string | null;
+      budgetEstimate?: string | null;
+    },
+  ) {
+    return this.chatService.updateGroupTrip(body.actorUsername, groupId, body);
+  }
+
+  @Delete('groups/:groupId')
+  deleteGroup(
+    @Param('groupId') groupId: string,
+    @Body() body: { actorUsername: string },
+  ) {
+    return this.chatService.deleteGroup(body.actorUsername, groupId);
   }
 
   @Put('groups/:groupId/wallpaper')

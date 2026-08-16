@@ -17,7 +17,8 @@ self.addEventListener('push', (event) => {
       tag,
       renotify: true,
       silent: false,
-      vibrate: [120, 60, 120],
+      sound: '/sounds/cosmix-space.wav',
+      vibrate: [80, 40, 80, 40, 160],
       data: { url },
       badge: '/icons/cosmix-universe-logo-192.png',
       icon: '/icons/cosmix-universe-logo.png',
@@ -39,6 +40,7 @@ self.addEventListener('notificationclick', (event) => {
         const clientUrl = new URL(client.url);
         if (clientUrl.origin !== target.origin) continue;
         await client.focus();
+        try { client.postMessage({ type: 'COSMIX_OPEN', url: targetUrl }); } catch (_) { /* ignore */ }
         if ('navigate' in client) {
           try { await client.navigate(targetUrl); } catch (_) { /* ignore */ }
         }

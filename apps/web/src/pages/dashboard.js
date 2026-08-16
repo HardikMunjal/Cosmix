@@ -12,6 +12,7 @@ import ThreadsModule from '../modules/dashboard/ThreadsModule';
 import { runStravaAutoSync } from '../lib/stravaAutoSync';
 import { xhrUploadFormData } from '../lib/ThreadUploadProgress';
 import { ACTIVITY_METRIC_DEFS as activityMetricDefs, aggregateActivityTotals } from '../lib/activityMetrics';
+import { ActivityOverviewCharts } from '../lib/activityOverviewCharts';
 import { subscribeToWebPush, getNotificationPermission } from '../lib/webPush';
 import { InstallAppHeaderButton } from '../lib/InstallAppPrompt';
 
@@ -2983,6 +2984,16 @@ export default function Dashboard() {
           background: #020617;
           border-top: 1px solid rgba(148,163,184,0.12);
         }
+        .activity-overview-charts {
+          display: grid;
+          gap: 12px;
+        }
+        @media (min-width: 900px) {
+          .activity-overview-charts {
+            grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+            align-items: start;
+          }
+        }
         .dashboard-home-clubs {
           display: grid;
           grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3727,6 +3738,14 @@ export default function Dashboard() {
         @media (max-width: 720px) {
           .dashboard-home-stage { border-radius: 22px !important; }
           .dashboard-home-body { padding: 10px !important; gap: 10px !important; }
+          .activity-overview-charts { grid-template-columns: 1fr !important; }
+          .activity-breakdown-row {
+            grid-template-columns: 28px minmax(0, 1fr) 40px !important;
+          }
+          .activity-breakdown-row span:nth-child(3),
+          .activity-breakdown-row span:nth-child(4) {
+            display: none;
+          }
           .dashboard-home-stage .dashboard-cockpit { min-height: min(48vh, 420px) !important; }
           .dashboard-page { padding: 12px 12px 88px !important; }
           .dashboard-buddies-stack { gap: 12px !important; }
@@ -3863,6 +3882,27 @@ export default function Dashboard() {
           />
 
           <div className="dashboard-home-body">
+            <ActivityOverviewCharts
+              entries={wellnessData.entries || []}
+              name={String(user?.name || user?.username || '')}
+              onActivityClick={(sport) => router.push(`/running-analytics?sport=${encodeURIComponent(sport)}`)}
+              theme={{
+                ...theme,
+                cardBg: '#0a0a0a',
+                cardBorder: 'rgba(255,255,255,0.08)',
+                textHeading: '#fafafa',
+                textPrimary: '#f4f4f5',
+                textSecondary: '#a1a1aa',
+                textMuted: '#71717a',
+                green: '#22c55e',
+                cyan: '#38bdf8',
+                orange: '#fb923c',
+                purple: '#a78bfa',
+                blue: '#60a5fa',
+                yellow: '#eab308',
+              }}
+            />
+
             <div className="dashboard-home-clubs">
               <div
                 className="dashboard-home-club"
