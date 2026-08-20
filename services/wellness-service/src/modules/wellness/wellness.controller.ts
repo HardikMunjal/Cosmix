@@ -287,9 +287,15 @@ export class WellnessController {
           .filter((activity) => this.stravaService.activityKind(activity) === 'yoga')
           .map((activity) => Number(activity?.id))
           .filter((id) => id > 0);
-        const detailResult = await this.stravaService.enrichRecentActivityDetails(userId, [...runIds, ...walkIds, ...yogaIds], {
-          maxActivities: isFirstSync ? 16 : 22,
-        });
+        const sportIds = activities
+          .filter((activity) => ['badminton', 'swim', 'ride', 'virtualride', 'meditation'].includes(this.stravaService.activityKind(activity)))
+          .map((activity) => Number(activity?.id))
+          .filter((id) => id > 0);
+        const detailResult = await this.stravaService.enrichRecentActivityDetails(
+          userId,
+          [...runIds, ...walkIds, ...yogaIds, ...sportIds],
+          { maxActivities: isFirstSync ? 20 : 28 },
+        );
         detailsEnriched = detailResult.enriched || 0;
       } catch (err) {
         console.error('Strava run detail enrich failed after import:', err);

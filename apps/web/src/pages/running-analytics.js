@@ -41,6 +41,7 @@ import {
 import { sportWellnessPoints } from '../lib/wellnessScoring';
 import {
   ActivityBreakdownCard,
+  ActivityOverviewCharts,
   buildSportActivityRows,
   buildWeeklySumBuckets,
 } from '../lib/activityOverviewCharts';
@@ -136,6 +137,8 @@ function computeSportStats(entries = [], minKey, distKey = null) {
       date: e.date,
       minutes: Number(e[minKey] || 0),
       distance: distKey ? Number(e[distKey] || 0) : null,
+      avgHeartrate: Number(e.stravaAvgHeartRate || e.heartRateAvg || 0) || null,
+      maxHeartrate: Number(e.stravaMaxHeartRate || e.heartRateMax || 0) || null,
     }))
     .sort((a, b) => String(b.date).localeCompare(String(a.date)));
 
@@ -148,8 +151,37 @@ function computeSportStats(entries = [], minKey, distKey = null) {
   const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
   const weekAgoStr = weekAgo.toISOString().slice(0, 10);
   const weeklyMins = rows.filter((r) => (r.date || '') >= weekAgoStr).reduce((s, r) => s + r.minutes, 0);
+  const hrRows = rows.filter((r) => Number(r.avgHeartrate || 0) > 0);
+  const avgHr = hrRows.length ? Math.round(hrRows.reduce((s, r) => s + r.avgHeartrate, 0) / hrRows.length) : null;
+  const maxHr = hrRows.reduce((best, r) => Math.max(best, Number(r.maxHeartrate || r.avgHeartrate || 0)), 0) || null;
 
-  return { rows, totalMinutes, totalDistance, longestSession, recent, weeklyMins, count: rows.length };
+  return { rows, totalMinutes, totalDistance, longestSession, recent, weeklyMins, count: rows.length, avgHr, maxHr, hrSessions: hrRows.length };
+}
+
+function computeSportStatsFromRows(rowsInput = []) {
+  const rows = [...(rowsInput || [])].sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  if (!rows.length) return null;
+  const totalMinutes = rows.reduce((s, r) => s + Number(r.minutes || 0), 0);
+  const totalDistance = rows.reduce((s, r) => s + Number(r.distance || 0), 0);
+  const longestSession = [...rows].sort((a, b) => Number(b.minutes || 0) - Number(a.minutes || 0))[0] || { minutes: 0, date: '' };
+  const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
+  const weekAgoStr = weekAgo.toISOString().slice(0, 10);
+  const weeklyMins = rows.filter((r) => String(r.date || '') >= weekAgoStr).reduce((s, r) => s + Number(r.minutes || 0), 0);
+  const hrRows = rows.filter((r) => Number(r.avgHeartrate || 0) > 0);
+  const avgHr = hrRows.length ? Math.round(hrRows.reduce((s, r) => s + r.avgHeartrate, 0) / hrRows.length) : null;
+  const maxHr = hrRows.reduce((best, r) => Math.max(best, Number(r.maxHeartrate || r.avgHeartrate || 0)), 0) || null;
+  return {
+    rows,
+    totalMinutes,
+    totalDistance: totalDistance > 0 ? totalDistance : null,
+    longestSession,
+    recent: rows.slice(0, 10),
+    weeklyMins,
+    count: rows.length,
+    avgHr,
+    maxHr,
+    hrSessions: hrRows.length,
+  };
 }
 
 function walkPaceHrBands(rows = []) {
@@ -1480,7 +1512,7 @@ function RunningTab({
 
   return (
     <div style={{ display: 'grid', gap: '14px' }}>
-      {trainingTip ? <CoachBotCard tip={trainingTip} theme={theme} runRows={runRows} /> : null}
+      {trainingTip ? <CoachBotCard tip={trainingTip} theme={theme} runRows={runRows} wellnessEntries={entries} /> : null}
 
       {userId && !noData ? (
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -1755,6 +1787,7 @@ function RunningTab({
 function SimpleSportTab({ stats, name, sportLabel, minKey, showDistance, accent, theme }) {
   if (!stats) return <EmptyState sport={sportLabel} theme={theme} />;
   const topByTime = [...stats.rows].sort((a, b) => b.minutes - a.minutes);
+  const hrRows = (stats.rows || []).filter((r) => Number(r.avgHeartrate || 0) > 0);
   return (
     <div style={{ display: 'grid', gap: '20px' }}>
       <div className="sport-4col" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: '14px' }}>
@@ -1766,6 +1799,23 @@ function SimpleSportTab({ stats, name, sportLabel, minKey, showDistance, accent,
           : <HeroStat label="Avg Session" value={fmtMins(Math.round(stats.totalMinutes / stats.count))} sub="per session" accent={theme.cyan} theme={theme} />
         }
       </div>
+
+      <div className="sport-4col" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: '14px' }}>
+        <HeroStat label="Avg HR" value={stats.avgHr ? `${stats.avgHr}` : '--'} sub={stats.hrSessions ? `${stats.hrSessions} sessions with HR` : 'sync Strava HR'} accent={CHART_SOFT.hr} theme={theme} />
+        <HeroStat label="Max HR" value={stats.maxHr ? `${stats.maxHr}` : '--'} sub="highest recorded" accent={CHART_SOFT.hrAlt || theme.orange} theme={theme} />
+        <HeroStat label="Heartbeat focus" value={hrRows.length ? 'On' : 'Off'} sub="from Strava or day avg" accent={theme.green} theme={theme} />
+        <HeroStat label="Manual OK" value="Yes" sub="Wellness + Strava both count" accent={theme.blue} theme={theme} />
+      </div>
+
+      {hrRows.length >= 2 ? (
+        <PaceHrScatter
+          rows={hrRows}
+          theme={theme}
+          xKey="minutes"
+          xLabel="Duration"
+          formatX={(v) => `${Math.round(v)}m`}
+        />
+      ) : null}
 
       <div>
         <SectionLabel theme={theme}>Records</SectionLabel>
@@ -2271,6 +2321,29 @@ function YogaTab({ entries = [], name, theme, userId = null }) {
               unitLabel=" bpm"
             />
           ) : null}
+          {Array.isArray(yogaDetail?.heartrateZones) && yogaDetail.heartrateZones.length ? (
+            <div style={{ padding: 14, borderRadius: 16, background: theme.cardBg, border: `1px solid ${theme.cardBorder}` }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: theme.textHeading, marginBottom: 10 }}>Heart rate range (last yoga)</div>
+              <div style={{ display: 'grid', gap: 8 }}>
+                {yogaDetail.heartrateZones.map((zone, index) => {
+                  const seconds = Number(zone.seconds || zone.time || 0);
+                  const totalSec = yogaDetail.heartrateZones.reduce((s, z) => s + Number(z.seconds || z.time || 0), 0) || 1;
+                  const pct = Math.round((seconds / totalSec) * 100);
+                  const label = zone.label || zone.name || `Z${zone.zone || index + 1}`;
+                  const color = zone.color || hrZoneForBpm(Number(zone.min || zone.max || 0))?.color || theme.purple || '#a855f7';
+                  return (
+                    <div key={`${label}-${index}`} style={{ display: 'grid', gridTemplateColumns: '88px 1fr 44px', gap: 8, alignItems: 'center' }}>
+                      <span style={{ fontSize: 11, color: theme.textSecondary }}>{label}</span>
+                      <div style={{ height: 8, borderRadius: 4, background: theme.cardBorder, overflow: 'hidden' }}>
+                        <div style={{ width: `${pct}%`, height: '100%', background: color }} />
+                      </div>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: theme.textHeading, textAlign: 'right' }}>{pct}%</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
           {hrSessions.length ? (
             <>
               <div className="run-dash-mini-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 8 }}>
@@ -2476,6 +2549,7 @@ const MORE_SPORT_TABS = [
   { id: 'cycling', label: 'Cycling', emoji: '🚴' },
   { id: 'swimming', label: 'Swimming', emoji: '🏊' },
   { id: 'badminton', label: 'Badminton', emoji: '🏸' },
+  { id: 'meditation', label: 'Meditation', emoji: '🕉️' },
 ];
 
 export default function RunningAnalytics() {
@@ -2662,11 +2736,12 @@ export default function RunningAnalytics() {
 
   const allSportStats = useMemo(() => ({
     running: computeSportStats(entries, 'runningMinutes', 'runningDistanceKm'),
-    badminton: computeSportStats(entries, 'badmintonMinutes'),
-    yoga: computeSportStats(entries, 'yogaMinutes'),
-    cycling: computeSportStats(entries, 'cyclingMinutes'),
-    walking: computeSportStats(entries, 'walkingMinutes', 'walkingDistanceKm'),
-    swimming: computeSportStats(entries, 'swimmingMinutes'),
+    badminton: computeSportStatsFromRows(buildSportActivityRows(entries, { arrayKey: 'stravaBadminton', minutesKey: 'badmintonMinutes', defaultName: 'Badminton' })),
+    yoga: computeSportStatsFromRows(buildSportActivityRows(entries, { arrayKey: 'stravaYoga', minutesKey: 'yogaMinutes', defaultName: 'Yoga' })),
+    cycling: computeSportStatsFromRows(buildSportActivityRows(entries, { arrayKey: 'stravaRides', minutesKey: 'cyclingMinutes', distanceKey: 'cyclingDistanceKm', defaultName: 'Ride' })),
+    walking: computeSportStatsFromRows(buildSportActivityRows(entries, { arrayKey: 'stravaWalks', minutesKey: 'walkingMinutes', distanceKey: 'walkingDistanceKm', defaultName: 'Walk' })),
+    swimming: computeSportStatsFromRows(buildSportActivityRows(entries, { arrayKey: 'stravaSwims', minutesKey: 'swimmingMinutes', defaultName: 'Swim' })),
+    meditation: computeSportStatsFromRows(buildSportActivityRows(entries, { arrayKey: 'stravaMeditation', minutesKey: 'meditationMinutes', defaultName: 'Meditation' })),
   }), [entries]);
 
   if (!user) {
@@ -2990,6 +3065,9 @@ export default function RunningAnalytics() {
         )}
         {activeTab === 'swimming' && (
           <SimpleSportTab stats={allSportStats.swimming} name={name} sportLabel="Swimming" minKey="swimmingMinutes" showDistance={false} accent={theme.purple} theme={theme} />
+        )}
+        {activeTab === 'meditation' && (
+          <SimpleSportTab stats={allSportStats.meditation} name={name} sportLabel="Meditation" minKey="meditationMinutes" showDistance={false} accent={theme.cyan || '#22d3ee'} theme={theme} />
         )}
       </div>
 

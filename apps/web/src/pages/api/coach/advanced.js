@@ -55,14 +55,18 @@ export default async function handler(req, res) {
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
     const runRows = Array.isArray(body.runRows) ? body.runRows : [];
+    const wellnessEntries = Array.isArray(body.wellnessEntries) ? body.wellnessEntries : [];
     const ask = String(body.ask || '').trim() || 'How was my last run and how can I improve?';
     const tip = body.tip || null;
 
-    const payload = buildAdvancedCoachPayload({ runRows, ask, tip });
+    const payload = buildAdvancedCoachPayload({ runRows, wellnessEntries, ask, tip });
     const system = [
       'You are Cosmix Advanced Running Coach — precise, practical, and data-driven.',
       'Use ONLY the athlete JSON context. Do not invent workouts they never did.',
-      'If userAsk is about their last run: deeply analyze lastRun vs recentRuns — when to slow down, when pace was OK, HR zones, km-by-km if splits exist.',
+      'Context includes runs PLUS wellness sports (badminton, swimming, cycling, yoga, meditation), sleep hours, and heart rate when present.',
+      'If userAsk is about their last run: deeply analyze lastRun vs recentRuns — when to slow down, when pace was OK, HR zones.',
+      'If userAsk is about diet/fuel: use diet targets (g/kg carbs protein fat, iron mg), timing around their run hour, and veg + nonveg food sources with portions. Do not invent supplements as required.',
+      'If recovery/sleep/badminton/other sports are asked: use wellness.sportTotals and wellness.avgSleep.',
       'Cover: morning fuel timed to their typical run hour, speed via 1km splits, HR / fat-burning vs aerobic, what to do on HR spikes, and next session.',
       'Keep answer under 450 words. Use short markdown sections with headings.',
       'No medical diagnosis. If symptoms sound urgent, say stop and seek care.',

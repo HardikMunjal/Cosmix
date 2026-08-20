@@ -3,6 +3,13 @@
  * Optional Groq / Gemini keys only polish Advanced wording.
  */
 
+import {
+  buildRunningDietSections,
+  isDietAsk,
+  parseBodyKgFromAsk,
+  DEFAULT_BODY_KG,
+} from './runningFuelDiet';
+
 function hourFromRun(row) {
   const raw = String(row.startTime || row.date || '');
   const match = raw.match(/T(\d{2})/);
@@ -155,6 +162,7 @@ function morningFuelPlan(hour) {
 
 function detectFocus(ask = '') {
   const askLower = String(ask || '').toLowerCase();
+  if (isDietAsk(ask)) return 'diet';
   if (
     askLower.includes('last run')
     || askLower.includes('my last')
@@ -257,15 +265,54 @@ function buildLastRunDeepReview(s) {
   };
 }
 
-export function buildAdvancedCoachPayload({ runRows = [], ask = '', tip = null } = {}) {
+export function buildAdvancedCoachPayload({ runRows = [], wellnessEntries = [], ask = '', tip = null } = {}) {
   const s = summarizeRuns(runRows);
   const fuel = morningFuelPlan(s.typicalHour);
   const sections = [];
   const focus = detectFocus(ask);
   const userAsk = String(ask || '').trim() || 'Give a full data-based coaching briefing.';
 
+  const well = (wellnessEntries || []).slice(0, 30);
+  const sleepNights = well.filter((e) => Number(e.sleepHours || 0) > 0);
+  const avgSleep = sleepNights.length
+    ? Number((sleepNights.reduce((sum, e) => sum + Number(e.sleepHours), 0) / sleepNights.length).toFixed(1))
+    : null;
+  const sportTotals = well.reduce((acc, e) => {
+    acc.badminton += Number(e.badmintonMinutes || 0);
+    acc.swim += Number(e.swimmingMinutes || 0);
+    acc.cycle += Number(e.cyclingMinutes || 0);
+    acc.yoga += Number(e.yogaMinutes || 0);
+    acc.meditation += Number(e.meditationMinutes || 0);
+    return acc;
+  }, { badminton: 0, swim: 0, cycle: 0, yoga: 0, meditation: 0 });
+  const lastWell = well[0] || null;
+
+  const bodyKg = parseBodyKgFromAsk(ask, tip?.bodyKg || DEFAULT_BODY_KG);
+  const dietPack = buildRunningDietSections({
+    bodyKg,
+    weekKm: s.weekKm,
+    lastRun: s.lastRun,
+    gapDays: s.gapDays,
+    typicalHour: s.typicalHour,
+    ask,
+  });
+
   if (focus === 'lastrun' || !ask) {
     sections.push(buildLastRunDeepReview(s));
+  }
+
+  if (focus === 'diet' || !ask) {
+    dietPack.sections.forEach((sec) => sections.push(sec));
+  } else {
+    const t = dietPack.targets;
+    sections.push({
+      id: 'diet-targets',
+      title: `Running fuel snapshot · ${t.bodyKg} kg`,
+      body: [
+        `${dietPack.day.label}: carbs ${t.carbsG.min}–${t.carbsG.max} g · protein ${t.proteinG.min}–${t.proteinG.max} g · fat ${t.fatG.min}–${t.fatG.max} g · iron food target ~${t.ironMg.mixedActiveTarget}–${t.ironMg.femaleRunnerTarget} mg (women often need the higher end).`,
+        `Ask “diet plan with veg and nonveg sources” or “diet for 65 kg” for full gram timing and food lists.`,
+      ].join('\n\n'),
+    });
   }
 
   sections.push({
@@ -274,6 +321,18 @@ export function buildAdvancedCoachPayload({ runRows = [], ask = '', tip = null }
     body: s.morningBias
       ? `From ${s.runs.length} logged runs, most start near ~${String(s.typicalHour).padStart(2, '0')}:00. Fuel and HR advice below are tuned for that window.`
       : `Start times vary across ${s.runs.length} runs. Using ~${String(s.typicalHour).padStart(2, '0')}:00 as your average start for nutrition timing.`,
+  });
+
+  sections.push({
+    id: 'multisport',
+    title: 'Sports mix · Strava + Wellness',
+    body: [
+      `Recent logged load beyond running: badminton ${Math.round(sportTotals.badminton)} min · swim ${Math.round(sportTotals.swim)} min · cycle ${Math.round(sportTotals.cycle)} min · yoga ${Math.round(sportTotals.yoga)} min · meditation ${Math.round(sportTotals.meditation)} min.`,
+      avgSleep != null
+        ? `Sleep average ${avgSleep}h across ${sleepNights.length} night(s)${lastWell?.avgHr ? ` · recent day HR ~${lastWell.avgHr} bpm` : ''}. Use easy sessions when sleep <6.5h or HR is elevated.`
+        : 'Sleep not logged yet — add hours in Wellness or sync if your watch posts Sleep activities to Strava.',
+      'Manual Wellness entries and Strava imports both count. Keep logging badminton/swim/cycle/meditation either way.',
+    ].join('\n\n'),
   });
 
   sections.push({
@@ -341,23 +400,38 @@ export function buildAdvancedCoachPayload({ runRows = [], ask = '', tip = null }
   }
 
   const focusResolved = focus;
-  const ordered = focusResolved
-    ? [...sections.filter((sct) => sct.id === focusResolved), ...sections.filter((sct) => sct.id !== focusResolved)]
-    : sections;
+  const dietIds = new Set(dietPack.sections.map((sec) => sec.id));
+  const ordered = (() => {
+    if (focusResolved === 'diet') {
+      return [
+        ...sections.filter((sct) => dietIds.has(sct.id) || sct.id === 'fuel'),
+        ...sections.filter((sct) => !dietIds.has(sct.id) && sct.id !== 'fuel'),
+      ];
+    }
+    if (focusResolved) {
+      return [
+        ...sections.filter((sct) => sct.id === focusResolved),
+        ...sections.filter((sct) => sct.id !== focusResolved),
+      ];
+    }
+    return sections;
+  })();
 
-  const headline = focusResolved === 'lastrun'
-    ? `Last run analysis · ${s.lastRun ? `${s.lastRun.distance.toFixed(1)} km` : 'sync a run'}`
-    : focusResolved === 'fuel'
-    ? `Fuel plan for ~${String(s.typicalHour).padStart(2, '0')}:00 runs`
-    : focusResolved === 'fat'
-      ? 'Fat-burning zone guide'
-      : focusResolved === 'speed'
-        ? 'Speed protocol from your splits'
-        : focusResolved === 'hr' || focusResolved === 'spike'
-          ? 'Heart-rate control playbook'
-          : s.lastRun
-            ? `Coaching · last run ${s.lastRun.date}`
-            : 'Data-based Cosmix briefing';
+  const headline = focusResolved === 'diet'
+    ? dietPack.headline
+    : focusResolved === 'lastrun'
+      ? `Last run analysis · ${s.lastRun ? `${s.lastRun.distance.toFixed(1)} km` : 'sync a run'}`
+      : focusResolved === 'fuel'
+        ? `Fuel plan for ~${String(s.typicalHour).padStart(2, '0')}:00 runs`
+        : focusResolved === 'fat'
+          ? 'Fat-burning zone guide'
+          : focusResolved === 'speed'
+            ? 'Speed protocol from your splits'
+            : focusResolved === 'hr' || focusResolved === 'spike'
+              ? 'Heart-rate control playbook'
+              : s.lastRun
+                ? `Coaching · last run ${s.lastRun.date}`
+                : 'Data-based Cosmix briefing';
 
   const lastRunAnalysis = buildLastRunDeepReview(s);
 
@@ -427,6 +501,18 @@ export function buildAdvancedCoachPayload({ runRows = [], ask = '', tip = null }
       })),
       tipAction: tip?.action || null,
       userAsk,
+      wellness: {
+        avgSleep,
+        sleepNights: sleepNights.length,
+        sportTotals,
+        recent: well.slice(0, 10),
+      },
+      diet: {
+        bodyKg,
+        day: dietPack.day,
+        targets: dietPack.targets,
+        headline: dietPack.headline,
+      },
     },
   };
 }
@@ -440,8 +526,8 @@ function firstSentence(text = '', max = 140) {
 }
 
 /** Compact quick-guide view model from the same engine. */
-export function buildQuickGuideFromEngine({ runRows = [], tip = null } = {}) {
-  const payload = buildAdvancedCoachPayload({ runRows, tip, ask: '' });
+export function buildQuickGuideFromEngine({ runRows = [], wellnessEntries = [], tip = null } = {}) {
+  const payload = buildAdvancedCoachPayload({ runRows, wellnessEntries, tip, ask: '' });
   const s = payload.summary;
   const byId = Object.fromEntries(payload.sections.map((sec) => [sec.id, sec]));
 
@@ -460,7 +546,9 @@ export function buildQuickGuideFromEngine({ runRows = [], tip = null } = {}) {
     tip?.action ? `Next: ${tip.action}.` : null,
   ].filter(Boolean).join(' ');
 
-  const fuelShort = tip?.fuel || firstSentence(byId.fuel?.body, 110);
+  const fuelShort = tip?.fuel
+    || firstSentence(byId['diet-targets']?.body, 120)
+    || firstSentence(byId.fuel?.body, 110);
   const hrShort = firstSentence(byId.fat?.body || byId.hr?.body, 120);
 
   return {

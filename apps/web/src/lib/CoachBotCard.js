@@ -120,9 +120,9 @@ function ProtocolStep({ index, label, value }) {
 
 const ASK_CHIPS = [
   'How was my last run? How can I improve?',
+  'Diet plan: protein carbs iron fat grams + veg/nonveg',
   'When should I slow down vs push pace?',
   'What should I eat before my 6am run?',
-  'My HR spikes mid-run — what do I do?',
 ];
 
 function serializeRuns(runRows = []) {
@@ -134,6 +134,21 @@ function serializeRuns(runRows = []) {
     maxHeartrate: r.maxHeartrate || r.maxHeartRate || null,
     startTime: r.startTime || r.date,
     bestSplitPaceMinPerKm: r.bestSplitPaceMinPerKm || null,
+  }));
+}
+
+function serializeWellness(entries = []) {
+  return (entries || []).slice(0, 30).map((e) => ({
+    date: e.date,
+    sleepHours: Number(e.sleepHours || e.stravaSleepHours || 0) || null,
+    meditationMinutes: Number(e.meditationMinutes || 0) || null,
+    yogaMinutes: Number(e.yogaMinutes || 0) || null,
+    badmintonMinutes: Number(e.badmintonMinutes || 0) || null,
+    swimmingMinutes: Number(e.swimmingMinutes || 0) || null,
+    cyclingMinutes: Number(e.cyclingMinutes || 0) || null,
+    walkingMinutes: Number(e.walkingMinutes || 0) || null,
+    runningMinutes: Number(e.runningMinutes || 0) || null,
+    avgHr: Number(e.stravaAvgHeartRate || e.heartRateAvg || 0) || null,
   }));
 }
 
@@ -159,7 +174,7 @@ function CoachSections({ sections = [], provider, summary, headline }) {
   );
 }
 
-function AdvancedCoachPanel({ tip, runRows = [] }) {
+function AdvancedCoachPanel({ tip, runRows = [], wellnessEntries = [] }) {
   const [ask, setAsk] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -178,6 +193,7 @@ function AdvancedCoachPanel({ tip, runRows = [] }) {
   const runLocal = (prompt) => {
     const payload = buildAdvancedCoachPayload({
       runRows: serializeRuns(runRows),
+      wellnessEntries: serializeWellness(wellnessEntries),
       ask: prompt,
       tip,
     });
@@ -203,6 +219,7 @@ function AdvancedCoachPanel({ tip, runRows = [] }) {
           ask: question,
           tip,
           runRows: serializeRuns(runRows),
+          wellnessEntries: serializeWellness(wellnessEntries),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -234,7 +251,12 @@ function AdvancedCoachPanel({ tip, runRows = [] }) {
     fetch('/api/coach/advanced', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ask: question, tip, runRows: serializeRuns(runRows) }),
+      body: JSON.stringify({
+        ask: question,
+        tip,
+        runRows: serializeRuns(runRows),
+        wellnessEntries: serializeWellness(wellnessEntries),
+      }),
     })
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
@@ -250,7 +272,7 @@ function AdvancedCoachPanel({ tip, runRows = [] }) {
   return (
     <div className="coach-advanced">
       <div className="coach-advanced-intro">
-        Built from your run history (start time, pace, HR, splits, volume). Cards only — no raw markdown.
+        Built from runs plus Strava/Wellness sports (badminton, swim, cycle, yoga, meditation), sleep, and heart rate.
       </div>
       <div className="coach-advanced-chips">
         {ASK_CHIPS.map((chip) => (
@@ -287,14 +309,14 @@ function AdvancedCoachPanel({ tip, runRows = [] }) {
   );
 }
 
-export function CoachBotCard({ tip, theme, runRows = [] }) {
+export function CoachBotCard({ tip, theme, runRows = [], wellnessEntries = [] }) {
   const [mode, setMode] = useState('quick');
   const gradId = useId().replace(/:/g, '');
   const accent = theme?.cyan || theme?.blue || '#22d3ee';
 
   const quick = useMemo(
-    () => buildQuickGuideFromEngine({ runRows, tip }),
-    [runRows, tip],
+    () => buildQuickGuideFromEngine({ runRows, wellnessEntries, tip }),
+    [runRows, wellnessEntries, tip],
   );
 
   if (!tip && !quick?.tip) return null;
@@ -346,7 +368,7 @@ export function CoachBotCard({ tip, theme, runRows = [] }) {
       </div>
 
       {mode === 'advanced' ? (
-        <AdvancedCoachPanel tip={tip} runRows={runRows} />
+        <AdvancedCoachPanel tip={tip} runRows={runRows} wellnessEntries={wellnessEntries} />
       ) : (
         <div className="coach-brief-main">
           <div className="coach-brief-directive">

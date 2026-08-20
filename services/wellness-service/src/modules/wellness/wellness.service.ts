@@ -17,6 +17,10 @@ type NormalizedEntry = {
   footballMinutes: number;
   badmintonMinutes: number;
   swimmingMinutes: number;
+  cyclingMinutes: number;
+  cyclingDistanceKm: number;
+  sleepHours: number;
+  heartRateAvg: number;
   whiskyPegs: number;
   moodScore: number;
   notes: string;
@@ -186,6 +190,10 @@ export class WellnessService {
       footballMinutes: safeNumber(entry.footballMinutes),
       badmintonMinutes: safeNumber(entry.badmintonMinutes),
       swimmingMinutes: safeNumber(entry.swimmingMinutes),
+      cyclingMinutes: safeNumber(entry.cyclingMinutes),
+      cyclingDistanceKm: safeNumber(entry.cyclingDistanceKm),
+      sleepHours: safeNumber(entry.sleepHours || entry.stravaSleepHours),
+      heartRateAvg: safeNumber(entry.heartRateAvg || entry.stravaAvgHeartRate),
       whiskyPegs: safeNumber(entry.whiskyPegs),
       moodScore: safeNumber(entry.moodScore, 7),
       notes: String(entry.notes || '').trim(),
@@ -221,7 +229,9 @@ export class WellnessService {
       + entry.cricketMinutes
       + entry.footballMinutes
       + entry.badmintonMinutes
-      + entry.swimmingMinutes;
+      + entry.swimmingMinutes
+      + entry.cyclingMinutes
+      + entry.meditationMinutes;
   }
 
   private computeRunningPace(entry: NormalizedEntry) {
@@ -239,8 +249,16 @@ export class WellnessService {
     averageMeditation: number;
     fastFoodLoad: number;
   }) {
+    const sleepBonus = latestEntry.sleepHours >= 7
+      ? 8
+      : latestEntry.sleepHours >= 6
+        ? 3
+        : latestEntry.sleepHours > 0
+          ? -8
+          : 0;
     const base = 65
       + Math.min(averageMeditation, 20) * 0.9
+      + sleepBonus
       - latestEntry.headacheLevel * 5
       - fastFoodLoad * 2.5;
     return Math.max(10, Math.min(98, Math.round(base)));

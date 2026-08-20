@@ -1022,7 +1022,9 @@ export class WellnessStorageService {
       return this.sortEntries(existingEntries);
     }
 
-    const incomingByDate = new Map(incomingEntries.map((entry) => [entry.date, entry]));
+    const incomingByDate = new Map(
+      incomingEntries.map((entry) => [this.normalizeDate(entry.date), entry]),
+    );
     const preserved = existingEntries.filter((entry) => {
       if (entry.status === 'inactive') return true;
       if (activePlanId) return entry.planId !== activePlanId;
@@ -1031,20 +1033,60 @@ export class WellnessStorageService {
 
     const existingActiveByDate = new Map(existingEntries
       .filter((entry) => entry.status !== 'inactive' && (activePlanId ? entry.planId === activePlanId : !entry.planId))
-      .map((entry) => [entry.date, entry]));
+      .map((entry) => [this.normalizeDate(entry.date), entry]));
+
+    // Keep active-plan days the client did not send. A partial local/Strava payload used to
+    // replace the whole plan and wipe manually logged badminton/swimming/etc.
+    const untouchedActive = [...existingActiveByDate.entries()]
+      .filter(([date]) => !incomingByDate.has(date))
+      .map(([, entry]) => entry);
 
     const mergedIncoming = incomingEntries.map((entry) => {
-      const existing = existingActiveByDate.get(entry.date);
+      const date = this.normalizeDate(entry.date);
+      const existing = existingActiveByDate.get(date);
       return this.normalizeEntryRecord({
+        ...(existing || {}),
         ...entry,
-        createdAt: existing?.createdAt,
+        ...this.preserveStravaCollections(existing, entry),
+        createdAt: existing?.createdAt || entry.createdAt,
         updatedAt: this.nowIso(),
         planId: activePlanId || null,
         status: 'active',
+        date,
       }, activePlanId || null);
     });
 
-    return this.sortEntries([...preserved, ...mergedIncoming, ...Array.from(incomingByDate.values()).filter(() => false)]);
+    return this.sortEntries([...preserved, ...untouchedActive, ...mergedIncoming]);
+  }
+
+  private preserveStravaCollections(existing: WellnessEntry | undefined, incoming: WellnessEntry) {
+    if (!existing) return {};
+    const pick = (key:
+      | 'stravaRuns'
+      | 'stravaWalks'
+      | 'stravaYoga'
+      | 'stravaRides'
+      | 'stravaSwims'
+      | 'stravaBadminton'
+      | 'stravaMeditation'
+      | 'stravaActivityIds'
+    ) => {
+      const incomingList = Array.isArray(incoming?.[key]) ? incoming[key] : null;
+      const existingList = Array.isArray(existing?.[key]) ? existing[key] : [];
+      if (incomingList && incomingList.length) return { [key]: incomingList };
+      if (existingList.length) return { [key]: existingList };
+      return incomingList ? { [key]: incomingList } : {};
+    };
+    return {
+      ...pick('stravaRuns'),
+      ...pick('stravaWalks'),
+      ...pick('stravaYoga'),
+      ...pick('stravaRides'),
+      ...pick('stravaSwims'),
+      ...pick('stravaBadminton'),
+      ...pick('stravaMeditation'),
+      ...pick('stravaActivityIds'),
+    };
   }
 
   private static readonly STRAVA_ACTIVITY_FIELDS = [
@@ -1059,6 +1101,7 @@ export class WellnessStorageService {
     'yogaMinutes',
     'footballMinutes',
     'badmintonMinutes',
+    'meditationMinutes',
     'estimatedSteps',
   ] as const;
 
@@ -1078,6 +1121,30 @@ export class WellnessStorageService {
       if (
         field === 'yogaMinutes'
         && ((Array.isArray(delta.stravaYoga) && delta.stravaYoga.length) || (Array.isArray(existing.stravaYoga) && existing.stravaYoga.length))
+      ) {
+        continue;
+      }
+      if (
+        (field === 'cyclingMinutes' || field === 'cyclingDistanceKm')
+        && ((Array.isArray(delta.stravaRides) && delta.stravaRides.length) || (Array.isArray(existing.stravaRides) && existing.stravaRides.length))
+      ) {
+        continue;
+      }
+      if (
+        field === 'swimmingMinutes'
+        && ((Array.isArray(delta.stravaSwims) && delta.stravaSwims.length) || (Array.isArray(existing.stravaSwims) && existing.stravaSwims.length))
+      ) {
+        continue;
+      }
+      if (
+        field === 'badmintonMinutes'
+        && ((Array.isArray(delta.stravaBadminton) && delta.stravaBadminton.length) || (Array.isArray(existing.stravaBadminton) && existing.stravaBadminton.length))
+      ) {
+        continue;
+      }
+      if (
+        field === 'meditationMinutes'
+        && ((Array.isArray(delta.stravaMeditation) && delta.stravaMeditation.length) || (Array.isArray(existing.stravaMeditation) && existing.stravaMeditation.length))
       ) {
         continue;
       }
@@ -1101,10 +1168,36 @@ export class WellnessStorageService {
     ).list;
     merged.stravaWalks = this.mergeStravaActivityList(existing.stravaWalks, delta.stravaWalks).list;
     merged.stravaYoga = this.mergeStravaActivityList(existing.stravaYoga, delta.stravaYoga).list;
+    merged.stravaRides = this.mergeStravaActivityList(existing.stravaRides, delta.stravaRides).list;
+    merged.stravaSwims = this.mergeStravaActivityList(existing.stravaSwims, delta.stravaSwims).list;
+    merged.stravaBadminton = this.mergeStravaActivityList(existing.stravaBadminton, delta.stravaBadminton).list;
+    merged.stravaMeditation = this.mergeStravaActivityList(existing.stravaMeditation, delta.stravaMeditation).list;
     Object.assign(merged, this.sportTotalsFromStravaActivities(merged));
 
-    const existingHrWeight = Number(existing.runningMinutes || 0) + Number(existing.walkingMinutes || 0) + Number(existing.cyclingMinutes || 0);
-    const deltaHrWeight = Number(delta.runningMinutes || 0) + Number(delta.walkingMinutes || 0) + Number(delta.cyclingMinutes || 0);
+    // Sleep: keep the longer of manual vs Strava-imported hours for the day.
+    const existingSleep = Number(existing.sleepHours || 0);
+    const deltaSleep = Number(delta.sleepHours || delta.stravaSleepHours || 0);
+    if (deltaSleep > 0 || existingSleep > 0) {
+      merged.sleepHours = Math.max(existingSleep, deltaSleep);
+      if (Number(delta.stravaSleepHours || 0) > 0) {
+        merged.stravaSleepHours = Number(delta.stravaSleepHours);
+      }
+    }
+
+    const existingHrWeight = Number(existing.runningMinutes || 0)
+      + Number(existing.walkingMinutes || 0)
+      + Number(existing.cyclingMinutes || 0)
+      + Number(existing.swimmingMinutes || 0)
+      + Number(existing.badmintonMinutes || 0)
+      + Number(existing.yogaMinutes || 0)
+      + Number(existing.meditationMinutes || 0);
+    const deltaHrWeight = Number(delta.runningMinutes || 0)
+      + Number(delta.walkingMinutes || 0)
+      + Number(delta.cyclingMinutes || 0)
+      + Number(delta.swimmingMinutes || 0)
+      + Number(delta.badmintonMinutes || 0)
+      + Number(delta.yogaMinutes || 0)
+      + Number(delta.meditationMinutes || 0);
     const existingAvgHr = Number(existing.stravaAvgHeartRate || existing.heartRateAvg || 0);
     const deltaAvgHr = Number(delta.stravaAvgHeartRate || delta.heartRateAvg || 0);
     const totalHrWeight = existingHrWeight + deltaHrWeight;
@@ -1277,9 +1370,18 @@ export class WellnessStorageService {
   private sportTotalsFromStravaActivities(entry: WellnessEntry) {
     const walks = Array.isArray(entry.stravaWalks) ? entry.stravaWalks : [];
     const yoga = Array.isArray(entry.stravaYoga) ? entry.stravaYoga : [];
+    const rides = Array.isArray(entry.stravaRides) ? entry.stravaRides : [];
+    const swims = Array.isArray(entry.stravaSwims) ? entry.stravaSwims : [];
+    const badminton = Array.isArray(entry.stravaBadminton) ? entry.stravaBadminton : [];
+    const meditation = Array.isArray(entry.stravaMeditation) ? entry.stravaMeditation : [];
     let walkingMinutes = Number(entry.walkingMinutes || 0);
     let walkingDistanceKm = Number(entry.walkingDistanceKm || 0);
     let yogaMinutes = Number(entry.yogaMinutes || 0);
+    let cyclingMinutes = Number(entry.cyclingMinutes || 0);
+    let cyclingDistanceKm = Number(entry.cyclingDistanceKm || 0);
+    let swimmingMinutes = Number(entry.swimmingMinutes || 0);
+    let badmintonMinutes = Number(entry.badmintonMinutes || 0);
+    let meditationMinutes = Number(entry.meditationMinutes || 0);
     if (walks.length) {
       const mins = walks.reduce((sum: number, walk: any) => sum + Number(walk?.minutes || 0), 0);
       const km = walks.reduce((sum: number, walk: any) => sum + Number(walk?.distanceKm || 0), 0);
@@ -1290,7 +1392,37 @@ export class WellnessStorageService {
       const mins = yoga.reduce((sum: number, session: any) => sum + Number(session?.minutes || 0), 0);
       yogaMinutes = Math.round(mins);
     }
-    return { walkingMinutes, walkingDistanceKm, yogaMinutes };
+    if (rides.length) {
+      const mins = rides.reduce((sum: number, session: any) => sum + Number(session?.minutes || 0), 0);
+      const km = rides.reduce((sum: number, session: any) => sum + Number(session?.distanceKm || 0), 0);
+      cyclingMinutes = Math.round(mins);
+      cyclingDistanceKm = Number(km.toFixed(2));
+    }
+    if (swims.length) {
+      swimmingMinutes = Math.round(swims.reduce((sum: number, session: any) => sum + Number(session?.minutes || 0), 0));
+    }
+    if (badminton.length) {
+      badmintonMinutes = Math.max(
+        badmintonMinutes,
+        Math.round(badminton.reduce((sum: number, session: any) => sum + Number(session?.minutes || 0), 0)),
+      );
+    }
+    if (meditation.length) {
+      meditationMinutes = Math.max(
+        meditationMinutes,
+        Math.round(meditation.reduce((sum: number, session: any) => sum + Number(session?.minutes || 0), 0)),
+      );
+    }
+    return {
+      walkingMinutes,
+      walkingDistanceKm,
+      yogaMinutes,
+      cyclingMinutes,
+      cyclingDistanceKm,
+      swimmingMinutes,
+      badmintonMinutes,
+      meditationMinutes,
+    };
   }
 
   async refreshStravaHeartRate(
@@ -1325,23 +1457,47 @@ export class WellnessStorageService {
       const mergedRuns = this.mergeStravaActivityList(entry.stravaRuns, incoming.stravaRuns, { keepShoe: true });
       const mergedWalks = this.mergeStravaActivityList(entry.stravaWalks, incoming.stravaWalks);
       const mergedYoga = this.mergeStravaActivityList(entry.stravaYoga, incoming.stravaYoga);
+      const mergedRides = this.mergeStravaActivityList(entry.stravaRides, incoming.stravaRides);
+      const mergedSwims = this.mergeStravaActivityList(entry.stravaSwims, incoming.stravaSwims);
+      const mergedBadminton = this.mergeStravaActivityList(entry.stravaBadminton, incoming.stravaBadminton);
+      const mergedMeditation = this.mergeStravaActivityList(entry.stravaMeditation, incoming.stravaMeditation);
 
       const sportTotals = this.sportTotalsFromStravaActivities({
         ...entry,
         stravaWalks: mergedWalks.list,
         stravaYoga: mergedYoga.list,
+        stravaRides: mergedRides.list,
+        stravaSwims: mergedSwims.list,
+        stravaBadminton: mergedBadminton.list,
+        stravaMeditation: mergedMeditation.list,
       });
+      const nextSleep = Math.max(Number(entry.sleepHours || 0), Number(incoming.sleepHours || incoming.stravaSleepHours || 0));
       const totalsChanged = sportTotals.walkingMinutes !== Number(entry.walkingMinutes || 0)
         || sportTotals.walkingDistanceKm !== Number(entry.walkingDistanceKm || 0)
-        || sportTotals.yogaMinutes !== Number(entry.yogaMinutes || 0);
+        || sportTotals.yogaMinutes !== Number(entry.yogaMinutes || 0)
+        || sportTotals.cyclingMinutes !== Number(entry.cyclingMinutes || 0)
+        || sportTotals.cyclingDistanceKm !== Number(entry.cyclingDistanceKm || 0)
+        || sportTotals.swimmingMinutes !== Number(entry.swimmingMinutes || 0)
+        || sportTotals.badmintonMinutes !== Number(entry.badmintonMinutes || 0)
+        || sportTotals.meditationMinutes !== Number(entry.meditationMinutes || 0)
+        || nextSleep !== Number(entry.sleepHours || 0);
 
+      const listsChanged = mergedRuns.changed
+        || mergedWalks.changed
+        || mergedYoga.changed
+        || mergedRides.changed
+        || mergedSwims.changed
+        || mergedBadminton.changed
+        || mergedMeditation.changed;
       const shouldUpdateHr = (nextAvg > 0 && nextAvg !== currentAvg) || (nextMax > 0 && nextMax !== currentMax);
-      if (!shouldUpdateHr && !mergedRuns.changed && !mergedWalks.changed && !mergedYoga.changed && !totalsChanged) return entry;
+      if (!shouldUpdateHr && !listsChanged && !totalsChanged) return entry;
 
       updatedDays += 1;
       return this.normalizeEntryRecord({
         ...entry,
         ...sportTotals,
+        sleepHours: nextSleep || entry.sleepHours || null,
+        stravaSleepHours: Number(incoming.stravaSleepHours || incoming.sleepHours || entry.stravaSleepHours || 0) || entry.stravaSleepHours || null,
         stravaAvgHeartRate: nextAvg || currentAvg || null,
         stravaMaxHeartRate: Math.max(nextMax, currentMax) || null,
         heartRateAvg: nextAvg || currentAvg || null,
@@ -1349,6 +1505,10 @@ export class WellnessStorageService {
         stravaRuns: mergedRuns.list,
         stravaWalks: mergedWalks.list,
         stravaYoga: mergedYoga.list,
+        stravaRides: mergedRides.list,
+        stravaSwims: mergedSwims.list,
+        stravaBadminton: mergedBadminton.list,
+        stravaMeditation: mergedMeditation.list,
         updatedAt: this.nowIso(),
       }, activePlanId ?? entry.planId ?? null);
     });
@@ -1361,9 +1521,18 @@ export class WellnessStorageService {
         (Array.isArray(incoming.stravaWalks) && incoming.stravaWalks.length)
         || (Array.isArray(incoming.stravaRuns) && incoming.stravaRuns.length)
         || (Array.isArray(incoming.stravaYoga) && incoming.stravaYoga.length)
+        || (Array.isArray(incoming.stravaRides) && incoming.stravaRides.length)
+        || (Array.isArray(incoming.stravaSwims) && incoming.stravaSwims.length)
+        || (Array.isArray(incoming.stravaBadminton) && incoming.stravaBadminton.length)
+        || (Array.isArray(incoming.stravaMeditation) && incoming.stravaMeditation.length)
         || Number(incoming.walkingMinutes || 0) > 0
         || Number(incoming.runningMinutes || 0) > 0
         || Number(incoming.yogaMinutes || 0) > 0
+        || Number(incoming.cyclingMinutes || 0) > 0
+        || Number(incoming.swimmingMinutes || 0) > 0
+        || Number(incoming.badmintonMinutes || 0) > 0
+        || Number(incoming.meditationMinutes || 0) > 0
+        || Number(incoming.sleepHours || incoming.stravaSleepHours || 0) > 0
       );
       if (!hasSport) continue;
       extraEntries.push(this.normalizeEntryRecord({

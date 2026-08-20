@@ -501,6 +501,8 @@ export default function WellnessPage() {
   const [buddyPlanRows, setBuddyPlanRows] = useState([]);
   const [buddyPlanLoading, setBuddyPlanLoading] = useState(false);
   const [serverHydrated, setServerHydrated] = useState(false);
+  const serverHydratedRef = useRef(false);
+  useEffect(() => { serverHydratedRef.current = serverHydrated; }, [serverHydrated]);
   const [runningShoes, setRunningShoes] = useState([]);
 
   const showMicSecurityWarning = typeof window !== 'undefined' && !window.isSecureContext && window.location.hostname !== 'localhost';
@@ -767,8 +769,12 @@ export default function WellnessPage() {
   function syncToServer(newEntries, newForm, nextRunningShoes = runningShoes) {
     const uid = userIdRef.current;
     if (!uid) return;
+    // Never push local/partial entries before the server snapshot is loaded — that used to
+    // wipe manually logged badminton/swimming when Strava or a stale cache synced first.
+    if (!serverHydratedRef.current) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
+      if (!serverHydratedRef.current) return;
       const payloadEntries = Array.isArray(newEntries) ? newEntries : [];
       // Never send an empty shoe catalog — Wellness autosave was wiping shoes added on Running Analytics.
       const payload = { entries: payloadEntries, form: newForm };
@@ -1101,9 +1107,8 @@ export default function WellnessPage() {
       const existingEntry = currentEntries.find((entry) => entry.date === targetDate);
       if (!existingEntry) return currentEntries;
       const trimmedEntry = clearActivityFields(existingEntry, actCfg);
-      if (!hasScorableData(trimmedEntry)) {
-        return currentEntries.filter((entry) => entry.date !== targetDate);
-      }
+      // Keep the date in the payload (even if cleared) so server merge does not resurrect
+      // an older copy of this day, and so other days are not treated as "missing".
       return [trimmedEntry, ...currentEntries.filter((entry) => entry.date !== targetDate)];
     });
 

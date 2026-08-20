@@ -280,7 +280,17 @@ export class StravaService {
       // Prefer flagged HR activities; also probe recent runs in case list summary omitted BPM.
       const likelyHr = Boolean(activity?.has_heartrate) || recent;
       const type = this.activityKind(activity);
-      return likelyHr && (type === 'run' || type === 'walk' || type === 'yoga');
+      return likelyHr && (
+        type === 'run'
+        || type === 'walk'
+        || type === 'yoga'
+        || type === 'badminton'
+        || type === 'swim'
+        || type === 'ride'
+        || type === 'virtualride'
+        || type === 'meditation'
+        || type === 'sleep'
+      );
     });
 
     // Keep sync snappy — detail calls are sequential and previously timed out incremental syncs.
@@ -1467,6 +1477,17 @@ export class StravaService {
     const sport = this.normalizeActivityType(this.activitySportRaw(activity));
     const name = String(activity?.name || '');
     if (sport === 'yoga' || (sport === 'workout' && /yoga|asan/i.test(name))) return 'yoga';
+    if (sport === 'badminton' || (sport === 'workout' && /badminton|shuttle/i.test(name))) return 'badminton';
+    if (sport === 'soccer' || sport === 'football' || (sport === 'workout' && /football|soccer/i.test(name))) return 'football';
+    if (
+      sport === 'meditation'
+      || sport === 'mindfulness'
+      || ((sport === 'workout' || sport === 'yoga') && /meditat|mindful|breath|pranayam|dhyan/i.test(name))
+    ) return 'meditation';
+    // Strava has no dedicated sleep endpoint; some watches/apps push Sleep as an activity.
+    if (sport === 'sleep' || /^(sleep|nap|recovery sleep)\b/i.test(name) || /\bsleep\b/i.test(name) && /track|session|log/i.test(name)) {
+      return 'sleep';
+    }
     if (sport === 'walk') return 'walk';
     if (sport === 'run') {
       if (this.looksLikeWalkName(name)) return 'walk';
@@ -1495,11 +1516,19 @@ export class StravaService {
     runs: Set<number>;
     walks: Set<number>;
     yoga: Set<number>;
+    rides: Set<number>;
+    swims: Set<number>;
+    badminton: Set<number>;
+    meditation: Set<number>;
   } {
     const all = new Set<number>();
     const runs = new Set<number>();
     const walks = new Set<number>();
     const yoga = new Set<number>();
+    const rides = new Set<number>();
+    const swims = new Set<number>();
+    const badminton = new Set<number>();
+    const meditation = new Set<number>();
     const add = (set: Set<number>, value: any) => {
       const numeric = Number(value);
       if (Number.isFinite(numeric) && numeric > 0) {
@@ -1512,18 +1541,40 @@ export class StravaService {
       for (const item of entry?.stravaRuns || []) add(runs, item?.id || item?.stravaId);
       for (const item of entry?.stravaWalks || []) add(walks, item?.id || item?.stravaId);
       for (const item of entry?.stravaYoga || []) add(yoga, item?.id || item?.stravaId);
+      for (const item of entry?.stravaRides || []) add(rides, item?.id || item?.stravaId);
+      for (const item of entry?.stravaSwims || []) add(swims, item?.id || item?.stravaId);
+      for (const item of entry?.stravaBadminton || []) add(badminton, item?.id || item?.stravaId);
+      for (const item of entry?.stravaMeditation || []) add(meditation, item?.id || item?.stravaId);
     }
-    return { all, runs, walks, yoga };
+    return { all, runs, walks, yoga, rides, swims, badminton, meditation };
   }
 
   filterNewActivities(
     activities: any[] = [],
-    stored: { all: Set<number>; runs: Set<number>; walks: Set<number>; yoga: Set<number> } | Set<number>,
+    stored: {
+      all: Set<number>;
+      runs: Set<number>;
+      walks: Set<number>;
+      yoga: Set<number>;
+      rides?: Set<number>;
+      swims?: Set<number>;
+      badminton?: Set<number>;
+      meditation?: Set<number>;
+    } | Set<number>,
     deletedIds: Set<number> = new Set(),
   ) {
     const buckets = stored instanceof Set
-      ? { all: stored, runs: stored, walks: stored, yoga: stored }
-      : stored;
+      ? {
+        all: stored, runs: stored, walks: stored, yoga: stored,
+        rides: stored, swims: stored, badminton: stored, meditation: stored,
+      }
+      : {
+        rides: new Set<number>(),
+        swims: new Set<number>(),
+        badminton: new Set<number>(),
+        meditation: new Set<number>(),
+        ...stored,
+      };
     const newActivities = activities.filter((activity) => {
       const id = Number(activity?.id);
       if (!Number.isFinite(id) || id <= 0) return false;
@@ -1532,6 +1583,10 @@ export class StravaService {
       if (kind === 'walk') return !buckets.walks.has(id);
       if (kind === 'yoga') return !buckets.yoga.has(id);
       if (kind === 'run') return !buckets.runs.has(id);
+      if (kind === 'ride' || kind === 'virtualride') return !buckets.rides.has(id);
+      if (kind === 'swim') return !buckets.swims.has(id);
+      if (kind === 'badminton') return !buckets.badminton.has(id);
+      if (kind === 'meditation') return !buckets.meditation.has(id);
       return !buckets.all.has(id);
     });
     return {
@@ -1650,6 +1705,15 @@ export class StravaService {
         }
       } else if (type === 'yoga') {
         fields.yogaMinutes = (fields.yogaMinutes || 0) + mins;
+      } else if (type === 'badminton') {
+        fields.badmintonMinutes = (fields.badmintonMinutes || 0) + mins;
+      } else if (type === 'football') {
+        fields.footballMinutes = (fields.footballMinutes || 0) + mins;
+      } else if (type === 'meditation') {
+        fields.meditationMinutes = (fields.meditationMinutes || 0) + mins;
+      } else if (type === 'sleep') {
+        const hours = round(((a.elapsed_time || a.moving_time || 0) / 3600), 1);
+        if (hours > 0) fields.sleepHours = round((fields.sleepHours || 0) + hours, 1);
       }
     }
     return fields;
@@ -1672,8 +1736,8 @@ export class StravaService {
         cyclingMinutes: 0,
         exerciseMinutes: 0,
         yogaMinutes: 0,
-        footballMinutes: 0,
-        badmintonMinutes: 0,
+        // Do not default football/badminton to 0 — those are manual wellness fields and
+        // must not be written by Strava so merges cannot clobber logged court/pool time.
         stravaAvgHeartRate: null as number | null,
         stravaMaxHeartRate: null as number | null,
         heartRateAvg: null as number | null,
@@ -1685,6 +1749,10 @@ export class StravaService {
         stravaRuns: [] as any[],
         stravaWalks: [] as any[],
         stravaYoga: [] as any[],
+        stravaRides: [] as any[],
+        stravaSwims: [] as any[],
+        stravaBadminton: [] as any[],
+        stravaMeditation: [] as any[],
       };
 
       const distKm = round((activity.distance || 0) / 1000, 2);
@@ -1719,9 +1787,11 @@ export class StravaService {
         current.stravaWalks.push(this.summarizeRun(activity));
       } else if (type === 'swim') {
         current.swimmingMinutes += mins;
+        current.stravaSwims.push(this.summarizeRun({ ...activity, type: 'Swim' }));
       } else if (type === 'ride' || type === 'virtualride') {
         current.cyclingDistanceKm = round(current.cyclingDistanceKm + distKm, 2);
         current.cyclingMinutes += mins;
+        current.stravaRides.push(this.summarizeRun({ ...activity, type: 'Ride' }));
       } else if (type === 'workout' || type === 'weighttraining' || type === 'crossfit') {
         if (this.isYogaActivity(activity)) {
           current.yogaMinutes += mins;
@@ -1732,6 +1802,21 @@ export class StravaService {
       } else if (type === 'yoga') {
         current.yogaMinutes += mins;
         current.stravaYoga.push(this.summarizeRun(activity));
+      } else if (type === 'badminton') {
+        current.badmintonMinutes = (current.badmintonMinutes || 0) + mins;
+        current.stravaBadminton.push(this.summarizeRun({ ...activity, type: 'Badminton' }));
+      } else if (type === 'football') {
+        current.footballMinutes = (current.footballMinutes || 0) + mins;
+      } else if (type === 'meditation') {
+        current.meditationMinutes = (current.meditationMinutes || 0) + mins;
+        current.stravaMeditation.push(this.summarizeRun({ ...activity, type: 'Meditation' }));
+      } else if (type === 'sleep') {
+        const hours = round(((activity.elapsed_time || activity.moving_time || 0) / 3600), 1);
+        if (hours > 0) {
+          // Prefer longer of Strava sleep vs already-logged manual sleep for the day.
+          current.sleepHours = Math.max(Number(current.sleepHours || 0), hours);
+          current.stravaSleepHours = round((Number(current.stravaSleepHours || 0) + hours), 1);
+        }
       }
 
       byDate.set(date, current);

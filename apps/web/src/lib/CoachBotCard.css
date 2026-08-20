@@ -346,6 +346,7 @@
   line-height: 1.6;
   color: #f1f5f9;
   font-weight: 500;
+  white-space: pre-line;
 }
 
 @media (max-width: 560px) {

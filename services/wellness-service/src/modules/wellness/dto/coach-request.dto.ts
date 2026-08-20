@@ -15,6 +15,12 @@ export class WellnessEntryDto {
   footballMinutes?: number;
   badmintonMinutes?: number;
   swimmingMinutes?: number;
+  cyclingMinutes?: number;
+  cyclingDistanceKm?: number;
+  sleepHours?: number;
+  stravaSleepHours?: number;
+  heartRateAvg?: number;
+  stravaAvgHeartRate?: number;
   moodScore?: number;
   notes?: string;
 }
