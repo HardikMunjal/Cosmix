@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -35,14 +35,29 @@ interface StravaTokens {
 }
 
 @Injectable()
-export class StravaService {
+export class StravaService implements OnModuleInit {
   private pool: any = null;
   private schemaPromise: Promise<unknown> | null = null;
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private pollInFlight = false;
 
   constructor() {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
+  }
+
+  async onModuleInit() {
+    void this.backfillAllAthleteIds().catch((err) => {
+      console.error('Strava athlete backfill failed:', err);
+    });
+    // Webhook is primary; this poll is a safety net when Strava push delivery is delayed/missed.
+    this.pollTimer = setInterval(() => {
+      void this.runBackgroundPollTick();
+    }, 5 * 60 * 1000);
+    setTimeout(() => {
+      void this.runBackgroundPollTick();
+    }, 45 * 1000);
   }
 
   private hasDatabase() {
@@ -247,7 +262,7 @@ export class StravaService {
       const result = await pool?.query(
         `SELECT user_id
          FROM wellness_strava_tokens
-         WHERE (payload->>'athlete_id')::bigint = $1
+         WHERE COALESCE((payload->>'athlete_id')::bigint, 0) = $1
          ORDER BY updated_at DESC
          LIMIT 1`,
         [id],
@@ -271,7 +286,83 @@ export class StravaService {
     } catch {
       // ignore missing dir
     }
+
+    // Last resort: refresh athlete ids for all connected users, then retry once.
+    await this.backfillAllAthleteIds();
+    if (this.hasDatabase()) {
+      const pool = await this.ensureSchema();
+      const result = await pool?.query(
+        `SELECT user_id
+         FROM wellness_strava_tokens
+         WHERE COALESCE((payload->>'athlete_id')::bigint, 0) = $1
+         ORDER BY updated_at DESC
+         LIMIT 1`,
+        [id],
+      );
+      const userId = String(result?.rows?.[0]?.user_id || '').trim();
+      if (userId) return userId;
+    }
     return null;
+  }
+
+  async listConnectedUserIds(): Promise<string[]> {
+    const ids = new Set<string>();
+    if (this.hasDatabase()) {
+      const pool = await this.ensureSchema();
+      const result = await pool?.query(`SELECT user_id FROM wellness_strava_tokens ORDER BY updated_at DESC`);
+      for (const row of result?.rows || []) {
+        const userId = String(row?.user_id || '').trim();
+        if (userId) ids.add(userId);
+      }
+    }
+    try {
+      const files = fs.readdirSync(DATA_DIR).filter((name) => name.endsWith('.json') && !name.includes(path.sep));
+      for (const file of files) {
+        if (file === 'details') continue;
+        ids.add(file.replace(/\.json$/, ''));
+      }
+    } catch {
+      // ignore
+    }
+    return [...ids];
+  }
+
+  async backfillAllAthleteIds(): Promise<{ checked: number; linked: number }> {
+    const userIds = await this.listConnectedUserIds();
+    let linked = 0;
+    for (const userId of userIds) {
+      const athleteId = await this.ensureAthleteId(userId);
+      if (athleteId) linked += 1;
+    }
+    return { checked: userIds.length, linked };
+  }
+
+  /** Called by controller poller with storage import callback. */
+  onBackgroundPoll: null | ((userId: string) => Promise<{ newActivities: number; activities: any[] }>) = null;
+
+  private async runBackgroundPollTick() {
+    if (this.pollInFlight) return;
+    if (!this.onBackgroundPoll) return;
+    this.pollInFlight = true;
+    try {
+      const userIds = await this.listConnectedUserIds();
+      for (const userId of userIds) {
+        try {
+          await this.ensureAthleteId(userId);
+          const result = await this.onBackgroundPoll(userId);
+          if (result?.newActivities > 0) {
+            console.log(`Strava background poll: imported ${result.newActivities} for ${userId}`);
+            for (const activity of result.activities || []) {
+              await this.sendActivityPush(userId, activity);
+            }
+          }
+        } catch (err) {
+          console.error(`Strava background poll failed for ${userId}:`, err);
+        }
+      }
+    } finally {
+      this.pollInFlight = false;
+    }
   }
 
   async resolvePushUsernames(userId: string): Promise<string[]> {

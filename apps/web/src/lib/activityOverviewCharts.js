@@ -22,6 +22,12 @@ export function buildWeeklySumBuckets(rows = [], valueFn, weeks = 12) {
     const key = monday.toISOString().slice(0, 10);
     weekMap.set(key, (weekMap.get(key) || 0) + value);
   });
+  const today = new Date();
+  const currentMonday = new Date(today);
+  currentMonday.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+  const currentKey = currentMonday.toISOString().slice(0, 10);
+  if (!weekMap.has(currentKey)) weekMap.set(currentKey, 0);
+
   return [...weekMap.entries()]
     .sort((a, b) => a[0].localeCompare(b[0]))
     .slice(-weeks)
@@ -29,6 +35,7 @@ export function buildWeeklySumBuckets(rows = [], valueFn, weeks = 12) {
       date: week,
       label: new Date(`${week}T12:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
       value: Number(value.toFixed(1)),
+      isCurrent: week === currentKey,
     }));
 }
 
@@ -327,7 +334,7 @@ export function ActivityOverviewCharts({ entries = [], name = '', theme, onActiv
       {model.weeklyMix.length ? (
         <DepthBars
           title="Activity minutes by week"
-          items={model.weeklyMix.map((w) => ({ label: w.label, value: Math.round(w.value) }))}
+          items={model.weeklyMix.map((w) => ({ label: w.label, value: Math.round(w.value), isCurrent: w.isCurrent }))}
           theme={theme}
           accent={theme.orange || '#fb923c'}
           unit="m"

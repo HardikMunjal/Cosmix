@@ -275,7 +275,6 @@ export function findRunningShoe(shoes, shoeId) {
 
 export function buildRunningRows(entries = [], shoes = []) {
   const rows = [];
-  const fallbackShoeId = findDefaultUntaggedShoe(shoes)?.id || '';
 
   [...entries].forEach((entry) => {
     const stravaRuns = Array.isArray(entry?.stravaRuns) ? entry.stravaRuns : [];
@@ -288,7 +287,7 @@ export function buildRunningRows(entries = [], shoes = []) {
           date: run.date || entry.date,
           minutes,
           distance,
-          shoeId: String(run.shoeId || entry.runningShoeId || '').trim() || fallbackShoeId,
+          shoeId: String(run.shoeId || entry.runningShoeId || '').trim() || '',
           stravaId: Number(run.id || run.stravaId || 0) || null,
           name: run.name || 'Run',
           avgHeartrate: Number(run.avgHeartrate || 0) || null,
@@ -310,7 +309,7 @@ export function buildRunningRows(entries = [], shoes = []) {
         date: entry.date,
         minutes: Number(entry.runningMinutes || 0),
         distance: Number(entry.runningDistanceKm || 0),
-        shoeId: String(entry.runningShoeId || '').trim() || fallbackShoeId,
+        shoeId: String(entry.runningShoeId || '').trim() || '',
         stravaId: null,
         name: 'Run',
         avgHeartrate: Number(entry.stravaAvgHeartRate || entry.heartRateAvg || 0) || null,
@@ -474,7 +473,12 @@ export function computeFastestKmSplits(entries = [], shoes = [], limit = 10, ext
   const byKey = new Map();
 
   function ingest(row) {
-    const pace = Number(row.bestSplitPaceMinPerKm || row.splitPace || 0);
+    const pace = Number(
+      row.bestSplitPaceMinPerKm
+      || row.splitPace
+      || row.best_split_pace_min_per_km
+      || 0,
+    );
     if (!(pace > 1.5 && pace < 20)) return;
     const mapped = mapRunRow({
       ...row,
@@ -488,6 +492,7 @@ export function computeFastestKmSplits(entries = [], shoes = [], limit = 10, ext
     const key = stravaId ? `id:${stravaId}` : `d:${row.date || mapped.date}:${pace.toFixed(3)}`;
     const next = {
       ...mapped,
+      id: stravaId || mapped.id || key,
       stravaId: stravaId || mapped.stravaId,
       splitPace: pace,
       splitKm: Number(row.bestSplitKm || row.splitKm || 0) || null,

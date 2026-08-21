@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, Query, Req, Res } from '@nestjs/common';
+import { Body, Controller, Delete, Get, OnModuleInit, Param, Post, Put, Query, Req, Res } from '@nestjs/common';
 import { Response } from 'express';
 import { CoachRequestDto } from './dto/coach-request.dto';
 import { WellnessService } from './wellness.service';
@@ -6,12 +6,26 @@ import { WellnessStorageService } from './wellness-storage.service';
 import { StravaService } from './strava.service';
 
 @Controller('wellness')
-export class WellnessController {
+export class WellnessController implements OnModuleInit {
   constructor(
     private readonly wellnessService: WellnessService,
     private readonly storageService: WellnessStorageService,
     private readonly stravaService: StravaService,
   ) {}
+
+  onModuleInit() {
+    this.stravaService.onBackgroundPoll = async (userId: string) => {
+      const result = await this.importRecentStravaActivities(userId, {
+        days: 3,
+        enrichDetails: true,
+        notify: false,
+      });
+      return {
+        newActivities: Number(result?.newActivities || 0),
+        activities: Array.isArray(result?.importedActivities) ? result.importedActivities : [],
+      };
+    };
+  }
 
   @Get('defaults')
   async getDefaults() {
@@ -223,6 +237,12 @@ export class WellnessController {
   }
 
   private async processStravaWebhookEvent(body: any) {
+    console.log('Strava webhook event:', JSON.stringify({
+      object_type: body?.object_type,
+      aspect_type: body?.aspect_type,
+      object_id: body?.object_id,
+      owner_id: body?.owner_id,
+    }));
     const objectType = String(body?.object_type || '');
     const aspectType = String(body?.aspect_type || '');
     const objectId = Number(body?.object_id || 0);
@@ -267,13 +287,77 @@ export class WellnessController {
 
     try {
       await this.stravaService.enrichRecentActivityDetails(userId, [objectId], { maxActivities: 1 });
+      await this.storageService.persistBestSplitsFromDetails(userId, this.stravaService);
     } catch (err) {
       console.error('Strava webhook detail enrich failed:', err);
     }
 
     if (aspectType === 'create') {
-      await this.stravaService.sendActivityPush(userId, activity);
+      const push = await this.stravaService.sendActivityPush(userId, activity);
+      console.log('Strava webhook push:', push);
     }
+  }
+
+  private async importRecentStravaActivities(
+    userId: string,
+    options: { days?: number; enrichDetails?: boolean; notify?: boolean } = {},
+  ) {
+    const windowDays = Math.max(1, Math.min(14, Number(options.days) || 3));
+    const existingState = await this.storageService.load(userId);
+    const storedIds = this.stravaService.collectStoredActivityIds(existingState.entries || []);
+    const deletedIds = new Set<number>();
+    for (const id of (existingState as any)?.deletedStravaActivityIds || []) {
+      const numeric = Number(id);
+      if (Number.isFinite(numeric) && numeric > 0) deletedIds.add(numeric);
+    }
+
+    let activities: any[] = [];
+    try {
+      activities = await this.stravaService.getRecentActivities(userId, windowDays, {
+        enrichHeartRate: false,
+      });
+    } catch (err) {
+      console.error('Strava recent import failed:', err);
+      return { newActivities: 0, importedActivities: [] as any[] };
+    }
+
+    const { newActivities } = this.stravaService.filterNewActivities(activities, storedIds, deletedIds);
+    if (!newActivities.length) {
+      return { newActivities: 0, importedActivities: [] as any[] };
+    }
+
+    let enriched = newActivities;
+    try {
+      enriched = await this.stravaService.enrichActivitiesHeartRateForUser(userId, newActivities);
+    } catch (err) {
+      console.error('Strava recent HR enrich failed:', err);
+    }
+
+    const entries = this.stravaService.buildWellnessEntriesFromActivities(enriched);
+    if (entries.length) {
+      await this.storageService.importStravaEntries(userId, entries);
+      try {
+        await this.storageService.refreshStravaHeartRate(userId, entries);
+      } catch (_) { /* ignore */ }
+    }
+
+    if (options.enrichDetails !== false) {
+      try {
+        const ids = enriched.map((a) => Number(a?.id)).filter((id) => id > 0);
+        await this.stravaService.enrichRecentActivityDetails(userId, ids, { maxActivities: Math.min(12, ids.length) });
+        await this.storageService.persistBestSplitsFromDetails(userId, this.stravaService);
+      } catch (err) {
+        console.error('Strava recent detail enrich failed:', err);
+      }
+    }
+
+    if (options.notify) {
+      for (const activity of enriched) {
+        await this.stravaService.sendActivityPush(userId, activity);
+      }
+    }
+
+    return { newActivities: enriched.length, importedActivities: enriched };
   }
 
   @Get('strava/activities/:userId')
@@ -393,6 +477,7 @@ export class WellnessController {
           { maxActivities: isFirstSync ? 20 : 28 },
         );
         detailsEnriched = detailResult.enriched || 0;
+        await this.storageService.persistBestSplitsFromDetails(userId, this.stravaService);
       } catch (err) {
         console.error('Strava run detail enrich failed after import:', err);
       }

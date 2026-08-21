@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { hrZoneForBpm } from './hrZones';
 import { getShoeColor } from './runningShoes';
 
@@ -156,8 +156,8 @@ export function DepthMetric({ label, value, sub, accent, theme }) {
 }
 
 /** Contained 3D-style bars — no skew overflow */
-export function DepthBars({ title, items = [], theme, accent, unit = '' }) {
-  const rows = (items || []).slice(0, 8);
+export function DepthBars({ title, items = [], theme, accent, unit = '', highlightCurrent = true }) {
+  const rows = (items || []).slice(0, 12);
   const max = Math.max(...rows.map((i) => Number(i.value) || 0), 1);
   const barCount = Math.max(rows.length, 1);
   const svgW = Math.max(280, barCount * 48);
@@ -168,6 +168,14 @@ export function DepthBars({ title, items = [], theme, accent, unit = '' }) {
   const chartH = svgH - padTop - padBottom;
   const slot = (svgW - padX * 2) / barCount;
   const barW = Math.min(28, slot * 0.55);
+  const scrollRef = useRef(null);
+  const currentAccent = theme.green || '#22c55e';
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollLeft = el.scrollWidth;
+  }, [rows.length, title]);
 
   return (
     <div style={{
@@ -185,12 +193,16 @@ export function DepthBars({ title, items = [], theme, accent, unit = '' }) {
       {!rows.length ? (
         <div style={{ fontSize: 12, color: theme.textMuted }}>No data yet</div>
       ) : (
-        <div style={{ width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
-          <svg viewBox={`0 0 ${svgW} ${svgH}`} style={{ width: '100%', minWidth: Math.min(svgW, 320), height: 150, display: 'block' }}>
+        <div ref={scrollRef} style={{ width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+          <svg viewBox={`0 0 ${svgW} ${svgH}`} style={{ width: Math.max(svgW, 320), minWidth: svgW, height: 150, display: 'block' }}>
             <defs>
               <linearGradient id={`depth-${String(accent).replace('#', '')}`} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={accent} stopOpacity="1" />
                 <stop offset="100%" stopColor={accent} stopOpacity="0.45" />
+              </linearGradient>
+              <linearGradient id={`depth-current-${String(currentAccent).replace('#', '')}`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={currentAccent} stopOpacity="1" />
+                <stop offset="100%" stopColor={currentAccent} stopOpacity="0.55" />
               </linearGradient>
             </defs>
             {rows.map((item, index) => {
@@ -199,20 +211,27 @@ export function DepthBars({ title, items = [], theme, accent, unit = '' }) {
               const cx = padX + slot * index + slot / 2;
               const x = cx - barW / 2;
               const y = padTop + chartH - h;
+              const isCurrent = Boolean(highlightCurrent && (item.isCurrent || index === rows.length - 1));
+              const barAccent = isCurrent ? currentAccent : accent;
+              const gradId = isCurrent
+                ? `depth-current-${String(currentAccent).replace('#', '')}`
+                : `depth-${String(accent).replace('#', '')}`;
               return (
                 <g key={`${item.label}-${index}`}>
-                  {/* depth face */}
                   <polygon
                     points={`${x + barW},${y} ${x + barW + 6},${y - 5} ${x + barW + 6},${y + h - 5} ${x + barW},${y + h}`}
-                    fill={accent}
+                    fill={barAccent}
                     opacity="0.35"
                   />
-                  <rect x={x} y={y} width={barW} height={h} rx="6" fill={`url(#depth-${String(accent).replace('#', '')})`} />
-                  <text x={cx} y={y - 8} textAnchor="middle" fill={accent} fontSize="10" fontWeight="800">
+                  <rect x={x} y={y} width={barW} height={h} rx="6" fill={`url(#${gradId})`} />
+                  {isCurrent ? (
+                    <rect x={x - 2} y={y - 2} width={barW + 4} height={h + 4} rx="8" fill="none" stroke={barAccent} strokeWidth="1.5" opacity="0.9" />
+                  ) : null}
+                  <text x={cx} y={y - 8} textAnchor="middle" fill={barAccent} fontSize="10" fontWeight="800">
                     {item.value}{unit}
                   </text>
-                  <text x={cx} y={svgH - 10} textAnchor="middle" fill={theme.textMuted} fontSize="9">
-                    {String(item.label || '').slice(0, 8)}
+                  <text x={cx} y={svgH - 10} textAnchor="middle" fill={isCurrent ? barAccent : theme.textMuted} fontSize="9" fontWeight={isCurrent ? '800' : '400'}>
+                    {isCurrent ? 'This week' : String(item.label || '').slice(0, 8)}
                   </text>
                 </g>
               );
@@ -521,6 +540,21 @@ export function RunTrendChart({
           strokeLinecap="round"
           strokeLinejoin="round"
         />
+        {coords.map((c, i) => {
+          const isCurrent = Boolean(series[i]?.isCurrent) || i === coords.length - 1;
+          const color = isCurrent ? (theme.green || '#22c55e') : accent;
+          return (
+            <circle
+              key={`pt-${i}`}
+              cx={c.x}
+              cy={c.y}
+              r={isCurrent ? 4.5 : 2.8}
+              fill={color}
+              stroke={theme.cardBg || '#0a0a0a'}
+              strokeWidth={isCurrent ? 1.5 : 1}
+            />
+          );
+        })}
       </svg>
       <div style={{
         display: 'flex',
@@ -536,8 +570,9 @@ export function RunTrendChart({
         <span style={{ display: 'inline-flex', gap: 10, flexWrap: 'wrap' }}>
           <span>— all runs avg</span>
           <span style={{ color: accent }}>- - last 10 days</span>
+          <span style={{ color: theme.green || '#22c55e' }}>● this week</span>
         </span>
-        <span>{series[series.length - 1]?.label || ''}</span>
+        <span style={{ color: theme.green || '#22c55e', fontWeight: 800 }}>{series[series.length - 1]?.label || 'This week'}</span>
       </div>
     </div>
   );

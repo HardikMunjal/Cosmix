@@ -1220,6 +1220,70 @@ export class WellnessStorageService {
     return this.normalizeEntryRecord(merged, activePlanId ?? existing.planId ?? null);
   }
 
+  async persistBestSplitsFromDetails(userId: string, stravaService: {
+    loadActivityDetail: (userId: string, activityId: number) => Promise<any | null>;
+  }): Promise<{ updated: number }> {
+    const [store, scoringRules] = await Promise.all([this.loadStore(userId), this.loadScoringRules()]);
+    const normalizedStore = this.normalizeStore(store);
+    let updated = 0;
+
+    const entries = [];
+    for (const entry of normalizedStore.entries) {
+      const runs = Array.isArray(entry.stravaRuns) ? entry.stravaRuns : [];
+      if (!runs.length) {
+        entries.push(entry);
+        continue;
+      }
+      let entryChanged = false;
+      const nextRuns = [];
+      for (const run of runs) {
+        const id = Number(run?.id || run?.stravaId || 0);
+        if (!id || Number(run?.bestSplitPaceMinPerKm || 0) > 0) {
+          nextRuns.push(run);
+          continue;
+        }
+        const detail = await stravaService.loadActivityDetail(userId, id);
+        const summary = detail?.summary || {};
+        const pace = Number(summary.bestSplitPaceMinPerKm || 0);
+        if (!(pace > 0)) {
+          nextRuns.push(run);
+          continue;
+        }
+        entryChanged = true;
+        updated += 1;
+        nextRuns.push({
+          ...run,
+          bestSplitPaceMinPerKm: pace,
+          bestSplitKm: Number(summary.bestSplitKm || 0) || null,
+          bestSplitSeconds: Number(summary.bestSplitSeconds || 0) || null,
+          bestSplitAvgHeartrate: Number(summary.bestSplitAvgHeartrate || 0) || null,
+          avgHeartrate: run.avgHeartrate || summary.avgHeartrate || null,
+          maxHeartrate: run.maxHeartrate || summary.maxHeartrate || null,
+        });
+      }
+      if (!entryChanged) {
+        entries.push(entry);
+        continue;
+      }
+      entries.push(this.normalizeEntryRecord({
+        ...entry,
+        stravaRuns: nextRuns,
+        updatedAt: this.nowIso(),
+      }, entry.planId));
+    }
+
+    if (!updated) return { updated: 0 };
+
+    const nextStore = this.normalizeStore({
+      ...normalizedStore,
+      entries: this.sortEntries(entries),
+      updatedAt: this.nowIso(),
+    });
+    const derived = this.deriveScoresWithCache(nextStore, scoringRules);
+    await this.persistStore(userId, derived.store);
+    return { updated };
+  }
+
   async assignStravaRunShoe(userId: string, activityId: number, shoeId: string): Promise<{ ok: boolean; state?: WellnessState; error?: string }> {
     const numericId = Number(activityId);
     if (!Number.isFinite(numericId) || numericId <= 0) {

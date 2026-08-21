@@ -14,7 +14,6 @@ import {
   createRunningShoeId,
   getRunningShoeLabel,
   getShoeColor,
-  findDefaultUntaggedShoe,
   isWellnessApiReady,
   loadRunningShoesFromServer,
   readRunningShoes,
@@ -1352,7 +1351,6 @@ function RunningTab({
   const [assignError, setAssignError] = useState('');
   const untaggedRuns = importedRuns.filter((run) => !run.shoeId).length;
   const [shoesOpen, setShoesOpen] = useState(!runningShoes.filter((s) => !s.retired).length);
-  const autoAssignRef = useRef(new Set());
   const [forceEditPastRuns, setForceEditPastRuns] = useState(false);
   const shoesSectionRef = useRef(null);
   const hrDashboard = useMemo(() => buildHeartRateDashboard(runRows, stravaInsights), [runRows, stravaInsights]);
@@ -1412,26 +1410,6 @@ function RunningTab({
       setSavingShoeId(null);
     }
   };
-
-  useEffect(() => {
-    const fallback = findDefaultUntaggedShoe(runningShoes);
-    if (!fallback?.id || !userId || !isWellnessApiReady()) return;
-    const pending = importedRuns.filter((run) => (
-      run.stravaId
-      && !run.shoeId
-      && !autoAssignRef.current.has(run.stravaId)
-    ));
-    if (!pending.length) return;
-    pending.forEach((run) => autoAssignRef.current.add(run.stravaId));
-    let cancelled = false;
-    (async () => {
-      for (const run of pending) {
-        if (cancelled) return;
-        await handleAssignShoe(run.stravaId, fallback.id);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [importedRuns, runningShoes, userId]);
 
   const handleDeleteRun = async (stravaId) => {
     if (!userId || !stravaId) return;
@@ -1500,7 +1478,7 @@ function RunningTab({
   const weeklyRunKm = useMemo(() => buildWeeklySumBuckets(runRows, (r) => r.distance, 12), [runRows]);
   const weeklyRunMins = useMemo(() => buildWeeklySumBuckets(runRows, (r) => r.minutes, 12), [runRows]);
   const weeklyRunKmTrend = useMemo(() => ({
-    points: weeklyRunKm.map((w) => ({ date: w.date, label: w.label, y: w.value })),
+    points: weeklyRunKm.map((w) => ({ date: w.date, label: w.label, y: w.value, isCurrent: w.isCurrent })),
     overallAvg: weeklyRunKm.length ? weeklyRunKm.reduce((s, w) => s + w.value, 0) / weeklyRunKm.length : null,
     last10Avg: weeklyRunKm.length ? weeklyRunKm[weeklyRunKm.length - 1].value : null,
   }), [weeklyRunKm]);
@@ -1560,14 +1538,14 @@ function RunningTab({
             ) : null}
             <DepthBars
               title="Km by week"
-              items={weeklyRunKm.slice(-8).map((w) => ({ label: w.label, value: w.value }))}
+              items={weeklyRunKm.slice(-12).map((w) => ({ label: w.label, value: w.value, isCurrent: w.isCurrent }))}
               theme={theme}
               accent={theme.orange}
               unit=" km"
             />
             <DepthBars
               title="Run minutes by week"
-              items={weeklyRunMins.slice(-8).map((w) => ({ label: w.label, value: Math.round(w.value) }))}
+              items={weeklyRunMins.slice(-12).map((w) => ({ label: w.label, value: Math.round(w.value), isCurrent: w.isCurrent }))}
               theme={theme}
               accent={CHART_SOFT.green}
               unit="m"
@@ -2075,7 +2053,7 @@ function WalkingTab({ entries = [], name, theme, userId = null }) {
           ) : null}
           <DepthBars
             title="Km by week"
-            items={weeklyKm.slice(-8).map((w) => ({ label: w.label, value: w.value }))}
+            items={weeklyKm.slice(-12).map((w) => ({ label: w.label, value: w.value, isCurrent: w.isCurrent }))}
             theme={theme}
             accent={theme.cyan}
             unit=" km"
@@ -2283,7 +2261,7 @@ function YogaTab({ entries = [], name, theme, userId = null }) {
           ) : null}
           <DepthBars
             title="Minutes by week"
-            items={weeklyMins.slice(-8).map((w) => ({ label: w.label, value: Math.round(w.value) }))}
+            items={weeklyMins.slice(-12).map((w) => ({ label: w.label, value: Math.round(w.value), isCurrent: w.isCurrent }))}
             theme={theme}
             accent={theme.purple || '#a855f7'}
             unit="m"
@@ -2469,7 +2447,7 @@ function OverviewTab({ wellStats, wellSummary, allSportStats, entries = [], name
       {weeklyMix.length ? (
         <DepthBars
           title="Activity minutes by week"
-          items={weeklyMix.map((w) => ({ label: w.label, value: Math.round(w.value) }))}
+          items={weeklyMix.map((w) => ({ label: w.label, value: Math.round(w.value), isCurrent: w.isCurrent }))}
           theme={theme}
           accent={theme.orange}
           unit="m"
@@ -2697,10 +2675,10 @@ export default function RunningAnalytics() {
     fetch(wellnessApiUrl(`/wellness/strava/insights/${encodeURIComponent(user.id)}?days=180`))
       .then((response) => (response.ok ? response.json() : null))
       .then((payload) => {
-        if (!cancelled) setStravaInsights(payload);
+        if (!cancelled && payload) setStravaInsights(payload);
       })
       .catch(() => {
-        if (!cancelled) setStravaInsights(null);
+        // Keep last good insights so fastest-1km ranking does not flicker away.
       });
     return () => { cancelled = true; };
   }, [user?.id]);
