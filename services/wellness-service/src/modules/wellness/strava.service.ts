@@ -8,6 +8,15 @@ const DATA_DIR = path.join(process.cwd(), 'data', 'strava');
 const STRAVA_CLIENT_ID = process.env.STRAVA_CLIENT_ID || '';
 const STRAVA_CLIENT_SECRET = process.env.STRAVA_CLIENT_SECRET || '';
 const DATABASE_URL = process.env.DATABASE_URL || '';
+const STRAVA_WEBHOOK_VERIFY_TOKEN = process.env.STRAVA_WEBHOOK_VERIFY_TOKEN || 'cosmix-strava-webhook';
+const STRAVA_WEBHOOK_CALLBACK_URL = String(process.env.STRAVA_WEBHOOK_CALLBACK_URL || '').trim();
+const CHAT_SERVICE_URL = String(process.env.CHAT_SERVICE_URL || 'http://chat-service:3002').replace(/\/$/, '');
+const WEB_APP_URL = String(
+  process.env.WEB_APP_URL
+  || process.env.NEXT_PUBLIC_APP_URL
+  || process.env.FRONTEND_URL
+  || 'https://44-193-83-205.nip.io',
+).replace(/\/$/, '');
 
 function sanitize(id: string): string {
   return String(id || 'default').replace(/[^a-zA-Z0-9_@.\-]/g, '_').slice(0, 120);
@@ -22,6 +31,7 @@ interface StravaTokens {
   access_token: string;
   refresh_token: string;
   expires_at: number;
+  athlete_id?: number | null;
 }
 
 @Injectable()
@@ -77,6 +87,8 @@ export class StravaService {
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           PRIMARY KEY (user_id, activity_id)
         );
+        CREATE INDEX IF NOT EXISTS wellness_strava_tokens_athlete_idx
+          ON wellness_strava_tokens ((payload->>'athlete_id'));
       `);
     }
 
@@ -125,6 +137,7 @@ export class StravaService {
         access_token: data.access_token,
         refresh_token: data.refresh_token,
         expires_at: data.expires_at,
+        athlete_id: Number(data.athlete?.id || data.athlete_id || 0) || null,
       });
       return true;
     } catch (err) {
@@ -171,6 +184,9 @@ export class StravaService {
     if (!tokens) return null;
 
     if (tokens.expires_at > Math.floor(Date.now() / 1000) + 60) {
+      if (!tokens.athlete_id) {
+        void this.ensureAthleteId(userId, tokens.access_token);
+      }
       return tokens.access_token;
     }
 
@@ -192,10 +208,232 @@ export class StravaService {
         access_token: data.access_token,
         refresh_token: data.refresh_token,
         expires_at: data.expires_at,
+        athlete_id: Number(data.athlete?.id || tokens.athlete_id || 0) || null,
       });
       return data.access_token;
     } catch {
       return null;
+    }
+  }
+
+  async ensureAthleteId(userId: string, accessTokenHint?: string): Promise<number | null> {
+    const tokens = await this.loadTokens(userId);
+    if (!tokens) return null;
+    if (Number(tokens.athlete_id || 0) > 0) return Number(tokens.athlete_id);
+    const accessToken = accessTokenHint || await this.refreshIfNeeded(userId);
+    if (!accessToken) return null;
+    try {
+      const res = await fetch('https://www.strava.com/api/v3/athlete', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!res.ok) return null;
+      const athlete: any = await res.json();
+      const athleteId = Number(athlete?.id || 0) || null;
+      if (!athleteId) return null;
+      await this.saveTokens(userId, { ...tokens, athlete_id: athleteId, access_token: accessToken });
+      return athleteId;
+    } catch (err) {
+      console.error('Strava athlete lookup failed:', err);
+      return null;
+    }
+  }
+
+  async findUserIdByAthleteId(athleteId: number): Promise<string | null> {
+    const id = Number(athleteId);
+    if (!Number.isFinite(id) || id <= 0) return null;
+
+    if (this.hasDatabase()) {
+      const pool = await this.ensureSchema();
+      const result = await pool?.query(
+        `SELECT user_id
+         FROM wellness_strava_tokens
+         WHERE (payload->>'athlete_id')::bigint = $1
+         ORDER BY updated_at DESC
+         LIMIT 1`,
+        [id],
+      );
+      const userId = String(result?.rows?.[0]?.user_id || '').trim();
+      if (userId) return userId;
+    }
+
+    try {
+      const files = fs.readdirSync(DATA_DIR).filter((name) => name.endsWith('.json'));
+      for (const file of files) {
+        try {
+          const raw = JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), 'utf-8'));
+          if (Number(raw?.athlete_id || 0) === id) {
+            return file.replace(/\.json$/, '');
+          }
+        } catch {
+          // ignore bad token file
+        }
+      }
+    } catch {
+      // ignore missing dir
+    }
+    return null;
+  }
+
+  async resolvePushUsernames(userId: string): Promise<string[]> {
+    const uid = String(userId || '').trim();
+    if (!uid) return [];
+    const names = new Set<string>();
+
+    if (this.hasDatabase()) {
+      try {
+        const pool = await this.ensureSchema();
+        const byId = await pool?.query(
+          `SELECT username FROM app_users WHERE id = $1 LIMIT 1`,
+          [uid],
+        );
+        const username = String(byId?.rows?.[0]?.username || '').trim();
+        if (username) names.add(username);
+      } catch (err) {
+        console.error('Push username lookup failed:', err);
+      }
+    }
+
+    // Fallbacks for older accounts / local mode.
+    if (uid.startsWith('usr-') && uid.length > 4) names.add(uid.slice(4));
+    names.add(uid);
+    return [...names].filter(Boolean);
+  }
+
+  async fetchActivityById(userId: string, activityId: number): Promise<any | null> {
+    const accessToken = await this.refreshIfNeeded(userId);
+    if (!accessToken) return null;
+    const id = Number(activityId);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    try {
+      const res = await fetch(`https://www.strava.com/api/v3/activities/${id}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch (err) {
+      console.error(`Strava activity ${id} fetch failed:`, err);
+      return null;
+    }
+  }
+
+  getWebhookVerifyToken() {
+    return STRAVA_WEBHOOK_VERIFY_TOKEN;
+  }
+
+  resolveWebhookCallbackUrl(explicit?: string) {
+    const fromEnv = STRAVA_WEBHOOK_CALLBACK_URL || explicit || '';
+    if (fromEnv) return fromEnv;
+    return `${WEB_APP_URL}/wellness/strava/webhook`;
+  }
+
+  async listWebhookSubscriptions() {
+    if (!STRAVA_CLIENT_ID || !STRAVA_CLIENT_SECRET) return [];
+    const params = new URLSearchParams({
+      client_id: STRAVA_CLIENT_ID,
+      client_secret: STRAVA_CLIENT_SECRET,
+    });
+    const res = await fetch(`https://www.strava.com/api/v3/push_subscriptions?${params.toString()}`);
+    if (!res.ok) return [];
+    const data: any = await res.json();
+    return Array.isArray(data) ? data : [];
+  }
+
+  async ensureWebhookSubscription(callbackUrl?: string) {
+    const callback = this.resolveWebhookCallbackUrl(callbackUrl);
+    const existing = await this.listWebhookSubscriptions();
+    const match = existing.find((row) => String(row?.callback_url || '') === callback);
+    if (match) {
+      return { ok: true, created: false, subscription: match, callback };
+    }
+
+    // Strava allows one subscription per app — delete stale callbacks first.
+    for (const row of existing) {
+      const id = Number(row?.id || 0);
+      if (!id) continue;
+      await fetch(
+        `https://www.strava.com/api/v3/push_subscriptions/${id}?client_id=${encodeURIComponent(STRAVA_CLIENT_ID)}&client_secret=${encodeURIComponent(STRAVA_CLIENT_SECRET)}`,
+        { method: 'DELETE' },
+      ).catch(() => null);
+    }
+
+    const form = new URLSearchParams({
+      client_id: STRAVA_CLIENT_ID,
+      client_secret: STRAVA_CLIENT_SECRET,
+      callback_url: callback,
+      verify_token: STRAVA_WEBHOOK_VERIFY_TOKEN,
+    });
+    const res = await fetch('https://www.strava.com/api/v3/push_subscriptions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: form.toString(),
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, created: false, error: data?.message || `HTTP ${res.status}`, callback, raw: data };
+    }
+    return { ok: true, created: true, subscription: data, callback };
+  }
+
+  async sendActivityPush(userId: string, activity: any) {
+    const usernames = await this.resolvePushUsernames(userId);
+    if (!usernames.length) return { ok: false, reason: 'no-username' };
+
+    const kind = this.activityKind(activity);
+    const mins = Math.round(Number(activity?.moving_time || activity?.elapsed_time || 0) / 60);
+    const km = Number(activity?.distance || 0) > 0 ? Number((Number(activity.distance) / 1000).toFixed(1)) : null;
+    const avgHr = Number(activity?.average_heartrate || 0) || null;
+    const label = kind === 'ride' || kind === 'virtualride'
+      ? 'Ride'
+      : kind === 'run'
+        ? 'Run'
+        : kind === 'walk'
+          ? 'Walk'
+          : kind === 'swim'
+            ? 'Swim'
+            : kind === 'yoga'
+              ? 'Yoga'
+              : kind === 'badminton'
+                ? 'Badminton'
+                : kind === 'meditation'
+                  ? 'Meditation'
+                  : kind === 'sleep'
+                    ? 'Sleep'
+                    : String(activity?.sport_type || activity?.type || 'Activity');
+    const name = String(activity?.name || label).trim();
+    const parts = [
+      mins > 0 ? `${mins} min` : null,
+      km != null ? `${km} km` : null,
+      avgHr ? `avg HR ${avgHr}` : null,
+    ].filter(Boolean);
+    const title = `Cosmix · New ${label}`;
+    const body = parts.length ? `${name} · ${parts.join(' · ')}` : name;
+    const activityId = Number(activity?.id || 0);
+    const url = activityId > 0 && kind === 'run'
+      ? `/running/${activityId}`
+      : '/running-analytics';
+
+    try {
+      const res = await fetch(`${CHAT_SERVICE_URL}/chat/push/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          usernames,
+          title,
+          body,
+          url,
+          tag: `strava-activity-${activityId || Date.now()}`,
+          type: 'wellness',
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        console.error('Activity push failed:', res.status, text);
+        return { ok: false, reason: `http-${res.status}` };
+      }
+      return { ok: true, usernames, title, body };
+    } catch (err) {
+      console.error('Activity push error:', err);
+      return { ok: false, reason: 'network' };
     }
   }
 

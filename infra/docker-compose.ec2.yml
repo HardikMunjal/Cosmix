@@ -74,7 +74,12 @@ services:
       dockerfile: services/wellness-service/Dockerfile
     restart: unless-stopped
     env_file: *env-files
-    environment: *default-env
+    environment:
+      <<: *default-env
+      CHAT_SERVICE_URL: ${CHAT_SERVICE_URL:-http://chat-service:3002}
+      STRAVA_WEBHOOK_VERIFY_TOKEN: ${STRAVA_WEBHOOK_VERIFY_TOKEN:-cosmix-strava-webhook}
+      STRAVA_WEBHOOK_CALLBACK_URL: ${STRAVA_WEBHOOK_CALLBACK_URL:-}
+      WEB_APP_URL: ${WEB_APP_URL:-https://44-193-83-205.nip.io}
     volumes:
       - ../services/wellness-service/data:/usr/src/app/data
 

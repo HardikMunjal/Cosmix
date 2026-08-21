@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Put, Query, Res } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put, Query, Req, Res } from '@nestjs/common';
 import { Response } from 'express';
 import { CoachRequestDto } from './dto/coach-request.dto';
 import { WellnessService } from './wellness.service';
@@ -177,7 +177,103 @@ export class WellnessController {
 
   @Get('strava/status/:userId')
   async stravaStatus(@Param('userId') userId: string) {
-    return { connected: await this.stravaService.isConnected(userId) };
+    const connected = await this.stravaService.isConnected(userId);
+    if (connected) {
+      void this.stravaService.ensureAthleteId(userId);
+    }
+    return { connected };
+  }
+
+  @Get('strava/webhook')
+  stravaWebhookVerify(@Req() req: any, @Res() res: Response) {
+    const mode = String(req?.query?.['hub.mode'] || '');
+    const challenge = String(req?.query?.['hub.challenge'] || '');
+    const verifyToken = String(req?.query?.['hub.verify_token'] || '');
+    if (mode === 'subscribe' && verifyToken === this.stravaService.getWebhookVerifyToken() && challenge) {
+      return res.status(200).json({ 'hub.challenge': challenge });
+    }
+    return res.status(403).json({ ok: false, error: 'Forbidden' });
+  }
+
+  @Post('strava/webhook')
+  async stravaWebhookEvent(@Body() body: any, @Res() res: Response) {
+    // Strava requires a fast 200 ack; process import/push asynchronously.
+    res.status(200).send('EVENT_RECEIVED');
+    void this.processStravaWebhookEvent(body).catch((err) => {
+      console.error('Strava webhook processing failed:', err);
+    });
+  }
+
+  @Get('strava/webhook/status')
+  async stravaWebhookStatus() {
+    const subscriptions = await this.stravaService.listWebhookSubscriptions();
+    return {
+      callback: this.stravaService.resolveWebhookCallbackUrl(),
+      subscriptions,
+    };
+  }
+
+  @Post('strava/webhook/register')
+  async stravaWebhookRegister(@Body() body: { verifyToken?: string; callbackUrl?: string } = {}) {
+    const expected = this.stravaService.getWebhookVerifyToken();
+    if (String(body?.verifyToken || '') !== expected) {
+      return { ok: false, error: 'Invalid verify token' };
+    }
+    return this.stravaService.ensureWebhookSubscription(body?.callbackUrl);
+  }
+
+  private async processStravaWebhookEvent(body: any) {
+    const objectType = String(body?.object_type || '');
+    const aspectType = String(body?.aspect_type || '');
+    const objectId = Number(body?.object_id || 0);
+    const ownerId = Number(body?.owner_id || 0);
+    if (objectType !== 'activity' || !objectId || !ownerId) return;
+
+    const userId = await this.stravaService.findUserIdByAthleteId(ownerId);
+    if (!userId) {
+      console.warn(`Strava webhook: no Cosmix user for athlete ${ownerId}`);
+      return;
+    }
+
+    if (aspectType === 'delete') {
+      await this.storageService.deleteStravaRun(userId, objectId);
+      return;
+    }
+
+    if (aspectType !== 'create' && aspectType !== 'update') return;
+
+    let activity = await this.stravaService.fetchActivityById(userId, objectId);
+    if (!activity) {
+      console.warn(`Strava webhook: could not fetch activity ${objectId} for ${userId}`);
+      return;
+    }
+
+    try {
+      const enriched = await this.stravaService.enrichActivitiesHeartRateForUser(userId, [activity]);
+      activity = enriched[0] || activity;
+    } catch (err) {
+      console.error('Strava webhook HR enrich failed:', err);
+    }
+
+    const entries = this.stravaService.buildWellnessEntriesFromActivities([activity]);
+    if (entries.length) {
+      await this.storageService.importStravaEntries(userId, entries);
+      try {
+        await this.storageService.refreshStravaHeartRate(userId, entries);
+      } catch (err) {
+        console.error('Strava webhook HR refresh failed:', err);
+      }
+    }
+
+    try {
+      await this.stravaService.enrichRecentActivityDetails(userId, [objectId], { maxActivities: 1 });
+    } catch (err) {
+      console.error('Strava webhook detail enrich failed:', err);
+    }
+
+    if (aspectType === 'create') {
+      await this.stravaService.sendActivityPush(userId, activity);
+    }
   }
 
   @Get('strava/activities/:userId')

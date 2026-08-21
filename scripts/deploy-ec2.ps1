@@ -20,7 +20,10 @@ if (-not (Test-Path -LiteralPath $KeyPath)) {
 }
 
 $noCacheVal = if ($NoCache) { '1' } else { '0' }
-$remote = "cd /opt/cosmix && git pull origin main && COSMIX_NO_CACHE=$noCacheVal bash scripts/ec2-deploy-remote.sh $Step"
+$servicesVal = ($Services -join ' ').Trim()
+if (-not $servicesVal) { $servicesVal = 'web api-gateway chat-service wellness-service' }
+Write-Host "Services: $servicesVal" -ForegroundColor DarkGray
+$remote = "cd /opt/cosmix && git pull origin main && COSMIX_NO_CACHE=$noCacheVal COSMIX_DEPLOY_SERVICES=`"$servicesVal`" bash scripts/ec2-deploy-remote.sh $Step"
 
 & $ssh -i $KeyPath -o ServerAliveInterval=30 $target "bash -lc '$remote'"
 if ($LASTEXITCODE -ne 0) {
