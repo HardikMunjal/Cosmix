@@ -30,9 +30,12 @@ docker run --rm \
   -d "$DOMAIN"
 
 echo "[3/5] Ensuring certificate symlink path exists"
-if [ ! -d "/etc/letsencrypt/live/$DOMAIN" ]; then
-  echo "Certificate directory not found for $DOMAIN"
-  exit 1
+if [ ! -d "/etc/letsencrypt/live/$DOMAIN" ] && [ ! -d "/etc/letsencrypt/live/$DOMAIN" ]; then
+  # live/ is root-only on Amazon Linux; check with sudo
+  if ! sudo test -d "/etc/letsencrypt/live/$DOMAIN"; then
+    echo "Certificate directory not found for $DOMAIN"
+    exit 1
+  fi
 fi
 
 echo "[4/5] Starting stack with HTTPS override"
