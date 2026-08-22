@@ -15,7 +15,7 @@ const WEB_APP_URL = String(
   process.env.WEB_APP_URL
   || process.env.NEXT_PUBLIC_APP_URL
   || process.env.FRONTEND_URL
-  || 'https://44-193-83-205.nip.io',
+  || 'https://3-221-127-253.nip.io',
 ).replace(/\/$/, '');
 
 function sanitize(id: string): string {
