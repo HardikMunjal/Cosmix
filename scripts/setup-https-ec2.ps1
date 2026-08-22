@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Email,
     [string]$KeyPath = "C:\Users\hardi\Downloads\cosmix-ec2",
-    [string]$ServerIP = "44.193.83.205",
+    [string]$ServerIP = "3.221.127.253",
     [string]$ServerUser = "ec2-user"
 )
 

@@ -8,7 +8,7 @@
 #     -d '{"verifyToken":"cosmix-strava-webhook"}'
 set -euo pipefail
 
-BASE_URL="${COSMIX_BASE_URL:-https://44-193-83-205.nip.io}"
+BASE_URL="${COSMIX_BASE_URL:-https://3-221-127-253.nip.io}"
 VERIFY_TOKEN="${STRAVA_WEBHOOK_VERIFY_TOKEN:-cosmix-strava-webhook}"
 CALLBACK_URL="${STRAVA_WEBHOOK_CALLBACK_URL:-${BASE_URL}/wellness/strava/webhook}"
 

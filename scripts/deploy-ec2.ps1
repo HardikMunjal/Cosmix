@@ -1,7 +1,7 @@
 # Deploy Cosmix to EC2 with disk cleanup and retryable steps.
 param(
     [string]$KeyPath = "C:\Users\hardi\Downloads\cosmix-ec2",
-    [string]$ServerIP = "44.193.83.205",
+    [string]$ServerIP = "3.221.127.253",
     [string]$ServerUser = "ec2-user",
     [switch]$NoCache,
     [ValidateSet('all', 'pull', 'prune', 'build', 'up', 'verify')]
@@ -30,7 +30,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Remote deploy step '$Step' failed with exit code $LASTEXITCODE"
 }
 
-Write-Host "Deploy finished. https://44-193-83-205.nip.io/" -ForegroundColor Green
+Write-Host "Deploy finished. https://3-221-127-253.nip.io/" -ForegroundColor Green
 Write-Host "Retry examples:" -ForegroundColor DarkGray
 Write-Host "  .\scripts\deploy-ec2.ps1 -Step prune" -ForegroundColor DarkGray
 Write-Host "  .\scripts\deploy-ec2.ps1 -Step build -NoCache" -ForegroundColor DarkGray
