@@ -36,6 +36,13 @@ export const LOGO_PLACES = [
   { id: 'both', label: 'Both' },
 ];
 
+export const STAT_PLACES = [
+  { id: 'left', label: 'Left' },
+  { id: 'right', label: 'Right' },
+  { id: 'top', label: 'Top' },
+  { id: 'bottom', label: 'Bottom' },
+];
+
 export const SHARE_PRESETS = {
   story: {
     format: 'video',
@@ -92,6 +99,7 @@ export const DEFAULT_SHARE_OPTIONS = {
   mapStyle: 'satellite3d',
   mapColor: 'original',
   logoPlace: 'top',
+  statsPlace: 'bottom',
   runName: '',
   overallTime: '',
 };
@@ -114,6 +122,7 @@ export function normalizeShareOptions(options = {}) {
   next.logoSize = pickEnum(next.logoSize, SIZE_STEPS, 'large');
   next.textSize = pickEnum(next.textSize, SIZE_STEPS, 'medium');
   next.logoPlace = pickEnum(next.logoPlace, LOGO_PLACES, 'top');
+  next.statsPlace = pickEnum(next.statsPlace, STAT_PLACES, 'bottom');
   next.runName = String(next.runName || '').trim().slice(0, 52);
   next.overallTime = String(next.overallTime || '').trim().slice(0, 12);
   SHARE_BOOL_KEYS.forEach((key) => {
@@ -241,15 +250,43 @@ function downsamplePoints(points) {
   return points.filter((_, i) => i % step === 0 || i === points.length - 1);
 }
 
+function resolveMapPads(pad = 48) {
+  if (pad && typeof pad === 'object') {
+    const fallback = Number(pad.top ?? pad.bottom ?? pad.left ?? pad.right ?? 48) || 48;
+    const n = (value) => {
+      const next = Number(value);
+      return Number.isFinite(next) ? Math.max(0, next) : fallback;
+    };
+    return {
+      top: n(pad.top),
+      right: n(pad.right),
+      bottom: n(pad.bottom),
+      left: n(pad.left),
+    };
+  }
+  const n = Math.max(0, Number(pad) || 48);
+  return { top: n, right: n, bottom: n, left: n };
+}
+
+export function shareMapPads(width, height) {
+  return {
+    top: Math.max(20, Math.round(height * 0.02)),
+    right: Math.max(20, Math.round(width * 0.035)),
+    bottom: Math.max(24, Math.round(height * 0.03)),
+    left: Math.max(20, Math.round(width * 0.035)),
+  };
+}
+
 /**
  * Web-Mercator projection so satellite tiles line up with the GPS track.
  */
 export function buildRouteProjection(polyline = [], width, height, pad = 48) {
+  const pads = resolveMapPads(pad);
   const points = (polyline || [])
     .map((p) => (Array.isArray(p) ? [Number(p[0]), Number(p[1])] : null))
     .filter((p) => p && Number.isFinite(p[0]) && Number.isFinite(p[1]));
   if (points.length < 2) {
-    return { coords: [], width, height, pad, scale: 1, originMX: 0, originMY: 0, spanMX: 1, spanMY: 1, offsetX: 0, offsetY: 0 };
+    return { coords: [], width, height, pad: pads, scale: 1, originMX: 0, originMY: 0, spanMX: 1, spanMY: 1, offsetX: 0, offsetY: 0 };
   }
 
   const pts = downsamplePoints(points);
@@ -260,17 +297,28 @@ export function buildRouteProjection(polyline = [], width, height, pad = 48) {
   const maxMX = Math.max(...mxs);
   const minMY = Math.min(...mys);
   const maxMY = Math.max(...mys);
-  const mxPad = Math.max(8e-8, (maxMX - minMX) * 0.22);
-  const myPad = Math.max(8e-8, (maxMY - minMY) * 0.22);
-  const originMX = minMX - mxPad;
-  const originMY = minMY - myPad;
-  const spanMX = Math.max(1e-8, (maxMX - minMX) + mxPad * 2);
-  const spanMY = Math.max(1e-8, (maxMY - minMY) + myPad * 2);
-  const usableW = Math.max(40, width - pad * 2);
-  const usableH = Math.max(40, height - pad * 2);
-  const scale = Math.min(usableW / spanMX, usableH / spanMY);
-  const offsetX = (width - spanMX * scale) / 2;
-  const offsetY = (height - spanMY * scale) / 2;
+  const mxPad = Math.max(8e-8, (maxMX - minMX) * 0.28);
+  const myPad = Math.max(8e-8, (maxMY - minMY) * 0.28);
+  let originMX = minMX - mxPad;
+  let originMY = minMY - myPad;
+  let spanMX = Math.max(1e-8, (maxMX - minMX) + mxPad * 2);
+  let spanMY = Math.max(1e-8, (maxMY - minMY) + myPad * 2);
+  const usableW = Math.max(40, width - pads.left - pads.right);
+  const usableH = Math.max(40, height - pads.top - pads.bottom);
+  const targetAspect = usableW / usableH;
+  const geoAspect = spanMX / spanMY;
+  if (geoAspect > targetAspect) {
+    const extraMY = spanMX / targetAspect - spanMY;
+    originMY -= extraMY * 0.38;
+    spanMY += extraMY;
+  } else {
+    const extraMX = spanMY * targetAspect - spanMX;
+    originMX -= extraMX / 2;
+    spanMX += extraMX;
+  }
+  const scale = usableW / spanMX;
+  const offsetX = pads.left;
+  const offsetY = pads.top;
 
   const coords = merc.map((p) => ({
     x: offsetX + (p.mx - originMX) * scale,
@@ -280,7 +328,7 @@ export function buildRouteProjection(polyline = [], width, height, pad = 48) {
   }));
 
   return {
-    coords, width, height, pad, scale, originMX, originMY, spanMX, spanMY, offsetX, offsetY,
+    coords, width, height, pad: pads, scale, originMX, originMY, spanMX, spanMY, offsetX, offsetY,
   };
 }
 
@@ -312,7 +360,7 @@ function loadTileImage(url) {
   });
 }
 
-const MAP_TILT = 0.24;
+const MAP_TILT = 0.12;
 
 function pickTileZoom(proj) {
   const world = 256;
@@ -321,14 +369,19 @@ function pickTileZoom(proj) {
   return Math.round(clamp(Math.min(zx, zy), 13, 16));
 }
 
+function perspectiveFill(tilt = MAP_TILT) {
+  return 1 / Math.max(0.55, 1 - tilt);
+}
+
 function projectPointPerspective(x, y, w, h, tilt = MAP_TILT) {
   const u = w ? x / w : 0;
   const v = h ? y / h : 0;
   const topW = w * (1 - tilt);
   const rowW = topW + (w - topW) * v;
+  const fill = perspectiveFill(tilt);
   return {
-    x: (w - rowW) / 2 + u * rowW,
-    y,
+    x: ((w - rowW) / 2 + u * rowW - w / 2) * fill + w / 2,
+    y: y * fill,
   };
 }
 
@@ -336,12 +389,12 @@ function warpMapToPerspective(src, tilt = MAP_TILT) {
   if (!src || typeof document === 'undefined') return src;
   const w = src.width;
   const h = src.height;
-  const out = document.createElement('canvas');
-  out.width = w;
-  out.height = h;
-  const ctx = out.getContext('2d');
-  ctx.fillStyle = '#07111f';
-  ctx.fillRect(0, 0, w, h);
+  const warped = document.createElement('canvas');
+  warped.width = w;
+  warped.height = h;
+  const wctx = warped.getContext('2d');
+  wctx.fillStyle = '#07111f';
+  wctx.fillRect(0, 0, w, h);
   const slices = Math.min(200, Math.max(90, Math.round(h / 3)));
   for (let i = 0; i < slices; i += 1) {
     const t = i / slices;
@@ -349,8 +402,16 @@ function warpMapToPerspective(src, tilt = MAP_TILT) {
     const srcH = h / slices + 1.6;
     const rowW = w * (1 - tilt) + w * tilt * t;
     const dx = (w - rowW) / 2;
-    ctx.drawImage(src, 0, srcY, w, srcH, dx, t * h, rowW, h / slices + 1.1);
+    wctx.drawImage(src, 0, srcY, w, srcH, dx, t * h, rowW, h / slices + 1.1);
   }
+  const fill = perspectiveFill(tilt);
+  const out = document.createElement('canvas');
+  out.width = w;
+  out.height = h;
+  const ctx = out.getContext('2d');
+  ctx.fillStyle = '#07111f';
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(warped, (w - w * fill) / 2, 0, w * fill, h * fill);
   return out;
 }
 
@@ -709,6 +770,74 @@ function drawCosmixBrand(ctx, x, y, size, {
   }
 }
 
+function drawNakedUniverseMark(ctx, x, y, size) {
+  const r = size / 2;
+  const cx = x + r;
+  const cy = y + r;
+  ctx.save();
+  const glow = ctx.createRadialGradient(cx, cy, r * 0.06, cx, cy, r * 1.05);
+  glow.addColorStop(0, 'rgba(125,211,252,0.5)');
+  glow.addColorStop(1, 'rgba(125,211,252,0)');
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 1.05, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(-0.42);
+  ctx.beginPath();
+  ctx.ellipse(0, 0, r * 0.9, r * 0.34, 0, 0, Math.PI * 2);
+  ctx.strokeStyle = '#67e8f9';
+  ctx.lineWidth = Math.max(2.4, size * 0.08);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(0, 0, r * 0.9, r * 0.34, 0, 0, Math.PI * 2);
+  ctx.strokeStyle = '#fdba74';
+  ctx.globalAlpha = 0.8;
+  ctx.lineWidth = Math.max(1.4, size * 0.04);
+  ctx.stroke();
+  ctx.restore();
+
+  const star = ctx.createRadialGradient(cx - r * 0.08, cy - r * 0.1, 1, cx, cy, r * 0.34);
+  star.addColorStop(0, '#ffffff');
+  star.addColorStop(0.38, '#e0f2fe');
+  star.addColorStop(1, '#38bdf8');
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 0.28, 0, Math.PI * 2);
+  ctx.fillStyle = star;
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawBrandLockup(ctx, rightX, cy, { scale = 1 } = {}) {
+  const namePx = Math.max(18, 22 * scale);
+  const mark = Math.max(28, 32 * scale);
+  const gap = 8;
+  ctx.save();
+  ctx.textAlign = 'right';
+  ctx.font = `900 ${namePx}px system-ui, sans-serif`;
+  const label = 'COSMIX';
+  const textW = ctx.measureText(label).width;
+  const boxH = Math.max(mark + 12, namePx + 16);
+  const boxW = mark + gap + textW + 20;
+  const boxX = rightX - boxW;
+  const boxY = cy - boxH / 2;
+  drawRoundedRect(ctx, boxX, boxY, boxW, boxH, boxH / 2);
+  ctx.fillStyle = 'rgba(2, 8, 20, 0.72)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(186,230,253,0.45)';
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+  drawNakedUniverseMark(ctx, boxX + 9, cy - mark / 2, mark);
+  ctx.shadowColor = 'rgba(0,0,0,0.85)';
+  ctx.shadowBlur = 8;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(label, rightX - 11, cy + namePx * 0.34);
+  ctx.restore();
+  return boxH;
+}
+
 function drawCircleLogo(ctx, cx, cy, size, { logoImage = null } = {}) {
   const r = Math.max(8, size / 2);
   ctx.save();
@@ -888,6 +1017,26 @@ export async function convertReelToMp4(blob, { onProgress } = {}) {
 
 let logoImagePromise = null;
 
+export function loadImageFromFile(file) {
+  return new Promise((resolve, reject) => {
+    if (!file || !String(file.type || '').startsWith('image/')) {
+      reject(new Error('Choose a photo'));
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Could not read that photo'));
+    };
+    img.src = url;
+  });
+}
+
 export async function loadCosmixLogo() {
   if (typeof Image === 'undefined') return Promise.resolve(null);
   if (logoImagePromise) return logoImagePromise;
@@ -967,8 +1116,8 @@ function buildAnalytics(summary = {}, reveal = 1) {
   ];
 
   if (hr > 0) cards.push({ label: 'AVG HR', value: String(Math.round(hr * reveal)), unit: 'bpm', color: '#fda4af' });
-  if (split > 0) cards.push({ label: 'BEST 1 KM', value: fmtPace(split), unit: '/km', color: '#86efac' });
-  else if (speed > 0) cards.push({ label: 'AVG SPEED', value: (speed * reveal).toFixed(1), unit: 'km/h', color: '#86efac' });
+  if (speed > 0) cards.push({ label: 'AVG SPEED', value: (speed * reveal).toFixed(1), unit: 'km/h', color: '#86efac' });
+  if (split > 0) cards.push({ label: 'BEST 1 KM', value: fmtPace(split), unit: '/km', color: '#a3e635' });
   if (elev > 0) cards.push({ label: 'ELEVATION', value: `↑${Math.round(elev * reveal)}`, unit: 'm', color: '#a5b4fc' });
   if (cadence > 0) cards.push({ label: 'CADENCE', value: String(Math.round(cadence * reveal)), unit: 'spm', color: '#f9a8d4' });
   if (stride > 0) cards.push({ label: 'STRIDE', value: (stride * reveal).toFixed(2), unit: 'm', color: '#67e8f9' });
@@ -1372,48 +1521,128 @@ function drawRouteOnMap(ctx, route, mapReveal, clockMs, showRunner = true, dista
   }
 }
 
-function drawMapHud(ctx, {
-  x, y, w, h, distance, pace, minutes, extraStats = [], splitRows = [],
-  showHero, showStats, showSplits, showLogo, showPlace, showAthlete, showTitle,
-  runName, place, dateLabel, athlete, logoImage, clockMs, s,
-  logoSize = 'large', textSize = 'medium', logoPlace = 'both',
-}) {
-  const textMul = sizeMultiplier(textSize);
-  const logoMul = sizeMultiplier(logoSize, { small: 1.05, medium: 1.28, large: 1.62 });
-  const u = Math.max(0.82, s * 1.55) * textMul;
-  const showTopLogo = Boolean(showLogo);
-  const mark = Math.max(34, 36 * logoMul);
-  const headerY = y + 18 + mark / 2;
+function drawCoverImage(ctx, image, w, h) {
+  if (!image) return;
+  const iw = image.naturalWidth || image.width;
+  const ih = image.naturalHeight || image.height;
+  if (!iw || !ih) return;
+  const scale = Math.max(w / iw, h / ih);
+  const dw = iw * scale;
+  const dh = ih * scale;
+  ctx.drawImage(image, (w - dw) / 2, (h - dh) / 2, dw, dh);
+}
 
+function collectHudItems({ distance, pace, minutes, extraStats = [], showHero, showStats }) {
+  const items = [];
+  if (showHero) {
+    items.push({ label: 'DISTANCE', value: distance ? Number(distance).toFixed(2) : '--', unit: 'km', color: '#fdba74', hero: true });
+    items.push({ label: 'AVG PACE', value: pace ? fmtPace(pace) : '--', unit: '/km', color: '#7dd3fc' });
+    items.push({ label: 'TIME', value: minutes ? formatOverallClock(minutes) : '--', unit: '', color: '#c4b5fd' });
+  }
+  if (showStats) items.push(...extraStats.slice(0, showHero ? 5 : 8));
+  return items;
+}
+
+function drawHudChip(ctx, stat, x, y, w, h, u) {
+  drawRoundedRect(ctx, x, y, w, h, 16);
+  ctx.fillStyle = 'rgba(15,23,42,0.78)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(148,163,184,0.28)';
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
   ctx.textAlign = 'left';
-  ctx.fillStyle = 'rgba(248,250,252,0.92)';
-  ctx.font = `700 ${Math.max(12, 13 * u)}px system-ui, sans-serif`;
-  if (showPlace) {
-    ctx.fillText([dateLabel, place].filter(Boolean).join('  ·  ') || 'Outdoor run', x + 18, headerY + 4);
+  ctx.fillStyle = 'rgba(186,198,214,0.95)';
+  ctx.font = `800 ${Math.max(10, 11 * u)}px system-ui, sans-serif`;
+  ctx.fillText(stat.label, x + 12, y + 20);
+  const valueSize = stat.hero ? Math.max(26, 30 * u) : Math.max(20, 22 * u);
+  ctx.fillStyle = '#f8fafc';
+  ctx.font = `800 ${valueSize}px system-ui, sans-serif`;
+  ctx.fillText(stat.value, x + 12, y + h - 14);
+  if (stat.unit) {
+    const vw = ctx.measureText(stat.value).width;
+    ctx.fillStyle = stat.color || '#67e8f9';
+    ctx.font = `700 ${Math.max(11, 12 * u)}px system-ui, sans-serif`;
+    ctx.fillText(stat.unit, x + 12 + vw + 6, y + h - 14);
+  }
+}
+
+function drawHudStats(ctx, {
+  place = 'bottom',
+  x, y, w, h, u, s,
+  headerBottom,
+  distance, pace, minutes, extraStats = [], splitRows = [],
+  showHero, showStats, showSplits,
+}) {
+  const items = collectHudItems({ distance, pace, minutes, extraStats, showHero, showStats });
+
+  if (place === 'left' || place === 'right') {
+    const colW = Math.min(w * 0.5, 280);
+    const fromLeft = place === 'left';
+    const fade = ctx.createLinearGradient(fromLeft ? x : x + w, y, fromLeft ? x + colW * 1.55 : x + w - colW * 1.55, y);
+    fade.addColorStop(0, 'rgba(2,8,20,0.9)');
+    fade.addColorStop(1, 'rgba(2,8,20,0)');
+    ctx.fillStyle = fade;
+    ctx.fillRect(fromLeft ? x : x + w - colW * 1.55, y, colW * 1.55, h);
+
+    const px = fromLeft ? x + 16 : x + w - colW + 4;
+    const chipW = colW - 28;
+    let py = Math.max(headerBottom + 10, y + 92);
+    items.forEach((stat) => {
+      const chipH = stat.hero ? 82 : 62;
+      if (py + chipH > y + h - 18) return;
+      drawHudChip(ctx, stat, px, py, chipW, chipH, u);
+      py += chipH + 8;
+    });
+    if (showSplits && splitRows.length && py + 92 < y + h - 12) {
+      drawSplitsPanel(ctx, splitRows, {
+        x: fromLeft ? x : x + w - colW,
+        y: py,
+        w: colW,
+        h: 92,
+        s: Math.max(s, 0.85),
+        overlay: true,
+      });
+    }
+    return;
   }
 
-  if (showTopLogo) {
-    const lx = x + w - 16 - mark / 2;
-    drawCircleLogo(ctx, lx, headerY, mark, { logoImage });
-    ctx.textAlign = 'right';
-    ctx.fillStyle = 'rgba(186,230,253,0.9)';
-    ctx.font = `800 ${Math.max(8, 9 * u)}px system-ui, sans-serif`;
-    ctx.fillText('COSMIX', lx - mark / 2 - 6, headerY + 3);
-    ctx.textAlign = 'left';
-  }
+  if (place === 'top') {
+    const panelH = Math.min(h * 0.52, 360);
+    const fade = ctx.createLinearGradient(x, y, x, y + panelH);
+    fade.addColorStop(0, 'rgba(2,8,20,0.86)');
+    fade.addColorStop(0.72, 'rgba(2,8,20,0.42)');
+    fade.addColorStop(1, 'rgba(2,8,20,0)');
+    ctx.fillStyle = fade;
+    ctx.fillRect(x, y, w, panelH);
 
-  let ty = y + 18 + mark + 14 * u;
-  if (showAthlete && athlete) {
-    ctx.fillStyle = 'rgba(226,232,240,0.92)';
-    ctx.font = `600 ${Math.max(13, 14 * u)}px system-ui, sans-serif`;
-    ctx.fillText(athlete, x + 18, ty);
-    ty += 18 * u;
-  }
-  if (showTitle) {
-    ctx.fillStyle = '#f8fafc';
-    const titleSize = runName.length > 26 ? Math.max(18, 22 * u) : Math.max(22, 26 * u);
-    ctx.font = `900 ${titleSize}px system-ui, sans-serif`;
-    ctx.fillText(runName, x + 18, ty + 6);
+    const gap = 8;
+    const cols = 2;
+    const chipW = (w - 36 - gap) / cols;
+    const chipH = 62;
+    let py = Math.max(headerBottom + 10, y + 92);
+    items.forEach((stat, i) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const cx = x + 18 + col * (chipW + gap);
+      const cy = py + row * (chipH + gap);
+      if (cy + chipH > y + h - 16) return;
+      drawHudChip(ctx, stat, cx, cy, chipW, chipH, u);
+    });
+    if (showSplits && splitRows.length) {
+      const rows = Math.ceil(items.length / cols);
+      const splitsY = py + rows * (chipH + gap) + 6;
+      if (splitsY + 88 < y + h - 12) {
+        drawSplitsPanel(ctx, splitRows, {
+          x,
+          y: splitsY,
+          w,
+          h: 88,
+          s: Math.max(s, 0.85),
+          overlay: true,
+        });
+      }
+    }
+    return;
   }
 
   const fadeH = Math.min(h * 0.58, 390 * u);
@@ -1437,40 +1666,23 @@ function drawMapHud(ctx, {
     by -= 104;
   }
 
-  if (showStats && extraStats.length) {
-    const chips = extraStats.slice(0, 3);
+  const extra = extraStats.slice(0, 3);
+  if (showStats && extra.length) {
     const gap = 8;
-    const chipW = (w - 36 - gap * (chips.length - 1)) / chips.length;
+    const chipW = (w - 36 - gap * (extra.length - 1)) / extra.length;
     const chipH = 70;
     const cy = by - chipH;
-    chips.forEach((stat, i) => {
-      const cx = x + 18 + i * (chipW + gap);
-      drawRoundedRect(ctx, cx, cy, chipW, chipH, 16);
-      ctx.fillStyle = 'rgba(15,23,42,0.78)';
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(148,163,184,0.28)';
-      ctx.lineWidth = 1.2;
-      ctx.stroke();
-      ctx.fillStyle = 'rgba(186,198,214,0.95)';
-      ctx.font = `800 ${Math.max(11, 12 * u)}px system-ui, sans-serif`;
-      ctx.fillText(stat.label, cx + 12, cy + 22);
-      ctx.fillStyle = '#f8fafc';
-      ctx.font = `800 ${Math.max(22, 24 * u)}px system-ui, sans-serif`;
-      ctx.fillText(stat.value, cx + 12, cy + 52);
-      if (stat.unit) {
-        const vw = ctx.measureText(stat.value).width;
-        ctx.fillStyle = stat.color;
-        ctx.font = `700 ${Math.max(12, 13 * u)}px system-ui, sans-serif`;
-        ctx.fillText(stat.unit, cx + 12 + vw + 6, cy + 52);
-      }
+    extra.forEach((stat, i) => {
+      drawHudChip(ctx, stat, x + 18 + i * (chipW + gap), cy, chipW, chipH, u);
     });
     by = cy - 14;
   }
 
   if (showHero) {
+    ctx.textAlign = 'left';
     ctx.fillStyle = '#f8fafc';
     ctx.font = `900 ${Math.max(48, 56 * u)}px system-ui, sans-serif`;
-    const distText = distance ? distance.toFixed(2) : '--';
+    const distText = distance ? Number(distance).toFixed(2) : '--';
     ctx.fillText(distText, x + 18, by - 28);
     const distWidth = ctx.measureText(distText).width;
     ctx.fillStyle = '#fdba74';
@@ -1481,6 +1693,60 @@ function drawMapHud(ctx, {
     const paceTime = [pace ? `${fmtPace(pace)} /km` : null, minutes ? formatOverallClock(minutes) : null].filter(Boolean).join('   ·   ');
     ctx.fillText(paceTime, x + 18, by - 4);
   }
+}
+
+function drawMapHud(ctx, {
+  x, y, w, h, distance, pace, minutes, extraStats = [], splitRows = [],
+  showHero, showStats, showSplits, showLogo, showPlace, showAthlete, showTitle,
+  runName, place, dateLabel, athlete, logoImage, clockMs, s,
+  logoSize = 'large', textSize = 'medium', logoPlace = 'both', statsPlace = 'bottom',
+}) {
+  const textMul = sizeMultiplier(textSize);
+  const logoMul = sizeMultiplier(logoSize, { small: 1.12, medium: 1.38, large: 1.72 });
+  const u = Math.max(0.82, s * 1.55) * textMul;
+  const brandH = Math.max(36, 40 * logoMul);
+  const headerY = y + 16 + brandH / 2;
+
+  const topFadeH = Math.min(h * 0.28, 160);
+  const topFade = ctx.createLinearGradient(x, y, x, y + topFadeH);
+  topFade.addColorStop(0, 'rgba(2,8,20,0.62)');
+  topFade.addColorStop(1, 'rgba(2,8,20,0)');
+  ctx.fillStyle = topFade;
+  ctx.fillRect(x, y, w, topFadeH);
+
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(248,250,252,0.96)';
+  ctx.font = `700 ${Math.max(12, 13 * u)}px system-ui, sans-serif`;
+  if (showPlace) {
+    ctx.fillText([dateLabel, place].filter(Boolean).join('  ·  ') || 'Outdoor run', x + 18, headerY + 4);
+  }
+
+  if (showLogo) {
+    drawBrandLockup(ctx, x + w - 14, headerY, { scale: logoMul });
+  }
+
+  let ty = y + 16 + brandH + 12 * u;
+  if (showAthlete && athlete) {
+    ctx.fillStyle = 'rgba(226,232,240,0.94)';
+    ctx.font = `600 ${Math.max(13, 14 * u)}px system-ui, sans-serif`;
+    ctx.fillText(athlete, x + 18, ty);
+    ty += 18 * u;
+  }
+  if (showTitle) {
+    ctx.fillStyle = '#f8fafc';
+    const titleSize = runName.length > 26 ? Math.max(18, 22 * u) : Math.max(22, 26 * u);
+    ctx.font = `900 ${titleSize}px system-ui, sans-serif`;
+    ctx.fillText(runName, x + 18, ty + 6);
+    ty += titleSize + 8;
+  }
+
+  drawHudStats(ctx, {
+    place: statsPlace,
+    x, y, w, h, u, s,
+    headerBottom: ty,
+    distance, pace, minutes, extraStats, splitRows,
+    showHero, showStats, showSplits,
+  });
 }
 
 /**
@@ -1496,6 +1762,7 @@ export function drawRunShareFrame(ctx, {
   athleteName = '',
   logoImage = null,
   mapCanvas = null,
+  userImage = null,
   mode = 'video',
   clockMs = 0,
   options = {},
@@ -1518,7 +1785,8 @@ export function drawRunShareFrame(ctx, {
   const athlete = String(athleteName || '').trim();
   const extraStats = buildAnalytics(shareSummary, statsReveal).filter((item) => !['DISTANCE', 'AVG PACE', 'TIME'].includes(item.label));
   const splitRows = Array.isArray(splits) ? splits : [];
-  const showMap = Boolean(opt.showMap && polyline?.length >= 2);
+  const showPhoto = Boolean(userImage && (userImage.naturalWidth || userImage.width));
+  const showMap = Boolean(!showPhoto && opt.showMap && polyline?.length >= 2);
   const showSplits = Boolean(opt.showSplits && splitRows.length);
   const showStats = Boolean(opt.showStats && extraStats.length);
 
@@ -1527,14 +1795,15 @@ export function drawRunShareFrame(ctx, {
   const padX = 18;
   const padY = 16;
 
-  if (showMap) {
+  if (showMap || showPhoto) {
     const cardX = padX;
     const cardY = padY;
     const cardW = width - padX * 2;
     const cardH = height - padY * 2;
     const mapW = mapCanvas?.width || Math.round(cardW);
     const mapH = mapCanvas?.height || Math.round(cardH);
-    const rawRoute = projectPolyline(polyline, mapW, mapH, 40);
+    const mapPad = shareMapPads(mapW, mapH);
+    const rawRoute = showMap ? projectPolyline(polyline, mapW, mapH, mapPad) : [];
     const sx = cardW / mapW;
     const sy = cardH / mapH;
     const useTilt = opt.mapStyle === 'satellite3d' || opt.mapStyle === 'space';
@@ -1555,9 +1824,10 @@ export function drawRunShareFrame(ctx, {
     drawRoundedRect(ctx, cardX, cardY, cardW, cardH, 26);
     ctx.clip();
     ctx.translate(cardX, cardY);
-    if (mapCanvas) ctx.drawImage(mapCanvas, 0, 0, cardW, cardH);
+    if (showPhoto) drawCoverImage(ctx, userImage, cardW, cardH);
+    else if (mapCanvas) ctx.drawImage(mapCanvas, 0, 0, cardW, cardH);
     else drawProceduralTerrain(ctx, cardW, cardH);
-    if (route.length >= 2) {
+    if (!showPhoto && route.length >= 2) {
       drawRouteOnMap(ctx, route, mapReveal, clockMs, opt.showRunner, distance, liveSpeed);
     }
     ctx.restore();
@@ -1592,6 +1862,7 @@ export function drawRunShareFrame(ctx, {
       logoSize: opt.logoSize,
       textSize: opt.textSize,
       logoPlace: opt.logoPlace,
+      statsPlace: opt.statsPlace,
     });
     ctx.restore();
 
@@ -1603,22 +1874,18 @@ export function drawRunShareFrame(ctx, {
   }
 
   let y = 22 * s;
-  const mark = Math.max(34, 38 * sizeMultiplier(opt.logoSize, { small: 1.05, medium: 1.28, large: 1.58 }));
+  const logoMul = sizeMultiplier(opt.logoSize, { small: 1.12, medium: 1.38, large: 1.72 });
+  const brandH = Math.max(36, 40 * logoMul);
   if (opt.showPlace) {
     ctx.fillStyle = 'rgba(148,163,184,0.92)';
     ctx.font = `700 ${Math.max(13, 15 * s)}px system-ui, sans-serif`;
     ctx.textAlign = 'left';
-    ctx.fillText([dateLabel, place].filter(Boolean).join('  ·  ') || 'Outdoor run', 36 * s, y + mark * 0.45);
+    ctx.fillText([dateLabel, place].filter(Boolean).join('  ·  ') || 'Outdoor run', 36 * s, y + brandH * 0.55);
   }
   if (opt.showLogo) {
-    drawCircleLogo(ctx, width - 36 * s - mark / 2, y + mark / 2, mark, { logoImage });
-    ctx.textAlign = 'right';
-    ctx.fillStyle = 'rgba(186,230,253,0.9)';
-    ctx.font = `800 ${Math.max(9, 10 * s)}px system-ui, sans-serif`;
-    ctx.fillText('COSMIX', width - 36 * s - mark - 6, y + mark * 0.58);
-    ctx.textAlign = 'left';
+    drawBrandLockup(ctx, width - 28 * s, y + brandH / 2, { scale: logoMul });
   }
-  y += mark + 16 * s;
+  y += brandH + 16 * s;
 
   if (opt.showAthlete && athlete) {
     ctx.fillStyle = 'rgba(226,232,240,0.8)';
@@ -1700,6 +1967,7 @@ export async function renderRunShareReel({
   includePoster = true,
   mode = 'video',
   options = {},
+  userImage = null,
   onProgress,
 } = {}) {
   if (typeof document === 'undefined') {
@@ -1713,15 +1981,18 @@ export async function renderRunShareReel({
   canvas.height = height;
   const ctx = canvas.getContext('2d');
   const logoImage = await loadCosmixLogo();
+  const hasUserPhoto = Boolean(userImage && (userImage.naturalWidth || userImage.width));
   let mapCanvas = null;
-  if (opt.showMap && polyline?.length >= 2) {
+  if (!hasUserPhoto && opt.showMap && polyline?.length >= 2) {
     onProgress?.('Loading map…');
     try {
+      const mapW = Math.round((width - 36) * 2);
+      const mapH = Math.round((height - 32) * 2);
       mapCanvas = await loadRouteMapBackdrop(
         polyline,
-        Math.round((width - 36) * 2),
-        Math.round((height - 32) * 2),
-        40,
+        mapW,
+        mapH,
+        shareMapPads(mapW, mapH),
         { style: opt.mapStyle, color: opt.mapColor },
       );
     } catch (_) {
@@ -1740,6 +2011,7 @@ export async function renderRunShareReel({
       athleteName,
       logoImage,
       mapCanvas,
+      userImage: hasUserPhoto ? userImage : null,
       mode: isPhoto ? 'photo' : 'video',
       clockMs,
       options: opt,

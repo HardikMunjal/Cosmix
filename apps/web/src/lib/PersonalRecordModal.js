@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { markRecordsSeen } from './personalRecords';
-import { fetchShareableRun, renderRunShareReel, shareOrDownloadRunReel, yieldToUi, DEFAULT_SHARE_OPTIONS, normalizeShareOptions, SHARE_THEMES, MAP_STYLES, MAP_COLORS, SIZE_STEPS, friendlyShareError, drawRunShareFrame, loadRouteMapBackdrop, loadCosmixLogo, formatOverallClock } from './runShareReel';
+import { fetchShareableRun, renderRunShareReel, shareOrDownloadRunReel, yieldToUi, DEFAULT_SHARE_OPTIONS, normalizeShareOptions, SHARE_THEMES, MAP_STYLES, MAP_COLORS, SIZE_STEPS, STAT_PLACES, friendlyShareError, drawRunShareFrame, loadRouteMapBackdrop, loadCosmixLogo, loadImageFromFile, formatOverallClock, shareMapPads } from './runShareReel';
 import { wellnessApiUrl } from './runningShoes';
 
 const KIND_ACCENT = {
@@ -218,6 +218,7 @@ function LiveSharePreview({
   polyline = [],
   splits = [],
   athleteName = '',
+  userImage = null,
 }) {
   const canvasRef = useRef(null);
   const [logoImage, setLogoImage] = useState(null);
@@ -233,13 +234,13 @@ function LiveSharePreview({
   }, [open]);
 
   useEffect(() => {
-    if (!open || !options.showMap || !(polyline?.length >= 2)) {
+    if (!open || userImage || !options.showMap || !(polyline?.length >= 2)) {
       setMapCanvas(null);
       return undefined;
     }
     let cancelled = false;
     const timer = setTimeout(() => {
-      loadRouteMapBackdrop(polyline, 280, 500, 24, {
+      loadRouteMapBackdrop(polyline, 280, 500, shareMapPads(280, 500), {
         style: options.mapStyle,
         color: options.mapColor,
       }).then((canvas) => {
@@ -252,7 +253,7 @@ function LiveSharePreview({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [open, options.showMap, options.mapStyle, options.mapColor, polyline]);
+  }, [open, options.showMap, options.mapStyle, options.mapColor, polyline, userImage]);
 
   useEffect(() => {
     if (!open) return;
@@ -269,12 +270,13 @@ function LiveSharePreview({
       progress: opt.format === 'photo' ? 1 : 0.7,
       athleteName,
       logoImage,
-      mapCanvas: opt.showMap ? mapCanvas : null,
+      mapCanvas: opt.showMap && !userImage ? mapCanvas : null,
+      userImage,
       mode: opt.format,
       clockMs: 1600,
       options: opt,
     });
-  }, [open, options, summary, polyline, splits, athleteName, logoImage, mapCanvas]);
+  }, [open, options, summary, polyline, splits, athleteName, logoImage, mapCanvas, userImage]);
 
   return (
     <div style={{ display: 'flex', justifyContent: 'center' }}>
@@ -321,9 +323,16 @@ function ShareStudio({
   athleteName = '',
 }) {
   const [options, setOptions] = useState(DEFAULT_SHARE_OPTIONS);
+  const [userImage, setUserImage] = useState(null);
+  const [photoName, setPhotoName] = useState('');
+  const fileRef = useRef(null);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setUserImage(null);
+      setPhotoName('');
+      return;
+    }
     const saved = loadSavedShareOptions({ hasMap, splitCount, hasAthlete });
     setOptions(normalizeShareOptions({
       ...saved,
@@ -349,7 +358,22 @@ function ShareStudio({
       showRunner: options.showRunner && options.showMap && hasMap,
     });
     saveShareOptions(next);
-    onCreate?.(next);
+    onCreate?.(next, userImage);
+  }
+
+  async function handlePhotoChange(event) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || building) return;
+    try {
+      const img = await loadImageFromFile(file);
+      setUserImage(img);
+      setPhotoName(file.name || 'Photo');
+      patch({ showMap: false });
+    } catch (_) {
+      setUserImage(null);
+      setPhotoName('');
+    }
   }
 
   const chips = [
@@ -362,9 +386,37 @@ function ShareStudio({
         patch({ showStats: nextOn, showHero: nextOn });
       },
     },
-    { key: 'showMap', label: 'Map', on: options.showMap, disabled: !hasMap },
+    {
+      key: 'showMap',
+      label: 'Map',
+      on: options.showMap && !userImage,
+      disabled: !hasMap,
+      onClick: () => {
+        if (userImage) {
+          setUserImage(null);
+          setPhotoName('');
+          patch({ showMap: true });
+          return;
+        }
+        patch({ showMap: !options.showMap });
+      },
+    },
+    {
+      key: 'photo',
+      label: 'Photo',
+      on: Boolean(userImage),
+      onClick: () => {
+        if (userImage) {
+          setUserImage(null);
+          setPhotoName('');
+          if (hasMap) patch({ showMap: true });
+          return;
+        }
+        fileRef.current?.click();
+      },
+    },
     { key: 'showSplits', label: 'Splits', on: options.showSplits, disabled: !splitCount },
-    { key: 'showRunner', label: 'Runner', on: options.showRunner, disabled: !hasMap || !options.showMap },
+    { key: 'showRunner', label: 'Runner', on: options.showRunner && !userImage, disabled: !hasMap || !options.showMap || Boolean(userImage) },
     { key: 'showPlace', label: 'Place', on: options.showPlace },
     { key: 'showAthlete', label: 'Name', on: options.showAthlete, disabled: !hasAthlete },
     { key: 'showTitle', label: 'Title', on: options.showTitle },
@@ -440,6 +492,7 @@ function ShareStudio({
           polyline={polyline}
           splits={splits}
           athleteName={athleteName || preview.athlete || ''}
+          userImage={userImage}
         />
         <div style={{ textAlign: 'center', fontSize: 11, fontWeight: 700, color: '#67e8f9', marginTop: -4 }}>
           Preview updates as you tap
@@ -579,6 +632,75 @@ function ShareStudio({
             />
             <span style={{ fontSize: 10, color: '#64748b', fontWeight: 600 }}>Use h:mm:ss or mm:ss. Pace updates in the preview.</span>
           </label>
+          <div style={{ display: 'grid', gap: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>Your photo</span>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={handlePhotoChange}
+            />
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                disabled={building}
+                onClick={() => fileRef.current?.click()}
+                style={{
+                  appearance: 'none',
+                  border: '1px solid rgba(148,163,184,0.28)',
+                  borderRadius: 12,
+                  background: userImage ? 'linear-gradient(120deg, #f97316, #22d3ee)' : 'rgba(2,6,23,0.72)',
+                  color: userImage ? '#0f172a' : '#f8fafc',
+                  fontWeight: 800,
+                  fontSize: 13,
+                  padding: '11px 12px',
+                  cursor: building ? 'wait' : 'pointer',
+                }}
+              >
+                {userImage ? 'Change photo' : 'Upload photo'}
+              </button>
+              {userImage ? (
+                <button
+                  type="button"
+                  disabled={building}
+                  onClick={() => {
+                    setUserImage(null);
+                    setPhotoName('');
+                    if (hasMap) patch({ showMap: true });
+                  }}
+                  style={{
+                    appearance: 'none',
+                    border: '1px solid rgba(148,163,184,0.28)',
+                    borderRadius: 12,
+                    background: 'rgba(15,23,42,0.72)',
+                    color: '#e2e8f0',
+                    fontWeight: 800,
+                    fontSize: 13,
+                    padding: '11px 12px',
+                    cursor: building ? 'wait' : 'pointer',
+                  }}
+                >
+                  Remove
+                </button>
+              ) : null}
+            </div>
+            <span style={{ fontSize: 10, color: '#64748b', fontWeight: 600 }}>
+              {userImage
+                ? `Using ${photoName || 'your photo'}. Place stats on the left, top, right, or bottom.`
+                : 'Optional. Overlay run stats on your own picture instead of the map.'}
+            </span>
+          </div>
+        </div>
+
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', marginBottom: 6 }}>Stats position</div>
+          <ChoicePills
+            value={options.statsPlace}
+            items={STAT_PLACES}
+            disabled={building || !(options.showStats || options.showHero)}
+            onChange={(id) => patch({ statsPlace: id })}
+          />
         </div>
 
         <div>
@@ -591,7 +713,7 @@ function ShareStudio({
               <ChoicePills
                 value={options.mapStyle}
                 items={MAP_STYLES}
-                disabled={building || !hasMap || !options.showMap}
+                disabled={building || (!hasMap || !options.showMap) || Boolean(userImage)}
                 onChange={(id) => patch({ mapStyle: id })}
               />
             </div>
@@ -600,7 +722,7 @@ function ShareStudio({
               <ChoicePills
                 value={options.mapColor}
                 items={MAP_COLORS}
-                disabled={building || !hasMap || !options.showMap}
+                disabled={building || (!hasMap || !options.showMap) || Boolean(userImage)}
                 onChange={(id) => patch({ mapColor: id })}
               />
             </div>
@@ -905,7 +1027,7 @@ export function PersonalRecordModal({
     onClose?.();
   }
 
-  async function handleBuildPreview(shareOptions = DEFAULT_SHARE_OPTIONS) {
+  async function handleBuildPreview(shareOptions = DEFAULT_SHARE_OPTIONS, userImage = null) {
     if (!userId || building) return;
     const opt = normalizeShareOptions(shareOptions);
     setBuilding(true);
@@ -919,7 +1041,7 @@ export function PersonalRecordModal({
         setShareMsg('Run stats not ready yet.');
         return;
       }
-      if (opt.showMap && !(run.polyline || []).length) {
+      if (opt.showMap && !userImage && !(run.polyline || []).length) {
         opt.showMap = false;
       }
       await yieldToUi();
@@ -930,6 +1052,7 @@ export function PersonalRecordModal({
         athleteName,
         mode: opt.format,
         options: opt,
+        userImage,
         onProgress: (label) => setShareMsg(String(label || '')),
       });
       setReel((current) => {
@@ -1203,7 +1326,7 @@ export function ShareRunButton({
     return () => { cancelled = true; };
   }, [chooserOpen, userId, activityId]);
 
-  async function handleBuildPreview(shareOptions = DEFAULT_SHARE_OPTIONS) {
+  async function handleBuildPreview(shareOptions = DEFAULT_SHARE_OPTIONS, userImage = null) {
     if (!userId || busy) return;
     const opt = normalizeShareOptions(shareOptions);
     setBusy(true);
@@ -1213,7 +1336,7 @@ export function ShareRunButton({
       let poly = polyline || shareDraft?.polyline || [];
       let sum = summary || shareDraft?.summary;
       let splitRows = shareDraft?.splits || [];
-      if (!sum || (opt.showMap && !(poly?.length >= 2)) || (opt.showSplits && !splitRows.length)) {
+      if (!sum || (opt.showMap && !userImage && !(poly?.length >= 2)) || (opt.showSplits && !splitRows.length)) {
         const run = shareDraft?.summary
           ? shareDraft
           : await fetchShareableRun(userId, activityId, wellnessApiUrl);
@@ -1227,7 +1350,7 @@ export function ShareRunButton({
         setMsg('Run stats not ready yet.');
         return;
       }
-      if (opt.showMap && !(poly?.length >= 2)) {
+      if (opt.showMap && !userImage && !(poly?.length >= 2)) {
         opt.showMap = false;
       }
       await yieldToUi();
@@ -1238,6 +1361,7 @@ export function ShareRunButton({
         athleteName,
         mode: opt.format,
         options: opt,
+        userImage,
         onProgress: (label) => setMsg(String(label || '')),
       });
       setShareMeta({
