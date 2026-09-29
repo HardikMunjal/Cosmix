@@ -77,8 +77,11 @@ services:
     environment:
       <<: *default-env
       CHAT_SERVICE_URL: ${CHAT_SERVICE_URL:-http://chat-service:3002}
+      STRAVA_CLIENT_ID: ${STRAVA_CLIENT_ID:-}
+      STRAVA_CLIENT_SECRET: ${STRAVA_CLIENT_SECRET:-}
+      STRAVA_REDIRECT_URI: ${STRAVA_REDIRECT_URI:-https://3-221-127-253.nip.io/wellness/strava/callback}
       STRAVA_WEBHOOK_VERIFY_TOKEN: ${STRAVA_WEBHOOK_VERIFY_TOKEN:-cosmix-strava-webhook}
-      STRAVA_WEBHOOK_CALLBACK_URL: ${STRAVA_WEBHOOK_CALLBACK_URL:-}
+      STRAVA_WEBHOOK_CALLBACK_URL: ${STRAVA_WEBHOOK_CALLBACK_URL:-https://3-221-127-253.nip.io/wellness/strava/webhook}
       WEB_APP_URL: ${WEB_APP_URL:-https://3-221-127-253.nip.io}
     volumes:
       - ../services/wellness-service/data:/usr/src/app/data
