@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { markRecordsSeen } from './personalRecords';
-import { fetchShareableRun, renderRunShareReel, shareOrDownloadRunReel, yieldToUi, DEFAULT_SHARE_OPTIONS, normalizeShareOptions, SHARE_THEMES, MAP_STYLES, MAP_COLORS, SIZE_STEPS, friendlyShareError, drawRunShareFrame, loadRouteMapBackdrop, loadCosmixLogo } from './runShareReel';
+import { fetchShareableRun, renderRunShareReel, shareOrDownloadRunReel, yieldToUi, DEFAULT_SHARE_OPTIONS, normalizeShareOptions, SHARE_THEMES, MAP_STYLES, MAP_COLORS, SIZE_STEPS, friendlyShareError, drawRunShareFrame, loadRouteMapBackdrop, loadCosmixLogo, formatOverallClock } from './runShareReel';
 import { wellnessApiUrl } from './runningShoes';
 
 const KIND_ACCENT = {
@@ -102,7 +102,10 @@ function loadSavedShareOptions({ hasMap = true, splitCount = 0, hasAthlete = tru
 
 function saveShareOptions(options) {
   try {
-    window.localStorage.setItem('cosmixShareLayout.v2', JSON.stringify(normalizeShareOptions(options)));
+    const layout = normalizeShareOptions(options);
+    delete layout.runName;
+    delete layout.overallTime;
+    window.localStorage.setItem('cosmixShareLayout.v2', JSON.stringify(layout));
   } catch (_) { /* ignore */ }
 }
 
@@ -321,19 +324,13 @@ function ShareStudio({
 
   useEffect(() => {
     if (!open) return;
-    setOptions(loadSavedShareOptions({ hasMap, splitCount, hasAthlete }));
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    setOptions((current) => normalizeShareOptions({
-      ...current,
-      showMap: hasMap,
-      showSplits: splitCount > 0,
-      showRunner: hasMap,
-      showAthlete: hasAthlete && current.showAthlete,
+    const saved = loadSavedShareOptions({ hasMap, splitCount, hasAthlete });
+    setOptions(normalizeShareOptions({
+      ...saved,
+      runName: String(summary.name || '').trim() || 'Morning Run',
+      overallTime: formatOverallClock(summary.minutes),
     }));
-  }, [open, hasMap, splitCount, hasAthlete]);
+  }, [open, hasMap, splitCount, hasAthlete, summary.name, summary.minutes]);
 
   if (!open) return null;
 
@@ -531,6 +528,57 @@ function ShareStudio({
               />
             ))}
           </div>
+        </div>
+
+        <div style={{ display: 'grid', gap: 10 }}>
+          <label style={{ display: 'grid', gap: 6 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>Run name</span>
+            <input
+              type="text"
+              value={options.runName || ''}
+              maxLength={52}
+              disabled={building}
+              placeholder="Wipro Marathon 2026"
+              onChange={(event) => patch({ runName: event.target.value })}
+              style={{
+                appearance: 'none',
+                width: '100%',
+                boxSizing: 'border-box',
+                borderRadius: 12,
+                border: '1px solid rgba(148,163,184,0.28)',
+                background: 'rgba(2,6,23,0.72)',
+                color: '#f8fafc',
+                fontWeight: 700,
+                fontSize: 14,
+                padding: '11px 12px',
+              }}
+            />
+          </label>
+          <label style={{ display: 'grid', gap: 6 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8' }}>Overall time</span>
+            <input
+              type="text"
+              inputMode="decimal"
+              value={options.overallTime || ''}
+              disabled={building}
+              placeholder="3:45:12"
+              onChange={(event) => patch({ overallTime: event.target.value })}
+              style={{
+                appearance: 'none',
+                width: '100%',
+                boxSizing: 'border-box',
+                borderRadius: 12,
+                border: '1px solid rgba(148,163,184,0.28)',
+                background: 'rgba(2,6,23,0.72)',
+                color: '#f8fafc',
+                fontWeight: 700,
+                fontSize: 14,
+                padding: '11px 12px',
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            />
+            <span style={{ fontSize: 10, color: '#64748b', fontWeight: 600 }}>Use h:mm:ss or mm:ss. Pace updates in the preview.</span>
+          </label>
         </div>
 
         <div>

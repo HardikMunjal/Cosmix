@@ -92,6 +92,8 @@ export const DEFAULT_SHARE_OPTIONS = {
   mapStyle: 'satellite3d',
   mapColor: 'original',
   logoPlace: 'top',
+  runName: '',
+  overallTime: '',
 };
 
 const SHARE_BOOL_KEYS = [
@@ -112,6 +114,8 @@ export function normalizeShareOptions(options = {}) {
   next.logoSize = pickEnum(next.logoSize, SIZE_STEPS, 'large');
   next.textSize = pickEnum(next.textSize, SIZE_STEPS, 'medium');
   next.logoPlace = pickEnum(next.logoPlace, LOGO_PLACES, 'top');
+  next.runName = String(next.runName || '').trim().slice(0, 52);
+  next.overallTime = String(next.overallTime || '').trim().slice(0, 12);
   SHARE_BOOL_KEYS.forEach((key) => {
     next[key] = Boolean(next[key]);
   });
@@ -157,6 +161,59 @@ function fmtMins(mins) {
   const h = Math.floor(total / 60);
   const m = total % 60;
   return h > 0 ? `${h}h ${m}m` : `${m} min`;
+}
+
+export function formatOverallClock(minutes) {
+  const totalSec = Math.max(0, Math.round((Number(minutes) || 0) * 60));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+export function parseOverallMinutes(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+  if (!/^[\d:.]+$/.test(raw)) return null;
+  const parts = raw.split(':').map((part) => Number(part));
+  if (!parts.length || parts.some((n) => !Number.isFinite(n) || n < 0)) return null;
+  if (parts.length === 3) return parts[0] * 60 + parts[1] + parts[2] / 60;
+  if (parts.length === 2) return parts[0] + parts[1] / 60;
+  return parts[0];
+}
+
+export function applyShareSummary(summary = {}, options = {}) {
+  const next = { ...(summary || {}) };
+  const name = String(options?.runName || '').trim();
+  if (name) next.name = name;
+  const mins = parseOverallMinutes(options?.overallTime);
+  if (mins != null && mins > 0) {
+    next.minutes = mins;
+    const distance = Number(next.distanceKm || next.distance || 0);
+    if (distance > 0) next.paceMinPerKm = mins / distance;
+  }
+  return next;
+}
+
+function speedKmhAtProgress(distanceKm, minutes, mapReveal, splits = []) {
+  const kmNow = Math.max(0, Number(distanceKm || 0) * clamp(mapReveal, 0, 1));
+  const rows = Array.isArray(splits) ? splits : [];
+  let covered = 0;
+  for (const row of rows) {
+    const splitKm = Number(row?.distanceKm || 1) || 1;
+    const pace = Number(row?.paceMinPerKm || 0);
+    const splitSpeed = Number(row?.speedKmh || 0) || (pace > 0 ? 60 / pace : 0);
+    const next = covered + splitKm;
+    if (kmNow <= next + 0.02 || row === rows[rows.length - 1]) {
+      if (splitSpeed > 0.2) return splitSpeed;
+      break;
+    }
+    covered = next;
+  }
+  const hours = Number(minutes || 0) / 60;
+  if (distanceKm > 0 && hours > 0) return distanceKm / hours;
+  return 0;
 }
 
 function clamp(n, a, b) {
@@ -906,7 +963,7 @@ function buildAnalytics(summary = {}, reveal = 1) {
   const cards = [
     { label: 'DISTANCE', value: distance ? (distance * reveal).toFixed(2) : '--', unit: 'km', color: '#fdba74' },
     { label: 'AVG PACE', value: pace ? fmtPace(pace) : '--', unit: '/km', color: '#7dd3fc' },
-    { label: 'TIME', value: minutes ? fmtMins(minutes * reveal) : '--', unit: '', color: '#c4b5fd' },
+    { label: 'TIME', value: minutes ? formatOverallClock(minutes * reveal) : '--', unit: '', color: '#c4b5fd' },
   ];
 
   if (hr > 0) cards.push({ label: 'AVG HR', value: String(Math.round(hr * reveal)), unit: 'bpm', color: '#fda4af' });
@@ -1060,7 +1117,7 @@ function drawPhotoStatsCard(ctx, {
   const distance = Number(summary.distanceKm || summary.distance || 0);
   const minutes = Number(summary.minutes || 0);
   const pace = Number(summary.paceMinPerKm || (distance > 0 && minutes > 0 ? minutes / distance : 0));
-  const runName = String(summary.name || 'Morning Run').slice(0, 42);
+  const runName = String(summary.name || 'Morning Run').slice(0, 52);
   const place = String(summary.locationCity || '').slice(0, 28);
   const dateLabel = fmtRunDate(summary.date || summary.startDate);
   const athlete = String(athleteName || '').trim();
@@ -1069,7 +1126,7 @@ function drawPhotoStatsCard(ctx, {
 
   drawShareBackground(ctx, width, height, clockMs);
 
-  const logoSize = 132 * s;
+  const logoSize = 168 * s;
   drawCosmixBrand(ctx, (width - logoSize) / 2, 52 * s, logoSize, {
     spin, pulse, logoImage, s,
   });
@@ -1107,7 +1164,7 @@ function drawPhotoStatsCard(ctx, {
 
   const chips = [
     { label: 'PACE', value: pace ? `${fmtPace(pace)} /km` : '--' },
-    { label: 'TIME', value: minutes ? fmtMins(minutes) : '--' },
+    { label: 'TIME', value: minutes ? formatOverallClock(minutes) : '--' },
   ];
   let chipX = 48 * s;
   const chipY = heroY + 142 * s;
@@ -1229,7 +1286,7 @@ function strokePath(ctx, pts) {
   ctx.stroke();
 }
 
-function drawRouteOnMap(ctx, route, mapReveal, clockMs, showRunner = true, distanceKm = 0) {
+function drawRouteOnMap(ctx, route, mapReveal, clockMs, showRunner = true, distanceKm = 0, speedKmh = 0) {
   if (route.length < 2) return;
   const traveled = traveledPath(route, mapReveal);
 
@@ -1290,17 +1347,28 @@ function drawRouteOnMap(ctx, route, mapReveal, clockMs, showRunner = true, dista
   }
 
   if (distanceKm > 0 && mapReveal > 0.02) {
-    const label = `${(distanceKm * mapReveal).toFixed(2)} km`;
-    ctx.font = '800 14px system-ui, sans-serif';
-    const tw = ctx.measureText(label).width;
+    const kmLabel = `${(distanceKm * mapReveal).toFixed(2)} km`;
+    const speedLabel = speedKmh > 0.3 ? `${speedKmh.toFixed(1)} km/h` : '';
+    ctx.font = '800 13px system-ui, sans-serif';
+    const kmW = ctx.measureText(kmLabel).width;
+    ctx.font = '700 11px system-ui, sans-serif';
+    const spW = speedLabel ? ctx.measureText(speedLabel).width : 0;
+    const boxW = Math.max(kmW, spW) + 16;
+    const boxH = speedLabel ? 36 : 22;
     const bx = runner.x + 14;
-    const by = runner.y - 28;
-    drawRoundedRect(ctx, bx, by, tw + 16, 22, 11);
-    ctx.fillStyle = 'rgba(15,23,42,0.88)';
+    const by = runner.y - (speedLabel ? 42 : 28);
+    drawRoundedRect(ctx, bx, by, boxW, boxH, 11);
+    ctx.fillStyle = 'rgba(15,23,42,0.9)';
     ctx.fill();
-    ctx.fillStyle = '#fff7ed';
     ctx.textAlign = 'left';
-    ctx.fillText(label, bx + 8, by + 16);
+    ctx.fillStyle = '#fff7ed';
+    ctx.font = '800 13px system-ui, sans-serif';
+    ctx.fillText(kmLabel, bx + 8, by + (speedLabel ? 15 : 16));
+    if (speedLabel) {
+      ctx.fillStyle = '#86efac';
+      ctx.font = '700 11px system-ui, sans-serif';
+      ctx.fillText(speedLabel, bx + 8, by + 29);
+    }
   }
 }
 
@@ -1311,10 +1379,10 @@ function drawMapHud(ctx, {
   logoSize = 'large', textSize = 'medium', logoPlace = 'both',
 }) {
   const textMul = sizeMultiplier(textSize);
-  const logoMul = sizeMultiplier(logoSize, { small: 0.85, medium: 1, large: 1.18 });
+  const logoMul = sizeMultiplier(logoSize, { small: 1.05, medium: 1.28, large: 1.62 });
   const u = Math.max(0.82, s * 1.55) * textMul;
   const showTopLogo = Boolean(showLogo);
-  const mark = Math.max(22, 24 * logoMul);
+  const mark = Math.max(34, 36 * logoMul);
   const headerY = y + 18 + mark / 2;
 
   ctx.textAlign = 'left';
@@ -1343,7 +1411,8 @@ function drawMapHud(ctx, {
   }
   if (showTitle) {
     ctx.fillStyle = '#f8fafc';
-    ctx.font = `900 ${Math.max(22, 26 * u)}px system-ui, sans-serif`;
+    const titleSize = runName.length > 26 ? Math.max(18, 22 * u) : Math.max(22, 26 * u);
+    ctx.font = `900 ${titleSize}px system-ui, sans-serif`;
     ctx.fillText(runName, x + 18, ty + 6);
   }
 
@@ -1409,7 +1478,7 @@ function drawMapHud(ctx, {
     ctx.fillText('km', x + 18 + distWidth + 8, by - 28);
     ctx.fillStyle = 'rgba(248,250,252,0.95)';
     ctx.font = `800 ${Math.max(15, 16 * u)}px system-ui, sans-serif`;
-    const paceTime = [pace ? `${fmtPace(pace)} /km` : null, minutes ? fmtMins(minutes) : null].filter(Boolean).join('   ·   ');
+    const paceTime = [pace ? `${fmtPace(pace)} /km` : null, minutes ? formatOverallClock(minutes) : null].filter(Boolean).join('   ·   ');
     ctx.fillText(paceTime, x + 18, by - 4);
   }
 }
@@ -1437,15 +1506,17 @@ export function drawRunShareFrame(ctx, {
   const mapReveal = isPhoto ? 1 : clamp((t - 0.04) / 0.9, 0, 1);
   const statsReveal = isPhoto ? 1 : easeOutCubic(clamp((t - 0.16) / 0.5, 0, 1));
   const s = Math.max(0.45, width / 1080);
+  const shareSummary = applyShareSummary(summary, opt);
 
-  const distance = Number(summary.distanceKm || summary.distance || 0);
-  const minutes = Number(summary.minutes || 0);
-  const pace = Number(summary.paceMinPerKm || (distance > 0 && minutes > 0 ? minutes / distance : 0));
-  const runName = String(summary.name || 'Morning Run').slice(0, 36);
-  const place = String(summary.locationCity || '').slice(0, 28);
-  const dateLabel = fmtRunDate(summary.date || summary.startDate);
+  const distance = Number(shareSummary.distanceKm || shareSummary.distance || 0);
+  const minutes = Number(shareSummary.minutes || 0);
+  const pace = Number(shareSummary.paceMinPerKm || (distance > 0 && minutes > 0 ? minutes / distance : 0));
+  const runName = String(shareSummary.name || 'Morning Run').slice(0, 52);
+  const liveSpeed = speedKmhAtProgress(distance, minutes, mapReveal, splits);
+  const place = String(shareSummary.locationCity || '').slice(0, 28);
+  const dateLabel = fmtRunDate(shareSummary.date || shareSummary.startDate);
   const athlete = String(athleteName || '').trim();
-  const extraStats = buildAnalytics(summary, statsReveal).filter((item) => !['DISTANCE', 'AVG PACE', 'TIME'].includes(item.label));
+  const extraStats = buildAnalytics(shareSummary, statsReveal).filter((item) => !['DISTANCE', 'AVG PACE', 'TIME'].includes(item.label));
   const splitRows = Array.isArray(splits) ? splits : [];
   const showMap = Boolean(opt.showMap && polyline?.length >= 2);
   const showSplits = Boolean(opt.showSplits && splitRows.length);
@@ -1487,7 +1558,7 @@ export function drawRunShareFrame(ctx, {
     if (mapCanvas) ctx.drawImage(mapCanvas, 0, 0, cardW, cardH);
     else drawProceduralTerrain(ctx, cardW, cardH);
     if (route.length >= 2) {
-      drawRouteOnMap(ctx, route, mapReveal, clockMs, opt.showRunner, distance);
+      drawRouteOnMap(ctx, route, mapReveal, clockMs, opt.showRunner, distance, liveSpeed);
     }
     ctx.restore();
 
@@ -1532,7 +1603,7 @@ export function drawRunShareFrame(ctx, {
   }
 
   let y = 22 * s;
-  const mark = Math.max(22, 26 * sizeMultiplier(opt.logoSize, { small: 0.85, medium: 1, large: 1.15 }));
+  const mark = Math.max(34, 38 * sizeMultiplier(opt.logoSize, { small: 1.05, medium: 1.28, large: 1.58 }));
   if (opt.showPlace) {
     ctx.fillStyle = 'rgba(148,163,184,0.92)';
     ctx.font = `700 ${Math.max(13, 15 * s)}px system-ui, sans-serif`;
@@ -1558,7 +1629,8 @@ export function drawRunShareFrame(ctx, {
 
   if (opt.showTitle) {
     ctx.fillStyle = '#f8fafc';
-    ctx.font = `900 ${Math.max(24, 28 * s)}px system-ui, sans-serif`;
+    const titleSize = runName.length > 26 ? Math.max(20, 22 * s) : Math.max(24, 28 * s);
+    ctx.font = `900 ${titleSize}px system-ui, sans-serif`;
     ctx.fillText(runName, 36 * s, y + 22 * s);
     y += 36 * s;
   } else {
@@ -1576,7 +1648,7 @@ export function drawRunShareFrame(ctx, {
     ctx.fillText('km', 36 * s + distWidth + 8 * s, y + 56 * s);
     ctx.fillStyle = 'rgba(226,232,240,0.9)';
     ctx.font = `800 ${Math.max(16, 18 * s)}px system-ui, sans-serif`;
-    const paceTime = [pace ? `${fmtPace(pace)} /km` : null, minutes ? fmtMins(minutes) : null].filter(Boolean).join('   ·   ');
+    const paceTime = [pace ? `${fmtPace(pace)} /km` : null, minutes ? formatOverallClock(minutes) : null].filter(Boolean).join('   ·   ');
     ctx.fillText(paceTime, 36 * s, y + 86 * s);
     y += 108 * s;
   } else {
