@@ -532,7 +532,7 @@ export class WellnessStorageService {
     });
     const maxHr = Number(raw?.maxHr);
     const goals: RaceGoalRecord[] = [];
-    const incomingGoals = Array.isArray(raw?.goals) ? raw.goals : [];
+    const incomingGoals = Array.isArray(raw?.goals) ? raw?.goals || [] : [];
     incomingGoals.forEach((item: any) => {
       const distanceKm = Number(item?.distanceKm || 0);
       const raceDate = String(item?.raceDate || '').slice(0, 10);
