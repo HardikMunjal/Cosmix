@@ -81,12 +81,18 @@ type RunningShoeRecord = {
   retired?: boolean;
 };
 
+type TrainingProfile = {
+  categories: Record<string, string>;
+  maxHr?: number | null;
+};
+
 type WellnessStoredState = {
   entries: WellnessEntry[];
   form: Record<string, any> | null;
   plans: WellnessPlanRecord[];
   runningShoes?: RunningShoeRecord[];
   deletedStravaActivityIds?: number[];
+  trainingProfile?: TrainingProfile;
   derived?: WellnessDerivedCache | null;
   updatedAt?: string;
 };
@@ -98,6 +104,7 @@ type WellnessState = {
   plans: WellnessPlanRecord[];
   runningShoes: RunningShoeRecord[];
   deletedStravaActivityIds?: number[];
+  trainingProfile?: TrainingProfile;
   dailyScores: WellnessDailyScore[];
   planTransactions: WellnessPlanTransaction[];
 };
@@ -498,8 +505,24 @@ export class WellnessStorageService {
       plans: [],
       runningShoes: [],
       deletedStravaActivityIds: [],
+      trainingProfile: { categories: {} },
       derived: null,
       updatedAt: this.nowIso(),
+    };
+  }
+
+  private normalizeTrainingProfile(raw: TrainingProfile | null | undefined): TrainingProfile {
+    const allowed = new Set(['recovery', 'easy', 'long', 'tempo', 'threshold', 'interval', 'race']);
+    const categories: Record<string, string> = {};
+    const incoming = raw?.categories && typeof raw.categories === 'object' ? raw.categories : {};
+    Object.entries(incoming).forEach(([id, value]) => {
+      const category = typeof value === 'string' ? value : String((value as any)?.category || '');
+      if (id && allowed.has(category)) categories[String(id)] = category;
+    });
+    const maxHr = Number(raw?.maxHr);
+    return {
+      categories,
+      maxHr: Number.isFinite(maxHr) && maxHr >= 120 && maxHr <= 230 ? maxHr : null,
     };
   }
 
@@ -578,6 +601,7 @@ export class WellnessStorageService {
           .map((id) => Number(id))
           .filter((id) => Number.isFinite(id) && id > 0),
       )],
+      trainingProfile: this.normalizeTrainingProfile(data?.trainingProfile),
       derived: data?.derived || null,
       updatedAt: data?.updatedAt || this.nowIso(),
     };
@@ -884,6 +908,7 @@ export class WellnessStorageService {
       plans: this.sortPlans(derived.store.plans),
       runningShoes: this.normalizeRunningShoes(derived.store.runningShoes),
       deletedStravaActivityIds: derived.store.deletedStravaActivityIds || [],
+      trainingProfile: this.normalizeTrainingProfile(derived.store.trainingProfile),
       dailyScores: derived.dailyScores,
       planTransactions: derived.planTransactions,
     };
@@ -1333,6 +1358,38 @@ export class WellnessStorageService {
     };
   }
 
+  async saveTrainingCategory(
+    userId: string,
+    activityId: number,
+    category: string,
+  ): Promise<{ ok: boolean; trainingProfile?: TrainingProfile; error?: string }> {
+    const numericId = Number(activityId);
+    const allowed = new Set(['recovery', 'easy', 'long', 'tempo', 'threshold', 'interval', 'race']);
+    if (!Number.isFinite(numericId) || numericId <= 0) {
+      return { ok: false, error: 'Invalid activity id.' };
+    }
+    if (!allowed.has(String(category || ''))) {
+      return { ok: false, error: 'Unknown training category.' };
+    }
+    const store = this.normalizeStore(await this.loadStore(userId));
+    const nextProfile = this.normalizeTrainingProfile({
+      ...(store.trainingProfile || { categories: {} }),
+      categories: {
+        ...(store.trainingProfile?.categories || {}),
+        [String(numericId)]: String(category),
+      },
+    });
+    const nextStore = this.normalizeStore({
+      ...store,
+      trainingProfile: nextProfile,
+      updatedAt: this.nowIso(),
+    });
+    const scoringRules = await this.loadScoringRules();
+    const derived = this.deriveScoresWithCache(nextStore, scoringRules);
+    await this.persistStore(userId, derived.store);
+    return { ok: true, trainingProfile: nextProfile };
+  }
+
   async deleteStravaRun(userId: string, activityId: number): Promise<{ ok: boolean; state?: WellnessState; error?: string }> {
     const numericId = Number(activityId);
     if (!Number.isFinite(numericId) || numericId <= 0) {
@@ -1713,6 +1770,7 @@ export class WellnessStorageService {
       entries: mergedEntries,
       form: payload.form === undefined ? normalizedStore.form : payload.form,
       plans: updatedPlans,
+      trainingProfile: normalizedStore.trainingProfile,
       runningShoes: (() => {
         if (payload.runningShoes === undefined) return normalizedStore.runningShoes;
         const incoming = this.normalizeRunningShoes(payload.runningShoes);
@@ -1773,6 +1831,9 @@ export class WellnessStorageService {
       entries,
       form: { date: this.normalizeDate() },
       plans: [newPlan as WellnessPlanRecord, ...plans],
+      trainingProfile: normalizedStore.trainingProfile,
+      runningShoes: normalizedStore.runningShoes,
+      deletedStravaActivityIds: normalizedStore.deletedStravaActivityIds,
       updatedAt: now,
     });
 

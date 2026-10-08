@@ -294,6 +294,7 @@ export function buildRunningRows(entries = [], shoes = []) {
           maxHeartrate: Number(run.maxHeartrate || 0) || null,
           avgSpeedKmh: Number(run.avgSpeedKmh || 0) || null,
           maxSpeedKmh: Number(run.maxSpeedKmh || 0) || null,
+          heartrateZones: Array.isArray(run.heartrateZones) ? run.heartrateZones : [],
           bestSplitPaceMinPerKm: Number(run.bestSplitPaceMinPerKm || 0) || null,
           bestSplitKm: Number(run.bestSplitKm || 0) || null,
           bestSplitSeconds: Number(run.bestSplitSeconds || 0) || null,

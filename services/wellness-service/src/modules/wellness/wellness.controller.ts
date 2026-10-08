@@ -513,6 +513,24 @@ export class WellnessController implements OnModuleInit {
     });
   }
 
+  @Get('training/:userId')
+  async loadTrainingProfile(@Param('userId') userId: string) {
+    const state = await this.storageService.load(userId);
+    return {
+      ok: true,
+      trainingProfile: state.trainingProfile || { categories: {} },
+    };
+  }
+
+  @Put('training/:userId/runs/:activityId')
+  async saveTrainingCategory(
+    @Param('userId') userId: string,
+    @Param('activityId') activityId: string,
+    @Body() body: { category?: string },
+  ) {
+    return this.storageService.saveTrainingCategory(userId, Number(activityId), String(body?.category || ''));
+  }
+
   @Put('strava/runs/:userId/:activityId/shoe')
   async assignStravaRunShoe(
     @Param('userId') userId: string,

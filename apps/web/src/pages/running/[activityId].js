@@ -7,6 +7,8 @@ import { RunRouteMap } from '../../lib/RunRouteMap';
 import { isWellnessApiReady, wellnessApiUrl } from '../../lib/runningShoes';
 import { ShareRunButton } from '../../lib/PersonalRecordModal';
 import { hrEffortColor, hrZoneForBpm } from '../../lib/hrZones';
+import { CategoryPicker } from '../../lib/HrTrainingStudio';
+import { buildHrTrainingModel, readLocalTrainingOverrides, writeLocalTrainingOverride } from '../../lib/hrTraining';
 
 function fmtDate(dateStr) {
   if (!dateStr) return '--';
@@ -285,6 +287,8 @@ export default function RunDetailPage() {
   const [error, setError] = useState('');
   const [enriching, setEnriching] = useState(false);
   const [weather, setWeather] = useState(null);
+  const [trainingOverrides, setTrainingOverrides] = useState({});
+  const [savingCategory, setSavingCategory] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -328,12 +332,62 @@ export default function RunDetailPage() {
     void loadDetail(userId, activityId);
   }, [userId, activityId]);
 
+  useEffect(() => {
+    if (!userId) return undefined;
+    setTrainingOverrides(readLocalTrainingOverrides(userId));
+    if (!isWellnessApiReady()) return undefined;
+    let cancelled = false;
+    fetch(wellnessApiUrl(`/wellness/training/${encodeURIComponent(userId)}`))
+      .then((r) => (r.ok ? r.json() : null))
+      .then((payload) => {
+        if (cancelled) return;
+        const cats = payload?.trainingProfile?.categories;
+        if (cats && typeof cats === 'object') {
+          setTrainingOverrides((current) => ({ ...current, ...cats }));
+        }
+      })
+      .catch(() => { /* ignore */ });
+    return () => { cancelled = true; };
+  }, [userId]);
+
   const summary = detail?.summary || {};
   const streams = detail?.streams || {};
   const splits = detail?.splits || [];
   const zones = detail?.heartrateZones || summary.heartrateZones || [];
   const fuelBurn = detail?.fuelBurn || summary.fuelBurn || null;
   const maxHrRef = resolveAthleteMaxHr(summary.maxHeartrate || 0);
+  const classified = useMemo(() => {
+    const model = buildHrTrainingModel({
+      runRows: [{
+        date: summary.date,
+        name: summary.name,
+        distance: Number(summary.distanceKm || 0),
+        minutes: Number(summary.minutes || 0),
+        avgHeartrate: Number(summary.avgHeartrate || 0),
+        maxHeartrate: Number(summary.maxHeartrate || 0),
+        stravaId: Number(activityId || 0),
+        heartrateZones: zones,
+      }],
+      overrides: trainingOverrides,
+    });
+    return model.lastRun;
+  }, [summary.date, summary.name, summary.distanceKm, summary.minutes, summary.avgHeartrate, summary.maxHeartrate, activityId, zones, trainingOverrides]);
+
+  async function handleCategory(category) {
+    const id = Number(activityId);
+    if (!userId || !id) return;
+    writeLocalTrainingOverride(userId, id, category);
+    setTrainingOverrides((current) => ({ ...current, [String(id)]: category }));
+    setSavingCategory(true);
+    try {
+      await fetch(wellnessApiUrl(`/wellness/training/${encodeURIComponent(userId)}/runs/${encodeURIComponent(id)}`), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category }),
+      });
+    } catch (_) { /* local still applies */ }
+    setSavingCategory(false);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -455,6 +509,19 @@ export default function RunDetailPage() {
             <div style={{ marginTop: 8, fontSize: 13, color: 'rgba(226,232,240,0.78)', fontWeight: 600 }}>
               {summary.distanceKm ?? '--'} km · {fmtMins(summary.minutes)} · {summary.paceMinPerKm ? `${fmtPace(summary.paceMinPerKm)} /km` : '--'}
             </div>
+            {classified ? (
+              <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
+                <div style={{ fontSize: 11, color: 'rgba(226,232,240,0.7)', fontWeight: 700 }}>
+                  Training type · {classified.source === 'user' ? 'you set this' : classified.reason}
+                </div>
+                <CategoryPicker
+                  compact
+                  value={classified.category}
+                  disabled={savingCategory}
+                  onChange={handleCategory}
+                />
+              </div>
+            ) : null}
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 8, padding: '0 14px 14px' }}>

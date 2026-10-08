@@ -53,6 +53,8 @@ import Link from 'next/link';
 import { StravaRunExplorer } from '../lib/StravaRunExplorer';
 import { detectNewPersonalRecords } from '../lib/personalRecords';
 import { PersonalRecordModal, ShareRunButton } from '../lib/PersonalRecordModal';
+import { HrTrainingStudio } from '../lib/HrTrainingStudio';
+import { readLocalTrainingOverrides } from '../lib/hrTraining';
 
 // ─── helpers ─────────────────────────────────────────────
 function fmtDate(dateStr) {
@@ -1286,6 +1288,72 @@ function PaceMinuteBars({ buckets = [], theme, denominator }) {
   );
 }
 
+function DashViewBar({ value, onChange, theme }) {
+  const views = [
+    { id: 'pulse', label: 'Pulse', sub: 'Zones & easy HR', accent: '#fb7185' },
+    { id: 'volume', label: 'Volume', sub: 'Weeks & maps', accent: '#fb923c' },
+    { id: 'speed', label: 'Speed', sub: 'Splits & ranks', accent: '#22d3ee' },
+    { id: 'kit', label: 'Kit', sub: 'Shoes & PRs', accent: '#a3e635' },
+  ];
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 8 }}>
+      {views.map((view) => {
+        const on = value === view.id;
+        return (
+          <button
+            key={view.id}
+            type="button"
+            onClick={() => onChange(view.id)}
+            style={{
+              appearance: 'none',
+              border: on ? `1px solid ${view.accent}` : `1px solid ${theme.cardBorder}`,
+              background: on
+                ? `linear-gradient(180deg, ${view.accent}33, ${theme.cardBg})`
+                : theme.cardBg,
+              color: on ? view.accent : theme.textSecondary,
+              borderRadius: 16,
+              padding: '10px 6px',
+              cursor: 'pointer',
+              minWidth: 0,
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 900 }}>{view.label}</div>
+            <div style={{ fontSize: 10, fontWeight: 700, opacity: 0.8, marginTop: 2 }}>{view.sub}</div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function SectionShell({ variant = 'slate', title, kicker, children, theme }) {
+  const skins = {
+    pulse: { bg: 'linear-gradient(165deg, rgba(76,5,25,0.55), rgba(15,23,42,0.94))', border: 'rgba(251,113,133,0.3)', kicker: '#fda4af' },
+    volume: { bg: 'linear-gradient(165deg, rgba(124,45,18,0.4), rgba(15,23,42,0.94))', border: 'rgba(251,146,60,0.28)', kicker: '#fdba74' },
+    speed: { bg: 'linear-gradient(165deg, rgba(8,47,73,0.55), rgba(15,23,42,0.94))', border: 'rgba(34,211,238,0.28)', kicker: '#67e8f9' },
+    kit: { bg: 'linear-gradient(165deg, rgba(20,83,45,0.4), rgba(15,23,42,0.94))', border: 'rgba(163,230,53,0.28)', kicker: '#bef264' },
+    slate: { bg: theme.cardBg, border: theme.cardBorder, kicker: theme.textMuted },
+  };
+  const skin = skins[variant] || skins.slate;
+  return (
+    <section style={{
+      borderRadius: 24,
+      padding: 14,
+      background: skin.bg,
+      border: `1px solid ${skin.border}`,
+      display: 'grid',
+      gap: 12,
+    }}
+    >
+      {kicker ? (
+        <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.16em', textTransform: 'uppercase', color: skin.kicker }}>{kicker}</div>
+      ) : null}
+      {title ? <div style={{ fontSize: 18, fontWeight: 900, color: theme.textHeading, marginTop: kicker ? -4 : 0 }}>{title}</div> : null}
+      {children}
+    </section>
+  );
+}
+
 function CollapsibleBlock({ title, children, theme, defaultOpen = false, open: openProp, onOpenChange }) {
   const [openInternal, setOpenInternal] = useState(defaultOpen);
   const controlled = typeof openProp === 'boolean';
@@ -1339,6 +1407,8 @@ function RunningTab({
   stravaInsights,
   onOpenRun,
   mapsRefreshKey = 0,
+  trainingOverrides = {},
+  onTrainingOverridesChange,
 }) {
   const noData = !(runRows || []).some((r) => Number(r.distance || 0) > 0);
   const insights = useMemo(() => buildRunningInsights(runRows), [runRows]);
@@ -1352,8 +1422,8 @@ function RunningTab({
   const untaggedRuns = importedRuns.filter((run) => !run.shoeId).length;
   const [shoesOpen, setShoesOpen] = useState(!runningShoes.filter((s) => !s.retired).length);
   const [forceEditPastRuns, setForceEditPastRuns] = useState(false);
+  const [dashView, setDashView] = useState('pulse');
   const shoesSectionRef = useRef(null);
-  const hrDashboard = useMemo(() => buildHeartRateDashboard(runRows, stravaInsights), [runRows, stravaInsights]);
 
   const trainingTip = useMemo(() => {
     const goal = userId ? loadMarathonGoal(userId) : null;
@@ -1505,7 +1575,21 @@ function RunningTab({
 
       <MarathonRaceHub userId={userId} runRows={runRows} theme={theme} onOpenPlan={onOpenMarathonPlan} refreshKey={goalRefreshKey} compact />
 
-      {!noData ? (
+      {!noData ? <DashViewBar value={dashView} onChange={setDashView} theme={theme} /> : null}
+
+      {dashView === 'pulse' && !noData ? (
+        <HrTrainingStudio
+          runRows={runRows}
+          insights={stravaInsights}
+          overrides={trainingOverrides}
+          userId={userId}
+          theme={theme}
+          onOpenRun={onOpenRun}
+          onOverridesChange={onTrainingOverridesChange}
+        />
+      ) : null}
+
+      {dashView === 'volume' && !noData ? (
         <div className="run-dash-mini-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 10 }}>
           <DepthMetric label="7-day km" value={`${insights.km7.toFixed(1)}`} sub={`${insights.runs7} runs`} accent={theme.orange} theme={theme} />
           <DepthMetric label="30-day km" value={`${insights.km30.toFixed(1)}`} sub={`${insights.runs30} runs`} accent={theme.blue} theme={theme} />
@@ -1520,8 +1604,8 @@ function RunningTab({
         </div>
       ) : null}
 
-      {!noData && (weeklyRunKm.length || weeklyRunMins.length) ? (
-        <CollapsibleBlock title="Week-wise runs" theme={theme} defaultOpen>
+      {dashView === 'volume' && !noData && (weeklyRunKm.length || weeklyRunMins.length) ? (
+        <SectionShell variant="volume" kicker="Load" title="Week-wise runs" theme={theme}>
           <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
             {weeklyRunKm.length >= 2 ? (
               <RunTrendChart
@@ -1551,11 +1635,11 @@ function RunningTab({
               unit="m"
             />
           </div>
-        </CollapsibleBlock>
+        </SectionShell>
       ) : null}
 
-      {(stravaInsights?.connected || stravaInsights?.runCount > 0) ? (
-        <CollapsibleBlock title="Route & zones" theme={theme} defaultOpen>
+      {dashView === 'volume' && (stravaInsights?.connected || stravaInsights?.runCount > 0) ? (
+        <SectionShell variant="volume" kicker="Routes" title="Maps & season marks" theme={theme}>
           <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
             <div className="run-dash-mini-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 8 }}>
               <MiniStat label="Synced runs" value={`${stravaInsights.runCount || 0}`} sub={`${stravaInsights.totalDistanceKm || 0} km`} accent="#fc5200" theme={theme} />
@@ -1571,16 +1655,17 @@ function RunningTab({
             </div>
             <StravaRunExplorer userId={userId} theme={theme} onOpenRun={onOpenRun} refreshKey={mapsRefreshKey} />
           </div>
-        </CollapsibleBlock>
-      ) : (
+        </SectionShell>
+      ) : dashView === 'volume' ? (
         <div style={{ borderRadius: 18, border: `1px dashed ${theme.cardBorder}`, padding: 16, color: theme.textMuted, fontSize: 13 }}>
           Connect Strava on Wellness to import GPS maps and pace zones.
         </div>
-      )}
+      ) : null}
 
       {noData ? <EmptyState sport="Running" theme={theme} /> : (
       <>
-      <CollapsibleBlock title="Trends" theme={theme} defaultOpen>
+      {dashView === 'speed' ? (
+      <SectionShell variant="speed" kicker="Rhythm" title="Pace & heart trends" theme={theme}>
         <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
           <div className="run-dash-charts-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <RunTrendChart
@@ -1609,9 +1694,11 @@ function RunningTab({
             />
           </div>
         </div>
-      </CollapsibleBlock>
+      </SectionShell>
+      ) : null}
 
-      <CollapsibleBlock title="Fastest 1 km ranking" theme={theme} defaultOpen>
+      {dashView === 'speed' ? (
+      <SectionShell variant="speed" kicker="Splits" title="Fastest 1 km ranking" theme={theme}>
         <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
           <div style={{ fontSize: 12, color: theme.textMuted, lineHeight: 1.45 }}>
             Ranked from stored GPS 1 km splits. Each run contributes its fastest kilometre.
@@ -1637,9 +1724,11 @@ function RunningTab({
           <SplitRankBars title="Ranking" rows={fastestSplits} theme={theme} limit={12} />
           <TopFastestSplits title="Fastest 1 km splits" rows={fastestSplits} theme={theme} limit={12} />
         </div>
-      </CollapsibleBlock>
+      </SectionShell>
+      ) : null}
 
-      <CollapsibleBlock title="Run rankings" theme={theme} defaultOpen>
+      {dashView === 'speed' ? (
+      <SectionShell variant="speed" kicker="Board" title="Run rankings" theme={theme}>
         <div style={{ display: 'grid', gap: 12, marginTop: 4 }}>
           <div style={{ fontSize: 12, color: theme.textMuted, lineHeight: 1.45 }}>
             Best overall ranks mainly by speed vs heart rate. Distance only adds a small bonus. Runs without HR use ~174 bpm for scoring.
@@ -1691,26 +1780,26 @@ function RunningTab({
             />
           </div>
         </div>
-      </CollapsibleBlock>
+      </SectionShell>
+      ) : null}
 
-      <CollapsibleBlock title="Heart rate" theme={theme} defaultOpen={false}>
-        <HeartRateDashboard hrDashboard={hrDashboard} theme={theme} onOpenRun={onOpenRun} />
-      </CollapsibleBlock>
-
-      <CollapsibleBlock title="Shoe analytics" theme={theme} defaultOpen>
+      {dashView === 'kit' ? (
+      <SectionShell variant="kit" kicker="Footwear" title="Shoe analytics" theme={theme}>
         <ShoeStatsSection entries={entries} shoes={runningShoes} theme={theme} onAssignShoes={openShoeAssigner} extraSplitRuns={extraSplitRuns} />
-      </CollapsibleBlock>
+      </SectionShell>
+      ) : null}
 
+      {dashView === 'kit' ? (
       <div ref={shoesSectionRef}>
-        <CollapsibleBlock
+        <SectionShell
+          variant="kit"
+          kicker="Locker"
           title={
             runningShoes.filter((s) => !s.retired).length
               ? `Manage shoes (${runningShoes.filter((s) => !s.retired).length})`
               : 'Manage shoes'
           }
           theme={theme}
-          open={shoesOpen}
-          onOpenChange={setShoesOpen}
         >
           <RunningShoesPanel
             userId={userId}
@@ -1725,10 +1814,12 @@ function RunningTab({
             assignError={assignError}
             forceEditPastRuns={forceEditPastRuns}
           />
-        </CollapsibleBlock>
+        </SectionShell>
       </div>
+      ) : null}
 
-      <CollapsibleBlock title="Records" theme={theme} defaultOpen={false}>
+      {dashView === 'kit' ? (
+      <SectionShell variant="kit" kicker="PRs" title="Records" theme={theme}>
         <div className="sport-3col" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: '10px', marginTop: 4 }}>
           <RecordCard
             label="Fastest Speed"
@@ -1756,7 +1847,8 @@ function RunningTab({
           <RecordCard label="Total Distance" value={`${runStats.totalDistance} km`} detail1={`${runStats.totalRuns} runs`} accent={theme.orange} theme={theme} />
           {wellSummary ? <RecordCard label={`${name}'s streak`} value={`${wellSummary.runningStreak} days`} detail1={`Best ${wellSummary.longestRunningStreak} days`} accent={theme.emerald} theme={theme} /> : null}
         </div>
-      </CollapsibleBlock>
+      </SectionShell>
+      ) : null}
       </>
       )}
     </div>
@@ -2548,6 +2640,7 @@ export default function RunningAnalytics() {
   const [mapsRefreshKey, setMapsRefreshKey] = useState(0);
   const [prRecords, setPrRecords] = useState([]);
   const [showPrModal, setShowPrModal] = useState(false);
+  const [trainingOverrides, setTrainingOverrides] = useState({});
 
   const refreshWellnessPayload = async (uid) => {
     if (!uid || !isWellnessApiReady()) return;
@@ -2565,6 +2658,10 @@ export default function RunningAnalytics() {
       setRunningShoes(saveRunningShoesLocal(uid, dataPayload.runningShoes));
     }
     if (insightsPayload) setStravaInsights(insightsPayload);
+    const cats = dataPayload?.trainingProfile?.categories;
+    if (cats && typeof cats === 'object') {
+      setTrainingOverrides((current) => ({ ...current, ...cats }));
+    }
   };
 
   const handleStravaSync = async () => {
@@ -2599,6 +2696,24 @@ export default function RunningAnalytics() {
     restoreUserSession(router, setUser);
     setSurfaceId(loadRunningSurfaceId());
   }, [router]);
+
+  useEffect(() => {
+    if (!user?.id) return undefined;
+    setTrainingOverrides(readLocalTrainingOverrides(user.id));
+    if (!isWellnessApiReady()) return undefined;
+    let cancelled = false;
+    fetch(wellnessApiUrl(`/wellness/training/${encodeURIComponent(user.id)}`))
+      .then((r) => (r.ok ? r.json() : null))
+      .then((payload) => {
+        if (cancelled) return;
+        const cats = payload?.trainingProfile?.categories;
+        if (cats && typeof cats === 'object') {
+          setTrainingOverrides((current) => ({ ...current, ...cats }));
+        }
+      })
+      .catch(() => { /* local overrides still apply */ });
+    return () => { cancelled = true; };
+  }, [user?.id]);
 
   useEffect(() => {
     if (!user?.id || !isWellnessApiReady()) return undefined;
@@ -3027,6 +3142,8 @@ export default function RunningAnalytics() {
             stravaInsights={stravaInsights}
             mapsRefreshKey={mapsRefreshKey}
             onOpenRun={(activityId) => router.push(`/running/${activityId}`)}
+            trainingOverrides={trainingOverrides}
+            onTrainingOverridesChange={setTrainingOverrides}
           />
         )}
         {activeTab === 'badminton' && (
