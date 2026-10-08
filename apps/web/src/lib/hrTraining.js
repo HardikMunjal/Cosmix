@@ -1,5 +1,7 @@
 /** Personalized HR training: auto-categorize runs, zone time, and zone-speed progress. */
 
+import { isWellnessApiReady, wellnessApiUrl } from './runningShoes';
+
 export const TRAINING_CATEGORIES = [
   { id: 'recovery', label: 'Recovery', color: '#94a3b8', hint: 'Very easy, short shakeout' },
   { id: 'easy', label: 'Easy', color: '#4ade80', hint: 'Aerobic base' },
@@ -419,4 +421,17 @@ export function writeLocalTrainingOverride(userId, activityId, category) {
     current[String(activityId)] = category;
     window.localStorage.setItem(`cosmix-training-${userId}`, JSON.stringify({ categories: current }));
   } catch (_) { /* ignore */ }
+}
+
+export async function persistTrainingCategory(userId, activityId, category) {
+  if (!activityId || !category) return;
+  writeLocalTrainingOverride(userId, activityId, category);
+  if (typeof window === 'undefined' || !userId || !isWellnessApiReady()) return;
+  try {
+    await fetch(wellnessApiUrl(`/wellness/training/${encodeURIComponent(userId)}/runs/${encodeURIComponent(activityId)}`), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category }),
+    });
+  } catch (_) { /* local override still applied */ }
 }

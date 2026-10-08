@@ -53,8 +53,8 @@ import Link from 'next/link';
 import { StravaRunExplorer } from '../lib/StravaRunExplorer';
 import { detectNewPersonalRecords } from '../lib/personalRecords';
 import { PersonalRecordModal, ShareRunButton } from '../lib/PersonalRecordModal';
-import { HrTrainingStudio } from '../lib/HrTrainingStudio';
-import { readLocalTrainingOverrides } from '../lib/hrTraining';
+import { CategoryPicker, HrTrainingStudio } from '../lib/HrTrainingStudio';
+import { buildHrTrainingModel, persistTrainingCategory, readLocalTrainingOverrides } from '../lib/hrTraining';
 
 // ─── helpers ─────────────────────────────────────────────
 function fmtDate(dateStr) {
@@ -770,6 +770,9 @@ function RunningShoesPanel({
   theme,
   importedRuns = [],
   onAssignShoe,
+  onAssignCategory,
+  categoryById = {},
+  savingCategoryId,
   onDeleteRun,
   savingShoeId,
   deletingRunId,
@@ -1019,7 +1022,7 @@ function RunningShoesPanel({
                       onChange={(e) => onAssignShoe?.(run.stravaId, e.target.value)}
                       style={{
                         flex: 1,
-                        minWidth: 140,
+                        minWidth: 120,
                         padding: '10px 12px',
                         borderRadius: 12,
                         border: `1px solid ${inputBorder}`,
@@ -1043,6 +1046,13 @@ function RunningShoesPanel({
                       ))}
                     </select>
                   ) : null}
+                  <CategoryPicker
+                    theme={theme}
+                    value={categoryById[String(run.stravaId)] || 'easy'}
+                    disabled={busy || savingCategoryId === run.stravaId}
+                    ariaLabel={`Category for ${fmtDate(run.date)}`}
+                    onChange={(id) => onAssignCategory?.(run.stravaId, id)}
+                  />
                 </div>
               </div>
             );
@@ -1318,7 +1328,7 @@ function DashViewBar({ value, onChange, theme }) {
             }}
           >
             <div style={{ fontSize: 13, fontWeight: 900 }}>{view.label}</div>
-            <div style={{ fontSize: 10, fontWeight: 700, opacity: 0.8, marginTop: 2 }}>{view.sub}</div>
+            <div className="run-dash-view-sub" style={{ fontSize: 10, fontWeight: 700, opacity: 0.8, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{view.sub}</div>
           </button>
         );
       })}
@@ -1423,7 +1433,19 @@ function RunningTab({
   const [shoesOpen, setShoesOpen] = useState(!runningShoes.filter((s) => !s.retired).length);
   const [forceEditPastRuns, setForceEditPastRuns] = useState(false);
   const [dashView, setDashView] = useState('pulse');
+  const [savingCategoryId, setSavingCategoryId] = useState(null);
   const shoesSectionRef = useRef(null);
+  const trainingModel = useMemo(
+    () => buildHrTrainingModel({ runRows, insights: stravaInsights, overrides: trainingOverrides }),
+    [runRows, stravaInsights, trainingOverrides],
+  );
+  const categoryById = useMemo(() => {
+    const map = {};
+    (trainingModel.runs || []).forEach((run) => {
+      if (run.stravaId) map[String(run.stravaId)] = run.category;
+    });
+    return map;
+  }, [trainingModel]);
 
   const trainingTip = useMemo(() => {
     const goal = userId ? loadMarathonGoal(userId) : null;
@@ -1447,6 +1469,14 @@ function RunningTab({
     if (shoesSectionRef.current?.scrollIntoView) {
       shoesSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
+  };
+
+  const handleAssignCategory = async (stravaId, category) => {
+    if (!stravaId || !category) return;
+    onTrainingOverridesChange?.({ ...trainingOverrides, [String(stravaId)]: category });
+    setSavingCategoryId(stravaId);
+    await persistTrainingCategory(userId, stravaId, category);
+    setSavingCategoryId(null);
   };
 
   const handleAssignShoe = async (stravaId, shoeId) => {
@@ -1808,6 +1838,9 @@ function RunningTab({
             theme={theme}
             importedRuns={importedRuns}
             onAssignShoe={handleAssignShoe}
+            onAssignCategory={handleAssignCategory}
+            categoryById={categoryById}
+            savingCategoryId={savingCategoryId}
             onDeleteRun={handleDeleteRun}
             savingShoeId={savingShoeId}
             deletingRunId={deletingRunId}
@@ -2876,6 +2909,8 @@ export default function RunningAnalytics() {
         .sport-tab-btn.is-active {
           box-shadow: 0 8px 20px rgba(249,115,22,0.15);
         }
+        .running-analytics-page { overflow-x: hidden; max-width: 100%; }
+        .hr-pulse-zones { min-width: 0; }
         @media (max-width: 900px) {
           .sport-4col { grid-template-columns: 1fr 1fr !important; }
           .sport-3col { grid-template-columns: 1fr 1fr !important; }
@@ -2885,8 +2920,10 @@ export default function RunningAnalytics() {
           .marathon-readiness-block { grid-template-columns: 1fr !important; justify-items: center !important; }
           .marathon-score-grid { grid-template-columns: 1fr !important; }
           .marathon-goal-inputs { grid-template-columns: 1fr !important; }
-    .run-dash-charts-2 { grid-template-columns: 1fr !important; }
-    .run-dash-mini-grid { grid-template-columns: 1fr 1fr !important; }
+          .run-dash-charts-2 { grid-template-columns: 1fr !important; }
+          .run-dash-mini-grid { grid-template-columns: 1fr 1fr !important; }
+          .hr-pulse-zones { grid-template-columns: 1fr !important; justify-items: start; }
+          .run-dash-view-sub { display: none; }
         }
         .run-page-header {
           display: grid;

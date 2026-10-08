@@ -527,6 +527,7 @@ export default function RunDetailPage() {
                 </div>
                 <CategoryPicker
                   compact
+                  theme={theme}
                   value={classified.category}
                   disabled={savingCategory}
                   onChange={handleCategory}
