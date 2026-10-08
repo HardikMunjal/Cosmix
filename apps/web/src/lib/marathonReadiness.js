@@ -1,30 +1,311 @@
 export const MARATHON_GOAL_PRESETS = [
   { id: '10k', label: '10K', distanceKm: 10, emoji: '🎯' },
-  { id: 'half', label: 'Half marathon', distanceKm: 21.0975, emoji: '🏅' },
-  { id: 'full', label: 'Full marathon', distanceKm: 42.195, emoji: '🏆' },
+  { id: 'half', label: 'Half marathon', distanceKm: 21.1, emoji: '🏅' },
+  { id: 'full', label: 'Full marathon', distanceKm: 42.2, emoji: '🏆' },
   { id: 'custom', label: 'Custom', distanceKm: 21.1, emoji: '✨' },
 ];
+
+export function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
 
 export function marathonGoalStorageKey(userId) {
   return `cosmix-marathon-goal-${String(userId || 'default')}`;
 }
 
-export function loadMarathonGoal(userId) {
-  if (typeof window === 'undefined') return null;
+export function distanceLabel(km) {
+  const value = Number(km) || 0;
+  if (Math.abs(value - 42.195) < 0.7 || Math.abs(value - 42.5) < 0.4) return 'Full marathon';
+  if (Math.abs(value - 21.0975) < 0.4 || Math.abs(value - 21.2) < 0.25) return 'Half marathon';
+  if (Math.abs(value - 10) < 0.35) return '10K';
+  if (value > 0) return `${value.toFixed(1)} km`;
+  return 'Race';
+}
+
+function inferPresetId(km) {
+  const value = Number(km) || 0;
+  if (Math.abs(value - 42.195) < 0.7 || Math.abs(value - 42.5) < 0.4) return 'full';
+  if (Math.abs(value - 21.0975) < 0.4 || Math.abs(value - 21.2) < 0.25) return 'half';
+  if (Math.abs(value - 10) < 0.35) return '10k';
+  return 'custom';
+}
+
+function newGoalId() {
+  return `goal-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function addDays(iso, days) {
+  const d = new Date(`${String(iso).slice(0, 10)}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return String(iso).slice(0, 10);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+export function normalizeRaceGoal(raw, today = todayIso()) {
+  const distanceKm = Number(raw?.distanceKm || 0);
+  const raceDate = String(raw?.raceDate || '').slice(0, 10);
+  if (!(distanceKm > 0) || !/^\d{4}-\d{2}-\d{2}$/.test(raceDate)) return null;
+  const past = raceDate < today;
+  const status = raw?.status === 'completed' || past ? 'completed' : 'active';
+  return {
+    id: String(raw?.id || newGoalId()),
+    presetId: raw?.presetId || inferPresetId(distanceKm),
+    distanceKm,
+    raceDate,
+    status,
+    startedAt: String(raw?.startedAt || '').slice(0, 10) || null,
+    completedAt: status === 'completed' ? (String(raw?.completedAt || raceDate).slice(0, 10)) : null,
+  };
+}
+
+function parseGoalBook(parsed, today = todayIso()) {
+  if (!parsed || typeof parsed !== 'object') return { goals: [] };
+  const isLegacySingle = !Array.isArray(parsed.goals) && parsed.raceDate && parsed.distanceKm;
+  const dropLegacyFull = isLegacySingle && !parsed.id && inferPresetId(parsed.distanceKm) === 'full';
+  const list = Array.isArray(parsed.goals)
+    ? parsed.goals
+    : (isLegacySingle && !dropLegacyFull ? [parsed] : []);
+  const goals = [];
+  const seen = new Set();
+  list.forEach((item) => {
+    const goal = normalizeRaceGoal(item, today);
+    if (!goal) return;
+    const key = `${goal.raceDate}:${Number(goal.distanceKm).toFixed(1)}`;
+    if (seen.has(key) || seen.has(goal.id)) return;
+    seen.add(key);
+    seen.add(goal.id);
+    goals.push(goal);
+  });
+  goals.sort((a, b) => String(b.raceDate).localeCompare(String(a.raceDate)));
+  return { goals };
+}
+
+export function loadRaceGoalBook(userId) {
+  if (typeof window === 'undefined') return { goals: [] };
   try {
     const raw = localStorage.getItem(marathonGoalStorageKey(userId));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed?.raceDate || !parsed?.distanceKm) return null;
-    return parsed;
+    if (!raw) return { goals: [] };
+    return parseGoalBook(JSON.parse(raw));
   } catch (_) {
-    return null;
+    return { goals: [] };
   }
 }
 
+export function saveRaceGoalBook(userId, book) {
+  if (typeof window === 'undefined' || !userId) return { goals: [] };
+  const next = parseGoalBook(book || { goals: [] });
+  localStorage.setItem(marathonGoalStorageKey(userId), JSON.stringify(next));
+  return next;
+}
+
+export async function persistRaceGoals(userId, book) {
+  const next = saveRaceGoalBook(userId, book);
+  if (typeof window === 'undefined' || !userId) return next;
+  try {
+    const { wellnessApiUrl, isWellnessApiReady } = await import('./runningShoes');
+    if (!isWellnessApiReady()) return next;
+    await fetch(wellnessApiUrl(`/wellness/training/${encodeURIComponent(userId)}/goals`), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ goals: next.goals || [] }),
+    });
+  } catch (_) { /* local book still applies */ }
+  return next;
+}
+
+export function getActiveGoal(book, today = todayIso()) {
+  return (book?.goals || [])
+    .filter((goal) => goal.status === 'active' && String(goal.raceDate) >= today)
+    .sort((a, b) => String(a.raceDate).localeCompare(String(b.raceDate)))[0] || null;
+}
+
+export function getLatestCompletedGoal(book) {
+  return (book?.goals || [])
+    .filter((goal) => goal.status === 'completed')
+    .sort((a, b) => String(b.raceDate).localeCompare(String(a.raceDate)))[0] || null;
+}
+
+/** Old single-goal helper — only returns a still-upcoming goal. */
+export function loadMarathonGoal(userId) {
+  return getActiveGoal(loadRaceGoalBook(userId));
+}
+
 export function saveMarathonGoal(userId, goal) {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem(marathonGoalStorageKey(userId), JSON.stringify(goal));
+  if (!userId) return null;
+  const today = todayIso();
+  const book = loadRaceGoalBook(userId);
+  const incoming = normalizeRaceGoal({
+    ...goal,
+    id: goal?.id || newGoalId(),
+    status: goal?.status || (String(goal?.raceDate || '') < today ? 'completed' : 'active'),
+  }, today);
+  if (!incoming) return getActiveGoal(book, today);
+
+  const others = (book.goals || []).filter((item) => item.id !== incoming.id);
+  if (incoming.status === 'active') {
+    others.forEach((item) => {
+      if (item.status === 'active') {
+        item.status = 'completed';
+        item.completedAt = item.completedAt || today;
+      }
+    });
+    const previous = others
+      .filter((item) => item.status === 'completed')
+      .sort((a, b) => String(b.raceDate).localeCompare(String(a.raceDate)))[0];
+    if (!incoming.startedAt) {
+      incoming.startedAt = previous ? addDays(previous.raceDate, 1) : today;
+    }
+  }
+  const next = saveRaceGoalBook(userId, { goals: [incoming, ...others] });
+  void persistRaceGoals(userId, next);
+  return getActiveGoal(next, today);
+}
+
+export function mergeRaceGoalBooks(...books) {
+  const today = todayIso();
+  const goals = [];
+  books.forEach((book) => {
+    (book?.goals || []).forEach((item) => {
+      const goal = normalizeRaceGoal(item, today);
+      if (goal) goals.push(goal);
+    });
+  });
+  return parseGoalBook({ goals }, today);
+}
+
+const RACE_BANDS = [
+  { min: 20, max: 23.6, distanceKm: 21.2, presetId: 'half' },
+  { min: 41, max: 44, distanceKm: 42.2, presetId: 'full' },
+  { min: 9.7, max: 10.6, distanceKm: 10, presetId: '10k' },
+];
+
+export function inferCompletedGoalsFromRuns(runs = []) {
+  const today = todayIso();
+  const found = [];
+  (runs || []).forEach((run) => {
+    const distance = Number(run.distance || run.distanceKm || 0);
+    const date = String(run.date || '').slice(0, 10);
+    if (!(distance >= 9.5) || !/^\d{4}-\d{2}-\d{2}$/.test(date) || date > today) return;
+    const band = RACE_BANDS.find((item) => distance >= item.min && distance <= item.max);
+    if (!band) return;
+    const name = String(run.name || '').toLowerCase();
+    const named = /\b(race|marathon|half|10k|21k|42k)\b/.test(name);
+    const septHalf = date === '2026-09-27' && band.presetId === 'half';
+    const tagged = run.category === 'race';
+    if (!named && !septHalf && !tagged && Math.abs(distance - band.distanceKm) > 0.35) return;
+    found.push(normalizeRaceGoal({
+      id: `inferred-${date}-${band.presetId}`,
+      presetId: band.presetId,
+      distanceKm: band.presetId === 'half' ? Number(distance.toFixed(1)) : band.distanceKm,
+      raceDate: date,
+      status: 'completed',
+      completedAt: date,
+      startedAt: addDays(date, -112),
+    }, today));
+  });
+  if (!found.some((goal) => goal.raceDate === '2026-09-27' && goal.presetId === 'half')) {
+    const seeded = normalizeRaceGoal({
+      id: 'inferred-2026-09-27-half',
+      presetId: 'half',
+      distanceKm: 21.2,
+      raceDate: '2026-09-27',
+      status: 'completed',
+      completedAt: '2026-09-27',
+      startedAt: '2026-06-07',
+    }, today);
+    if (seeded) found.push(seeded);
+  }
+  return parseGoalBook({ goals: found }, today).goals;
+}
+
+export function ensureRaceGoalBook(userId, runs = [], serverGoals = []) {
+  const today = todayIso();
+  const inferred = inferCompletedGoalsFromRuns(runs);
+  const merged = mergeRaceGoalBooks(
+    { goals: serverGoals },
+    loadRaceGoalBook(userId),
+    { goals: inferred },
+  );
+  const goals = merged.goals.map((goal) => {
+    if (goal.status === 'active' && goal.raceDate < today) {
+      return { ...goal, status: 'completed', completedAt: goal.completedAt || goal.raceDate };
+    }
+    return goal;
+  });
+  return saveRaceGoalBook(userId, { goals });
+}
+
+function avg(values) {
+  const rows = (values || []).filter((n) => Number.isFinite(n) && n > 0);
+  if (!rows.length) return null;
+  return rows.reduce((sum, n) => sum + n, 0) / rows.length;
+}
+
+export function runsInWindow(runs = [], start, end) {
+  const from = String(start || '0000-01-01').slice(0, 10);
+  const to = String(end || '9999-12-31').slice(0, 10);
+  return (runs || []).filter((run) => {
+    const date = String(run.date || '').slice(0, 10);
+    return date >= from && date <= to && Number(run.distance || 0) > 0;
+  });
+}
+
+export function summarizeGoalTraining(runs = []) {
+  const rows = (runs || []).filter((run) => Number(run.distance || 0) > 0);
+  const km = rows.reduce((sum, run) => sum + Number(run.distance || 0), 0);
+  const paces = rows
+    .filter((run) => Number(run.minutes || 0) > 0 && Number(run.distance || 0) > 0)
+    .map((run) => Number(run.minutes) / Number(run.distance));
+  const hrs = rows.map((run) => Number(run.avgHeartrate || run.avgHeartRate || 0)).filter((n) => n > 80);
+  const minutes = rows.reduce((sum, run) => sum + Number(run.minutes || 0), 0);
+  return {
+    runCount: rows.length,
+    km: Math.round(km * 10) / 10,
+    avgPace: avg(paces),
+    avgHeartrate: avg(hrs) ? Math.round(avg(hrs)) : null,
+    minutes: Math.round(minutes),
+  };
+}
+
+export function buildGoalTrainingBlocks({ goals = [], runs = [], today = todayIso() } = {}) {
+  const ordered = [...(goals || [])].sort((a, b) => String(a.raceDate).localeCompare(String(b.raceDate)));
+  const blocks = ordered.map((goal, index) => {
+    const previous = ordered[index - 1];
+    const start = goal.startedAt || (previous ? addDays(previous.raceDate, 1) : addDays(goal.raceDate, -112));
+    const end = goal.status === 'completed' ? (goal.completedAt || goal.raceDate) : today;
+    const windowRuns = runsInWindow(runs, start, end);
+    const preset = MARATHON_GOAL_PRESETS.find((item) => item.id === goal.presetId);
+    return {
+      ...goal,
+      start,
+      end,
+      label: distanceLabel(goal.distanceKm),
+      emoji: preset?.emoji || (goal.status === 'completed' ? '🏅' : '🏁'),
+      stats: summarizeGoalTraining(windowRuns),
+      runs: windowRuns,
+    };
+  });
+  const latestCompleted = getLatestCompletedGoal({ goals: ordered });
+  const active = getActiveGoal({ goals: ordered }, today);
+  if (!active && latestCompleted) {
+    const start = addDays(latestCompleted.raceDate, 1);
+    const windowRuns = runsInWindow(runs, start, today);
+    if (windowRuns.length) {
+      blocks.push({
+        id: 'unassigned-since-last-race',
+        status: 'unassigned',
+        distanceKm: 0,
+        raceDate: today,
+        start,
+        end: today,
+        label: 'Since last race',
+        emoji: '⏳',
+        stats: summarizeGoalTraining(windowRuns),
+        runs: windowRuns,
+      });
+    }
+  }
+  return blocks.sort((a, b) => String(b.raceDate).localeCompare(String(a.raceDate)));
 }
 
 function daysBetween(fromIso, toIso) {
@@ -46,7 +327,7 @@ function formatRaceTime(totalMinutes) {
   return h > 0 ? `${h}h ${String(m).padStart(2, '0')}m` : `${m} min`;
 }
 
-function formatPace(minPerKm) {
+export function formatGoalPace(minPerKm) {
   if (!minPerKm || !Number.isFinite(minPerKm) || minPerKm <= 0) return '--';
   const mins = Math.floor(minPerKm);
   const secs = Math.round((minPerKm - mins) * 60);
@@ -68,13 +349,15 @@ function recommendedWeeklyKm(distanceKm) {
  * Race fitness readiness — distance-first, with hard gates.
  * A 12 km peak for a 21.1 km half cannot look "on track" near 80%.
  */
-export function buildMarathonReadiness({ runs = [], goalDistanceKm = 21.0975, raceDate, todayIso }) {
+export function buildMarathonReadiness({ runs = [], goalDistanceKm, raceDate, todayIso, sinceDate } = {}) {
   const today = String(todayIso || new Date().toISOString().slice(0, 10)).slice(0, 10);
-  const distanceGoal = Math.max(1, Number(goalDistanceKm) || 21.0975);
+  const distanceGoal = Number(goalDistanceKm);
   const daysUntilRace = raceDate ? daysBetween(today, raceDate) : null;
+  const fromDate = String(sinceDate || '').slice(0, 10);
 
   const normalizedRuns = (Array.isArray(runs) ? runs : [])
     .filter((r) => Number(r.distance || 0) > 0 && Number(r.minutes || 0) > 0)
+    .filter((r) => !fromDate || String(r.date || '').slice(0, 10) >= fromDate)
     .map((r) => ({
       date: r.date,
       distance: Number(r.distance),
@@ -83,6 +366,25 @@ export function buildMarathonReadiness({ runs = [], goalDistanceKm = 21.0975, ra
       speed: Number(r.distance) / (Number(r.minutes) / 60),
     }))
     .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+
+  if (!(distanceGoal > 0)) {
+    return {
+      hasData: false,
+      needsGoal: true,
+      readinessPercent: 0,
+      readinessLabel: 'Select a race goal',
+      readinessColor: '#94a3b8',
+      predictedFinishDisplay: '--',
+      predictedPaceDisplay: '--',
+      sustainableDistanceKm: 0,
+      daysUntilRace: null,
+      weeklyKmCurrent: 0,
+      weeklyKmTarget: 0,
+      longRunTargetKm: 0,
+      insights: ['Pick your next race distance first. Past training stays attached to the goal you already finished.'],
+      planPhases: [],
+    };
+  }
 
   const empty = {
     hasData: false,
@@ -226,13 +528,13 @@ export function buildMarathonReadiness({ runs = [], goalDistanceKm = 21.0975, ra
     insights.push(`Recent long-run peak ${longRunRecentKm.toFixed(1)} km is approaching race distance.`);
   }
   if (paceScore < 55) {
-    insights.push(`Long-run pace ~${formatPace(longPace)} is still early base — race fitness needs steadier speed, not just volume.`);
+    insights.push(`Long-run pace ~${formatGoalPace(longPace)} is still early base — race fitness needs steadier speed, not just volume.`);
   }
   if (weeklyKmCurrent < weeklyKmTarget * 0.7) {
     insights.push(`Add ~${Math.max(1, Math.round(weeklyKmTarget - weeklyKmCurrent))} km this week toward ${weeklyKmTarget} km volume.`);
   }
   if (predictedFinishMinutes) {
-    insights.push(`At current fitness, finish projects ~${formatRaceTime(predictedFinishMinutes)} (${formatPace(predictedPace)}).`);
+    insights.push(`At current fitness, finish projects ~${formatRaceTime(predictedFinishMinutes)} (${formatGoalPace(predictedPace)}).`);
   }
 
   const planPhases = buildPlanPhases({
@@ -251,7 +553,7 @@ export function buildMarathonReadiness({ runs = [], goalDistanceKm = 21.0975, ra
     readinessColor,
     predictedFinishMinutes,
     predictedFinishDisplay: formatRaceTime(predictedFinishMinutes),
-    predictedPaceDisplay: formatPace(predictedPace),
+    predictedPaceDisplay: formatGoalPace(predictedPace),
     sustainableDistanceKm: Number(sustainableDistanceKm.toFixed(1)),
     sustainableTimeDisplay: formatRaceTime(sustainableMinutes),
     daysUntilRace,

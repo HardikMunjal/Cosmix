@@ -193,6 +193,7 @@ export function HrTrainingStudio({
   theme,
   onOpenRun,
   onOverridesChange,
+  goalKicker = 'set next race goal',
 }) {
   const [savingId, setSavingId] = useState(null);
   const model = useMemo(
@@ -239,7 +240,7 @@ export function HrTrainingStudio({
       >
         <div>
           <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.18em', textTransform: 'uppercase', color: '#fda4af' }}>
-            Pulse studio · 42 km prep
+            Pulse studio · {goalKicker}
           </div>
           <div style={{ fontSize: 22, fontWeight: 900, color: '#fff7ed', marginTop: 4 }}>Heart training</div>
           <div style={{ fontSize: 12, color: '#fecdd3', marginTop: 4, lineHeight: 1.4 }}>

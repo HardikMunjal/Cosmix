@@ -158,12 +158,12 @@ export function buildBodyReadiness({ runRows = [] } = {}) {
 
 export function buildTrainingTip({
   runRows = [],
-  goalDistanceKm = 21.0975,
+  goalDistanceKm = null,
   longRunTargetKm = null,
   readiness = null,
 } = {}) {
-  const distanceGoal = Math.max(1, Number(goalDistanceKm) || 21.0975);
-  const targetLong = Number(longRunTargetKm) || Number((distanceGoal * 0.82).toFixed(1));
+  const distanceGoal = Number(goalDistanceKm) > 0 ? Number(goalDistanceKm) : 0;
+  const targetLong = Number(longRunTargetKm) || (distanceGoal > 0 ? Number((distanceGoal * 0.82).toFixed(1)) : 14);
   const runs = normalizeRuns(runRows);
   const body = buildBodyReadiness({ runRows });
   const today = toDay(new Date().toISOString());
@@ -171,7 +171,9 @@ export function buildTrainingTip({
   if (!runs.length) {
     return {
       title: 'Boot sequence',
-      tip: `No recent runs logged. Start with an easy 4–6 km aerobic jog and build toward a ~${targetLong} km long run for your ${distanceGoal.toFixed(1)} km goal.`,
+      tip: distanceGoal
+        ? `No recent runs logged. Start with an easy 4–6 km aerobic jog and build toward a ~${targetLong} km long run for your ${distanceGoal.toFixed(1)} km goal.`
+        : 'No recent runs logged. Pick your next race goal, then start with an easy 4–6 km aerobic jog.',
       action: 'Easy 5 km',
       nextWhen: 'Tomorrow morning',
       fuel: 'Banana + small oats bowl 60–90 min before. Skip heavy fried food.',
@@ -194,7 +196,7 @@ export function buildTrainingTip({
   const avgHr7 = hrRuns.length ? hrRuns.reduce((s, r) => s + r.avgHeartrate, 0) / hrRuns.length : null;
   const daysSinceLast = Math.max(0, daysBetween(last.date, today));
   const nextLong = Math.min(targetLong, Number((recentPeak + Math.max(1.5, recentPeak * 0.1)).toFixed(1)));
-  const ratio = recentPeak / distanceGoal;
+  const ratio = distanceGoal > 0 ? recentPeak / distanceGoal : 1;
   const morningBias = runs.slice(0, 8).filter((r) => hourOfRun(r) < 11).length >= Math.ceil(Math.min(8, runs.length) / 2);
   const hardLoad = (avgHr7 && avgHr7 >= 155) || last.pace <= avgPace3 * 0.92;
   const recoveryHours = hardLoad
@@ -233,11 +235,11 @@ export function buildTrainingTip({
     title = 'Heart-rate load high';
     tip = `7-day avg HR ~${Math.round(avgHr7)} bpm with ${weekKm.toFixed(1)} km volume. Schedule recovery: easy ${Math.max(4, Math.min(7, last.distance * 0.6)).toFixed(0)} km or full rest, then resume long-run build toward ${targetLong} km.`;
     action = 'Recovery / easy only';
-  } else if (ratio < 0.55) {
+  } else if (distanceGoal > 0 && ratio < 0.55) {
     title = 'Build the long run';
     tip = `Peak long run ${recentPeak.toFixed(1)} km (${Math.round(ratio * 100)}% of ${distanceGoal.toFixed(1)} km goal). Recent pace ~${fmtPace(avgPace3)}/km, speed ~${avgSpeed3.toFixed(1)} km/h. Weekend target ~${nextLong} km easy.`;
     action = `Long run ${nextLong} km`;
-  } else if (weekKm < (distanceGoal >= 40 ? 40 : distanceGoal >= 20 ? 28 : 18) * 0.7) {
+  } else if (distanceGoal > 0 && weekKm < (distanceGoal >= 40 ? 40 : distanceGoal >= 20 ? 28 : 18) * 0.7) {
     const weekTarget = distanceGoal >= 40 ? 40 : distanceGoal >= 20 ? 28 : 18;
     title = 'Volume below target';
     tip = `This week ${weekKm.toFixed(1)} km across ${last7.length} run${last7.length === 1 ? '' : 's'} (30d: ${last30.length} runs). Add a mid-week ${Math.max(6, Math.round((weekTarget - weekKm) / 2))} km aerobic run toward ~${weekTarget} km.`;

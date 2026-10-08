@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import { restoreUserSession } from '../lib/auth-client';
 import { MarathonGoalModal, MarathonRaceHub } from '../lib/MarathonRaceHub';
+import { RaceGoalsStudio } from '../lib/RaceGoalsStudio';
 import { MobileBottomNav } from '../lib/MobileNav';
 import { useTheme } from '../lib/ThemePicker';
 import { computeRunningStats, computeWellnessStats, buildWellnessSummary } from '../lib/userInsights';
@@ -46,7 +47,13 @@ import {
 } from '../lib/activityOverviewCharts';
 import { hrZoneForBpm } from '../lib/hrZones';
 import { loadRunningSurfaceId, saveRunningSurfaceId, mergeRunningSurface } from '../lib/runningThemes';
-import { buildMarathonReadiness, loadMarathonGoal } from '../lib/marathonReadiness';
+import {
+  buildMarathonReadiness,
+  ensureRaceGoalBook,
+  getActiveGoal,
+  getLatestCompletedGoal,
+  persistRaceGoals,
+} from '../lib/marathonReadiness';
 import { buildTrainingTip } from '../lib/trainingTip';
 import { CoachBotCard } from '../lib/CoachBotCard';
 import Link from 'next/link';
@@ -1301,12 +1308,13 @@ function PaceMinuteBars({ buckets = [], theme, denominator }) {
 function DashViewBar({ value, onChange, theme }) {
   const views = [
     { id: 'pulse', label: 'Pulse', sub: 'Zones & easy HR', accent: '#fb7185' },
+    { id: 'goals', label: 'Goals', sub: 'Per race block', accent: '#c084fc' },
     { id: 'volume', label: 'Volume', sub: 'Weeks & maps', accent: '#fb923c' },
     { id: 'speed', label: 'Speed', sub: 'Splits & ranks', accent: '#22d3ee' },
     { id: 'kit', label: 'Kit', sub: 'Shoes & PRs', accent: '#a3e635' },
   ];
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 8 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0,1fr))', gap: 6 }}>
       {views.map((view) => {
         const on = value === view.id;
         return (
@@ -1447,13 +1455,20 @@ function RunningTab({
     return map;
   }, [trainingModel]);
 
+  const raceGoalBook = useMemo(
+    () => (userId ? ensureRaceGoalBook(userId, runRows) : { goals: [] }),
+    [userId, goalRefreshKey, (runRows || []).length],
+  );
+  const activeRaceGoal = getActiveGoal(raceGoalBook);
+  const lastRaceGoal = getLatestCompletedGoal(raceGoalBook);
+
   const trainingTip = useMemo(() => {
-    const goal = userId ? loadMarathonGoal(userId) : null;
-    const goalDistanceKm = Number(goal?.distanceKm) || 21.0975;
+    const goalDistanceKm = Number(activeRaceGoal?.distanceKm) || null;
     const readiness = buildMarathonReadiness({
       runs: runRows,
       goalDistanceKm,
-      raceDate: goal?.raceDate || null,
+      raceDate: activeRaceGoal?.raceDate || null,
+      sinceDate: activeRaceGoal?.startedAt || lastRaceGoal?.raceDate || null,
     });
     return buildTrainingTip({
       runRows,
@@ -1461,7 +1476,7 @@ function RunningTab({
       longRunTargetKm: readiness?.longRunTargetKm,
       readiness,
     });
-  }, [runRows, userId, goalRefreshKey]);
+  }, [runRows, activeRaceGoal, lastRaceGoal]);
 
   const openShoeAssigner = () => {
     setShoesOpen(true);
@@ -1616,7 +1631,19 @@ function RunningTab({
           theme={theme}
           onOpenRun={onOpenRun}
           onOverridesChange={onTrainingOverridesChange}
+          goalKicker={activeRaceGoal ? `${Number(activeRaceGoal.distanceKm).toFixed(1)} km prep` : 'set next race goal'}
         />
+      ) : null}
+
+      {dashView === 'goals' ? (
+        <SectionShell variant="pulse" kicker="Race blocks" title="Training by goal" theme={theme}>
+          <RaceGoalsStudio
+            book={raceGoalBook}
+            runRows={runRows}
+            theme={theme}
+            onOpenPlan={onOpenMarathonPlan}
+          />
+        </SectionShell>
       ) : null}
 
       {dashView === 'volume' && !noData ? (
@@ -2743,6 +2770,10 @@ export default function RunningAnalytics() {
         if (cats && typeof cats === 'object') {
           setTrainingOverrides((current) => ({ ...current, ...cats }));
         }
+        if (Array.isArray(payload?.trainingProfile?.goals) && payload.trainingProfile.goals.length) {
+          persistRaceGoals(user.id, { goals: payload.trainingProfile.goals });
+          setGoalRefreshKey((k) => k + 1);
+        }
       })
       .catch(() => { /* local overrides still apply */ });
     return () => { cancelled = true; };
@@ -3213,7 +3244,7 @@ export default function RunningAnalytics() {
           setGoalRefreshKey((k) => k + 1);
           if (router.query.setup) router.replace('/running-analytics', undefined, { shallow: true });
         }}
-        initialTab={router.query.setup ? 'goal' : 'plan'}
+        initialTab="goal"
       />
 
       <PersonalRecordModal

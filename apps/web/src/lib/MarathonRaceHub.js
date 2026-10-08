@@ -2,13 +2,14 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   MARATHON_GOAL_PRESETS,
   buildMarathonReadiness,
-  loadMarathonGoal,
+  distanceLabel,
+  ensureRaceGoalBook,
+  getActiveGoal,
+  getLatestCompletedGoal,
+  loadRaceGoalBook,
   saveMarathonGoal,
+  todayIso,
 } from './marathonReadiness';
-
-function todayIso() {
-  return new Date().toISOString().slice(0, 10);
-}
 
 function ReadinessRing({ percent, color, label, theme, size = 148 }) {
   const stroke = Math.max(8, Math.round(size * 0.08));
@@ -107,8 +108,9 @@ function StatChip({ label, value, theme }) {
 
 export function MarathonGoalModal({ open, onClose, userId, runRows, theme, onSaved, initialTab = 'goal' }) {
   const [presetId, setPresetId] = useState('half');
-  const [customKm, setCustomKm] = useState('21.1');
+  const [customKm, setCustomKm] = useState('21.2');
   const [raceDate, setRaceDate] = useState('');
+  const [alreadyRaced, setAlreadyRaced] = useState(false);
   const [modalTab, setModalTab] = useState(initialTab);
 
   useEffect(() => {
@@ -118,22 +120,30 @@ export function MarathonGoalModal({ open, onClose, userId, runRows, theme, onSav
 
   useEffect(() => {
     if (!open || !userId) return;
-    const saved = loadMarathonGoal(userId);
+    const book = loadRaceGoalBook(userId);
+    const saved = getActiveGoal(book);
     if (saved) {
       setPresetId(saved.presetId || 'half');
-      setCustomKm(String(saved.distanceKm || 21.1));
+      setCustomKm(String(saved.distanceKm || 21.2));
       setRaceDate(saved.raceDate || '');
+      setAlreadyRaced(false);
       return;
+    }
+    const last = getLatestCompletedGoal(book);
+    if (last) {
+      setPresetId('full');
+      setCustomKm('42.2');
     }
     const future = new Date();
     future.setDate(future.getDate() + 56);
     setRaceDate(future.toISOString().slice(0, 10));
+    setAlreadyRaced(false);
   }, [open, userId]);
 
   const distanceKm = useMemo(() => {
-    if (presetId === 'custom') return Math.max(1, Number(customKm) || 21.1);
+    if (presetId === 'custom') return Math.max(1, Number(customKm) || 21.2);
     const preset = MARATHON_GOAL_PRESETS.find((p) => p.id === presetId);
-    return preset?.distanceKm || 21.0975;
+    return preset?.distanceKm || 21.2;
   }, [presetId, customKm]);
 
   const readiness = useMemo(() => buildMarathonReadiness({
@@ -145,8 +155,21 @@ export function MarathonGoalModal({ open, onClose, userId, runRows, theme, onSav
 
   function handleSave() {
     if (!userId || !raceDate) return;
-    saveMarathonGoal(userId, { presetId, distanceKm, raceDate });
+    saveMarathonGoal(userId, {
+      presetId,
+      distanceKm,
+      raceDate,
+      status: alreadyRaced || raceDate < todayIso() ? 'completed' : 'active',
+    });
     onSaved?.();
+    if (alreadyRaced || raceDate < todayIso()) {
+      setAlreadyRaced(false);
+      const future = new Date();
+      future.setDate(future.getDate() + 56);
+      setRaceDate(future.toISOString().slice(0, 10));
+      setModalTab('goal');
+      return;
+    }
     setModalTab('plan');
   }
 
@@ -196,7 +219,9 @@ export function MarathonGoalModal({ open, onClose, userId, runRows, theme, onSav
 
         {modalTab === 'goal' && (
           <>
-            <p style={{ margin: '0 0 12px', fontSize: 13, color: theme.textSecondary, lineHeight: 1.5 }}>Pick your target distance and race date. Stats and plans adapt to your goal.</p>
+            <p style={{ margin: '0 0 12px', fontSize: 13, color: theme.textSecondary, lineHeight: 1.5 }}>
+              Pick the next race first. Training stats stay on the goal you actually ran — your 21.2 km on 27 Sep stays a half, not a marathon.
+            </p>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
               {MARATHON_GOAL_PRESETS.map((preset) => (
                 <button
@@ -229,16 +254,28 @@ export function MarathonGoalModal({ open, onClose, userId, runRows, theme, onSav
               )}
               <label style={{ display: 'grid', gap: 6, fontSize: 12, fontWeight: 700, color: theme.textMuted }}>
                 Race date
-                <input type="date" min={todayIso()} value={raceDate} onChange={(e) => setRaceDate(e.target.value)} style={{ borderRadius: 12, border: `1px solid ${theme.cardBorder}`, padding: '10px', background: theme.cardBg, color: theme.textHeading }} />
+                <input
+                  type="date"
+                  min={alreadyRaced ? undefined : todayIso()}
+                  value={raceDate}
+                  onChange={(e) => setRaceDate(e.target.value)}
+                  style={{ borderRadius: 12, border: `1px solid ${theme.cardBorder}`, padding: '10px', background: theme.cardBg, color: theme.textHeading }}
+                />
               </label>
             </div>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, fontWeight: 700, color: theme.textSecondary, marginBottom: 12 }}>
+              <input type="checkbox" checked={alreadyRaced} onChange={(e) => setAlreadyRaced(e.target.checked)} />
+              Already raced this (save to history, then pick the next goal)
+            </label>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 12, borderRadius: 14, background: `${readiness.readinessColor}14`, marginBottom: 12 }}>
               <ReadinessRing percent={readiness.readinessPercent} color={readiness.readinessColor} label={readiness.readinessLabel} theme={theme} size={100} />
               <div style={{ fontSize: 13, lineHeight: 1.5, color: theme.textSecondary }}>
                 Preview for <strong style={{ color: theme.textHeading }}>{distanceKm.toFixed(1)} km</strong>: finish ~<strong style={{ color: theme.orange }}>{readiness.predictedFinishDisplay}</strong>
               </div>
             </div>
-            <button type="button" onClick={handleSave} style={{ width: '100%', border: 'none', borderRadius: 14, padding: 14, background: theme.orange, color: '#fff', fontWeight: 900, cursor: 'pointer' }}>Save goal</button>
+            <button type="button" onClick={handleSave} style={{ width: '100%', border: 'none', borderRadius: 14, padding: 14, background: theme.orange, color: '#fff', fontWeight: 900, cursor: 'pointer' }}>
+              {alreadyRaced ? 'Save completed race' : 'Save next goal'}
+            </button>
           </>
         )}
 
@@ -275,22 +312,27 @@ export function MarathonGoalModal({ open, onClose, userId, runRows, theme, onSav
 }
 
 export function MarathonRaceHub({ userId, runRows, theme, onOpenPlan, refreshKey = 0, compact = false }) {
-  const [savedGoal, setSavedGoal] = useState(null);
+  const [book, setBook] = useState({ goals: [] });
   const [showDetails, setShowDetails] = useState(false);
 
+  const runStamp = `${(runRows || []).length}:${(runRows || []).slice(0, 2).map((r) => `${r.date}:${r.distance}`).join('|')}`;
   useEffect(() => {
     if (!userId) return;
-    setSavedGoal(loadMarathonGoal(userId));
-  }, [userId, refreshKey]);
+    setBook(ensureRaceGoalBook(userId, runRows));
+  }, [userId, refreshKey, runStamp]);
+
+  const savedGoal = getActiveGoal(book);
+  const lastDone = getLatestCompletedGoal(book);
 
   const readiness = useMemo(() => buildMarathonReadiness({
     runs: runRows,
-    goalDistanceKm: savedGoal?.distanceKm || 21.0975,
+    goalDistanceKm: savedGoal?.distanceKm,
     raceDate: savedGoal?.raceDate || null,
+    sinceDate: savedGoal?.startedAt || (lastDone ? lastDone.raceDate : null),
     todayIso: todayIso(),
-  }), [runRows, savedGoal]);
+  }), [runRows, savedGoal, lastDone]);
 
-  const preset = MARATHON_GOAL_PRESETS.find((p) => p.id === savedGoal?.presetId) || MARATHON_GOAL_PRESETS[1];
+  const preset = MARATHON_GOAL_PRESETS.find((p) => p.id === savedGoal?.presetId);
 
   if (!savedGoal) {
     return (
@@ -305,8 +347,12 @@ export function MarathonRaceHub({ userId, runRows, theme, onOpenPlan, refreshKey
         textAlign: 'left',
       }}
       >
-        <div style={{ fontWeight: 900, fontSize: 16 }}>🏁 Configure your race goal</div>
-        <div style={{ fontSize: 12, color: theme.textSecondary, marginTop: 6 }}>10K · 21.1 km half · 42.2 km full — tap to set up</div>
+        <div style={{ fontWeight: 900, fontSize: 16 }}>🏁 Select your next race goal</div>
+        <div style={{ fontSize: 12, color: theme.textSecondary, marginTop: 6 }}>
+          {lastDone
+            ? `${distanceLabel(lastDone.distanceKm)} on ${lastDone.raceDate} is complete. Choose the next distance.`
+            : '10K · 21.2 km half · 42.2 km full — tap to set the next one'}
+        </div>
       </button>
     );
   }
@@ -317,7 +363,7 @@ export function MarathonRaceHub({ userId, runRows, theme, onOpenPlan, refreshKey
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, minWidth: 0 }}>
           <ReadinessRing percent={readiness.readinessPercent} color={readiness.readinessColor} label={readiness.readinessLabel} theme={theme} size={96} />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', color: theme.textMuted }}>{preset.emoji} {distanceLabel(savedGoal.distanceKm)}</div>
+            <div style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', color: theme.textMuted }}>{preset?.emoji || '🏁'} {distanceLabel(savedGoal.distanceKm)}</div>
             <div style={{ fontSize: 18, fontWeight: 900, marginTop: 4 }}>{readiness.predictedFinishDisplay}</div>
             <div style={{ fontSize: 12, color: theme.textSecondary, marginTop: 4 }}>
               {readiness.daysUntilRace != null ? `${readiness.daysUntilRace}d to race` : 'Set race date'}
@@ -345,7 +391,7 @@ export function MarathonRaceHub({ userId, runRows, theme, onOpenPlan, refreshKey
     <div style={{ display: 'grid', gap: 12 }}>
       <div className="marathon-hero-compact" style={{ borderRadius: 20, padding: 14, background: `linear-gradient(135deg, ${theme.orange}14, ${theme.cyan}10)`, border: `1px solid ${theme.cardBorder}` }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-          <div style={{ fontWeight: 900, fontSize: 16 }}>{preset.emoji} {distanceLabel(savedGoal.distanceKm)}</div>
+          <div style={{ fontWeight: 900, fontSize: 16 }}>{preset?.emoji || '🏁'} {distanceLabel(savedGoal.distanceKm)}</div>
           <button type="button" onClick={onOpenPlan} style={{ border: 'none', background: theme.orange, color: '#fff', borderRadius: 10, padding: '8px 12px', fontWeight: 800, fontSize: 12, cursor: 'pointer' }}>Edit</button>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -368,12 +414,4 @@ export function MarathonRaceHub({ userId, runRows, theme, onOpenPlan, refreshKey
       </div>
     </div>
   );
-}
-
-function distanceLabel(km) {
-  const value = Number(km) || 21.0975;
-  if (Math.abs(value - 42.195) < 0.5) return 'Full marathon';
-  if (Math.abs(value - 21.0975) < 0.2) return 'Half marathon';
-  if (Math.abs(value - 10) < 0.2) return '10K';
-  return `${value.toFixed(1)} km`;
 }

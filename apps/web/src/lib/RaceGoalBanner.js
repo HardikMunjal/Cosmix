@@ -3,21 +3,14 @@ import { useRouter } from 'next/router';
 import {
   MARATHON_GOAL_PRESETS,
   buildMarathonReadiness,
-  loadMarathonGoal,
+  distanceLabel,
+  ensureRaceGoalBook,
+  getActiveGoal,
+  getLatestCompletedGoal,
 } from './marathonReadiness';
-
-function distanceLabel(km) {
-  const value = Number(km) || 21.0975;
-  if (Math.abs(value - 42.195) < 0.5) return 'Full marathon';
-  if (Math.abs(value - 21.0975) < 0.2) return 'Half marathon (21.1 km)';
-  if (Math.abs(value - 10) < 0.2) return '10K';
-  return `${value.toFixed(1)} km`;
-}
 
 export function RaceGoalBanner({ userId, entries = [], glassStyle }) {
   const router = useRouter();
-  const savedGoal = userId ? loadMarathonGoal(userId) : null;
-
   const runRows = useMemo(() => (
     (Array.isArray(entries) ? entries : [])
       .filter((e) => Number(e.runningDistanceKm || 0) > 0 && Number(e.runningMinutes || 0) > 0)
@@ -27,12 +20,15 @@ export function RaceGoalBanner({ userId, entries = [], glassStyle }) {
         minutes: Number(e.runningMinutes),
       }))
   ), [entries]);
+  const savedGoal = userId ? getActiveGoal(ensureRaceGoalBook(userId, runRows)) : null;
+  const lastDone = userId ? getLatestCompletedGoal(ensureRaceGoalBook(userId, runRows)) : null;
 
   const readiness = useMemo(() => buildMarathonReadiness({
     runs: runRows,
-    goalDistanceKm: savedGoal?.distanceKm || 21.0975,
+    goalDistanceKm: savedGoal?.distanceKm,
     raceDate: savedGoal?.raceDate || null,
-  }), [runRows, savedGoal]);
+    sinceDate: savedGoal?.startedAt || lastDone?.raceDate || null,
+  }), [runRows, savedGoal, lastDone]);
 
   const preset = MARATHON_GOAL_PRESETS.find((p) => p.id === savedGoal?.presetId);
 
@@ -62,8 +58,10 @@ export function RaceGoalBanner({ userId, entries = [], glassStyle }) {
       >
         <span style={{ fontSize: 28 }} aria-hidden="true">🏁</span>
         <span style={{ flex: 1 }}>
-          <span style={{ display: 'block', fontWeight: 800, fontSize: 14 }}>Set your running goal</span>
-          <span style={{ display: 'block', fontSize: 12, opacity: 0.82, marginTop: 4 }}>10K, 21.1 km half, or full marathon — unlock your plan</span>
+          <span style={{ display: 'block', fontWeight: 800, fontSize: 14 }}>Select your next race goal</span>
+          <span style={{ display: 'block', fontSize: 12, opacity: 0.82, marginTop: 4 }}>
+            {lastDone ? `${distanceLabel(lastDone.distanceKm)} is done — pick the next one` : '10K, 21.2 km half, or 42.2 km full'}
+          </span>
         </span>
         <span style={{ fontWeight: 800, fontSize: 18, opacity: 0.7 }}>›</span>
       </button>

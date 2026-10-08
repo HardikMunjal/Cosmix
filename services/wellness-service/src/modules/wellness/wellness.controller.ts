@@ -531,6 +531,14 @@ export class WellnessController implements OnModuleInit {
     return this.storageService.saveTrainingCategory(userId, Number(activityId), String(body?.category || ''));
   }
 
+  @Put('training/:userId/goals')
+  async saveTrainingGoals(
+    @Param('userId') userId: string,
+    @Body() body: { goals?: any[] },
+  ) {
+    return this.storageService.saveTrainingGoals(userId, Array.isArray(body?.goals) ? body.goals : []);
+  }
+
   @Put('strava/runs/:userId/:activityId/shoe')
   async assignStravaRunShoe(
     @Param('userId') userId: string,

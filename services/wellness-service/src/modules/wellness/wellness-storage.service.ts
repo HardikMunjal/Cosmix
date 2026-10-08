@@ -81,9 +81,20 @@ type RunningShoeRecord = {
   retired?: boolean;
 };
 
+type RaceGoalRecord = {
+  id: string;
+  presetId?: string;
+  distanceKm: number;
+  raceDate: string;
+  status?: 'active' | 'completed';
+  startedAt?: string | null;
+  completedAt?: string | null;
+};
+
 type TrainingProfile = {
   categories: Record<string, string>;
   maxHr?: number | null;
+  goals?: RaceGoalRecord[];
 };
 
 type WellnessStoredState = {
@@ -520,9 +531,27 @@ export class WellnessStorageService {
       if (id && allowed.has(category)) categories[String(id)] = category;
     });
     const maxHr = Number(raw?.maxHr);
+    const goals: RaceGoalRecord[] = [];
+    const incomingGoals = Array.isArray(raw?.goals) ? raw.goals : [];
+    incomingGoals.forEach((item: any) => {
+      const distanceKm = Number(item?.distanceKm || 0);
+      const raceDate = String(item?.raceDate || '').slice(0, 10);
+      if (!(distanceKm > 0) || !/^\d{4}-\d{2}-\d{2}$/.test(raceDate)) return;
+      const status = item?.status === 'completed' ? 'completed' : 'active';
+      goals.push({
+        id: String(item?.id || `goal-${raceDate}-${distanceKm}`),
+        presetId: String(item?.presetId || ''),
+        distanceKm,
+        raceDate,
+        status,
+        startedAt: item?.startedAt ? String(item.startedAt).slice(0, 10) : null,
+        completedAt: item?.completedAt ? String(item.completedAt).slice(0, 10) : null,
+      });
+    });
     return {
       categories,
       maxHr: Number.isFinite(maxHr) && maxHr >= 120 && maxHr <= 230 ? maxHr : null,
+      goals,
     };
   }
 
@@ -1378,6 +1407,26 @@ export class WellnessStorageService {
         ...(store.trainingProfile?.categories || {}),
         [String(numericId)]: String(category),
       },
+    });
+    const nextStore = this.normalizeStore({
+      ...store,
+      trainingProfile: nextProfile,
+      updatedAt: this.nowIso(),
+    });
+    const scoringRules = await this.loadScoringRules();
+    const derived = this.deriveScoresWithCache(nextStore, scoringRules);
+    await this.persistStore(userId, derived.store);
+    return { ok: true, trainingProfile: nextProfile };
+  }
+
+  async saveTrainingGoals(
+    userId: string,
+    goals: RaceGoalRecord[] = [],
+  ): Promise<{ ok: boolean; trainingProfile?: TrainingProfile; error?: string }> {
+    const store = this.normalizeStore(await this.loadStore(userId));
+    const nextProfile = this.normalizeTrainingProfile({
+      ...(store.trainingProfile || { categories: {} }),
+      goals,
     });
     const nextStore = this.normalizeStore({
       ...store,
