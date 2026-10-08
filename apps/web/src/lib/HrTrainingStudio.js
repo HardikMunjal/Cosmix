@@ -122,14 +122,22 @@ function ZoneStackChart({ history = [], theme, onOpenRun }) {
                 y += h;
                 return rect;
               })}
+              <rect
+                x={x}
+                y={H - 22}
+                width={barW}
+                height="4"
+                rx="2"
+                fill={run.categoryColor || theme.textMuted}
+              />
               <text
                 x={x + barW / 2}
-                y={H - 10}
+                y={H - 8}
                 textAnchor="middle"
                 fill={theme.textMuted}
                 fontSize="8"
               >
-                {fmtDate(run.date).replace(' ', '\n')}
+                {fmtDate(run.date).slice(0, 6)}
               </text>
             </g>
           );
@@ -175,6 +183,7 @@ export function HrTrainingStudio({
   onOverridesChange,
 }) {
   const [savingId, setSavingId] = useState(null);
+  const [editingId, setEditingId] = useState(null);
   const model = useMemo(
     () => buildHrTrainingModel({ runRows, insights, overrides }),
     [runRows, insights, overrides],
@@ -231,7 +240,7 @@ export function HrTrainingStudio({
           </div>
           <div style={{ fontSize: 24, fontWeight: 900, color: '#fff7ed', marginTop: 4 }}>Heart training</div>
           <div style={{ fontSize: 13, color: '#fecdd3', marginTop: 4, lineHeight: 1.45 }}>
-            Categories are personal. Your easy HR is not someone else’s. Tap a chip if Cosmix guessed wrong.
+            Every past run is classified from your own pace and HR. A slow jog is easy for you even if the title says otherwise. Tap a chip to correct.
           </div>
         </div>
 
@@ -308,7 +317,7 @@ export function HrTrainingStudio({
           Time in each zone · past runs
         </div>
         <div style={{ fontSize: 13, color: '#94a3b8', margin: '6px 0 10px' }}>
-          Each bar is one run. Tap a bar to open it. Watch Z1 grow as easy fitness improves.
+          Each bar is one run. The tick under the bar is its category. Tap a bar to open it.
         </div>
         <ZoneStackChart history={model.zoneHistory} theme={theme} onOpenRun={onOpenRun} />
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 8 }}>
@@ -385,6 +394,98 @@ export function HrTrainingStudio({
         </div>
       </section>
 
+      <section style={{
+        borderRadius: 24,
+        padding: 16,
+        background: 'linear-gradient(180deg, rgba(15,23,42,0.96), rgba(2,6,23,0.96))',
+        border: '1px solid rgba(192,132,252,0.22)',
+        display: 'grid',
+        gap: 10,
+      }}
+      >
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.14em', textTransform: 'uppercase', color: '#d8b4fe' }}>
+            All past runs · {model.runCount}
+          </div>
+          <div style={{ fontSize: 13, color: '#c4b5fd', marginTop: 4, lineHeight: 1.45 }}>
+            Slow for you = easy. Tap the badge if Cosmix guessed wrong.
+          </div>
+        </div>
+        <div style={{ display: 'grid', gap: 8, maxHeight: 520, overflowY: 'auto', paddingRight: 2 }}>
+          {model.runs.map((run) => {
+            const open = editingId != null && String(editingId) === String(run.stravaId || run.date);
+            return (
+              <div
+                key={`${run.stravaId || run.date}-${run.name}`}
+                style={{
+                  display: 'grid',
+                  gap: 8,
+                  padding: '10px 12px',
+                  borderRadius: 16,
+                  background: 'rgba(2,6,23,0.45)',
+                  border: `1px solid ${run.color}33`,
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+                  <button
+                    type="button"
+                    onClick={() => run.stravaId && onOpenRun?.(run.stravaId)}
+                    style={{
+                      appearance: 'none',
+                      border: 'none',
+                      background: 'transparent',
+                      textAlign: 'left',
+                      color: theme.textHeading,
+                      fontWeight: 800,
+                      fontSize: 13,
+                      cursor: run.stravaId ? 'pointer' : 'default',
+                      padding: 0,
+                      flex: 1,
+                    }}
+                  >
+                    {fmtDate(run.date)} · {run.name}
+                    <div style={{ fontSize: 12, fontWeight: 600, color: theme.textMuted, marginTop: 2 }}>
+                      {Number(run.distance || 0).toFixed(1)} km
+                      {run.paceMinPerKm ? ` · ${fmtTrainingPace(run.paceMinPerKm)} /km` : ''}
+                      {run.avgHeartrate ? ` · ${run.avgHeartrate} bpm` : ''}
+                    </div>
+                    {run.source !== 'user' && run.reason ? (
+                      <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 3, fontWeight: 600 }}>{run.reason}</div>
+                    ) : null}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditingId(open ? null : (run.stravaId || run.date))}
+                    style={{
+                      appearance: 'none',
+                      border: 'none',
+                      background: run.color,
+                      color: '#0f172a',
+                      borderRadius: 999,
+                      padding: '6px 10px',
+                      fontWeight: 900,
+                      fontSize: 11,
+                      cursor: 'pointer',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {run.label}
+                  </button>
+                </div>
+                {open && run.stravaId ? (
+                  <CategoryPicker
+                    compact
+                    value={run.category}
+                    disabled={savingId === run.stravaId}
+                    onChange={(id) => setCategory(run.stravaId, id)}
+                  />
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
       <section style={{ display: 'grid', gap: 10 }}>
         <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.14em', textTransform: 'uppercase', color: theme.purple || '#c084fc' }}>
           Grouped by how you trained
@@ -423,6 +524,7 @@ export function HrTrainingStudio({
                   }}
                 >
                   {fmtDate(run.date)} · {run.name} · {Number(run.distance).toFixed(1)} km
+                  {run.paceMinPerKm ? ` · ${fmtTrainingPace(run.paceMinPerKm)} /km` : ''}
                   {run.avgHeartrate ? ` · ${run.avgHeartrate} bpm` : ''}
                 </button>
                 {run.stravaId ? (

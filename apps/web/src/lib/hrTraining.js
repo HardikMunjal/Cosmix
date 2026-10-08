@@ -74,6 +74,20 @@ function nameHint(name = '') {
   return null;
 }
 
+export function runPaceMinPerKm(run) {
+  const fromClock = Number(run?.paceMinPerKm || 0);
+  if (fromClock > 2.4 && fromClock < 20) return fromClock;
+  const minutes = Number(run?.minutes || 0);
+  const distance = Number(run?.distance || run?.distanceKm || 0);
+  if (distance > 0 && minutes > 0) {
+    const pace = minutes / distance;
+    if (pace > 2.4 && pace < 20) return pace;
+  }
+  const speed = Number(run?.avgSpeedKmh || 0);
+  if (speed > 2) return 60 / speed;
+  return null;
+}
+
 export function collectTrainingRuns(runRows = [], insights = null) {
   const byKey = new Map();
   const push = (row) => {
@@ -105,9 +119,14 @@ export function collectTrainingRuns(runRows = [], insights = null) {
     distance: run.distanceKm,
     stravaId: run.stravaId || run.id,
   }));
+  (insights?.fastestRuns || []).forEach((run) => push({
+    ...run,
+    distance: run.distanceKm,
+    stravaId: run.stravaId || run.id,
+  }));
   return [...byKey.values()]
     .map((run) => {
-      const pace = run.distance > 0 && run.minutes > 0 ? run.minutes / run.distance : null;
+      const pace = runPaceMinPerKm(run);
       const zEasy = zoneShare(run.heartrateZones, [1, 2]);
       const zHard = zoneShare(run.heartrateZones, [4, 5]);
       const zMid = zoneShare(run.heartrateZones, [3, 4]);
@@ -119,7 +138,8 @@ export function collectTrainingRuns(runRows = [], insights = null) {
 export function buildPersonalBaselines(runs = []) {
   const hr = runs.map((run) => Number(run.avgHeartrate || 0)).filter((n) => n > 80).sort((a, b) => a - b);
   const dist = runs.map((run) => Number(run.distance || 0)).filter((n) => n > 0).sort((a, b) => a - b);
-  const pace = runs.map((run) => Number(run.paceMinPerKm || 0)).filter((n) => n > 2 && n < 12).sort((a, b) => a - b);
+  const pace = runs.map(runPaceMinPerKm).filter((n) => n > 2.4 && n < 18).sort((a, b) => a - b);
+  const meanPace = pace.length ? pace.reduce((sum, n) => sum + n, 0) / pace.length : null;
   return {
     hrP25: percentile(hr, 25),
     hrP45: percentile(hr, 45),
@@ -127,9 +147,57 @@ export function buildPersonalBaselines(runs = []) {
     distP20: percentile(dist, 20),
     distP80: percentile(dist, 80),
     paceP40: percentile(pace, 40),
+    paceP55: percentile(pace, 55),
+    paceP70: percentile(pace, 70),
+    paceP85: percentile(pace, 85),
+    meanPace,
     sampleCount: runs.length,
     maxHrSeen: runs.reduce((best, run) => Math.max(best, Number(run.maxHeartrate || run.avgHeartrate || 0)), 0) || 190,
   };
+}
+
+function slowVsSelf(run, baselines = {}) {
+  const pace = runPaceMinPerKm(run);
+  if (!(pace > 0)) return { slow: false, verySlow: false, pace: null };
+  const p70 = Number(baselines.paceP70 || 0);
+  const p85 = Number(baselines.paceP85 || 0);
+  const mean = Number(baselines.meanPace || 0);
+  const samples = Number(baselines.sampleCount || 0);
+  const verySlow = (p85 > 0 && pace >= p85) || (mean > 0 && pace >= mean * 1.18);
+  const slow = verySlow
+    || (p70 > 0 && pace >= p70)
+    || (mean > 0 && pace >= mean * 1.1)
+    || (samples < 5 && mean > 0 && pace >= mean * 1.06);
+  return { slow, verySlow, pace };
+}
+
+function looksLikeInterval(run) {
+  const zHard = Number(run.zHard || 0);
+  const zEasy = Number(run.zEasy || 0);
+  const distance = Number(run.distance || 0);
+  return zHard >= 28 && (zEasy >= 12 || (distance > 0 && distance < 12));
+}
+
+function looksLikeHardRaceEffort(run, baselines = {}) {
+  const pace = runPaceMinPerKm(run);
+  const fast = pace && baselines.paceP40 && pace <= Number(baselines.paceP40);
+  // High average HR alone is not race effort — heat and hills raise HR on easy jogs.
+  return Number(run.zHard || 0) >= 22 || Boolean(fast);
+}
+
+function easyFamily(run, baselines, reason) {
+  const distance = Number(run.distance || 0);
+  const distLong = Math.max(14, Number(baselines.distP80 || 14));
+  const distShort = Math.max(5.2, Number(baselines.distP20 || 5.2));
+  const hr = Number(run.avgHeartrate || 0);
+  const recoveryHr = Number(baselines.hrP25 || 132);
+  if (distance >= distLong) {
+    return { category: 'long', source: 'auto', reason };
+  }
+  if (distance > 0 && distance <= distShort && (hr > 0 ? hr <= recoveryHr : Number(run.zEasy || 0) >= 70)) {
+    return { category: 'recovery', source: 'auto', reason };
+  }
+  return { category: 'easy', source: 'auto', reason };
 }
 
 export function classifyTrainingRun(run, baselines = {}, override = null) {
@@ -146,32 +214,45 @@ export function classifyTrainingRun(run, baselines = {}, override = null) {
   const distShort = Math.max(5.2, Number(baselines.distP20 || 5.2));
   const easyHr = Number(baselines.hrP45 || 145);
   const recoveryHr = Number(baselines.hrP25 || 132);
+  const { slow, verySlow } = slowVsSelf(run, baselines);
 
-  if (hinted === 'race' && (distance >= 9.5 || /marathon|42/.test(String(run.name || '').toLowerCase()))) {
-    return { category: 'race', source: 'auto', reason: 'Race distance / name' };
-  }
-  if (hinted && hinted !== 'easy') {
-    return { category: hinted, source: 'auto', reason: 'From the run name' };
-  }
-  if (zHard >= 28 && (zEasy >= 12 || distance < 12)) {
+  // Intervals often have a slow overall pace because of recoveries — keep that signature first.
+  if (looksLikeInterval(run)) {
     return { category: 'interval', source: 'auto', reason: 'Hard + easier mix — typical intervals' };
   }
   if (zHard >= 35 && zEasy < 15 && distance >= 4 && distance <= 16) {
     return { category: 'threshold', source: 'auto', reason: 'Most time in Z4–Z5' };
   }
-  if (zMid >= 45 && zHard < 32) {
+
+  // Personal pace: a jog that is slow for *you* is easy, even if HR is a bit high or the title says tempo/race.
+  if ((slow || verySlow) && !looksLikeHardRaceEffort(run, baselines)) {
+    const why = verySlow
+      ? `Very slow vs your usual ${fmtTrainingPace(baselines.meanPace)} /km`
+      : `Slower than your typical ${fmtTrainingPace(baselines.meanPace || baselines.paceP55)} /km`;
+    return easyFamily(run, baselines, why);
+  }
+
+  if (hinted === 'race' && looksLikeHardRaceEffort(run, baselines) && (distance >= 9.5 || /marathon|42|21|half|10k/.test(String(run.name || '').toLowerCase()))) {
+    return { category: 'race', source: 'auto', reason: 'Race distance / name at race effort' };
+  }
+  if (hinted && hinted !== 'easy' && hinted !== 'race' && !slow) {
+    return { category: hinted, source: 'auto', reason: 'From the run name' };
+  }
+  if (zMid >= 45 && zHard < 32 && !slow) {
     return { category: 'tempo', source: 'auto', reason: 'Sustained Z3–Z4' };
   }
-  if (distance >= distLong && (zEasy >= 42 || (hr > 0 && hr <= easyHr + 6))) {
+  if (distance >= distLong && (zEasy >= 42 || (hr > 0 && hr <= easyHr + 6) || slow)) {
     return { category: 'long', source: 'auto', reason: 'Longer than your usual runs at easy effort' };
   }
   if (distance > 0 && distance <= distShort && (hr > 0 ? hr <= recoveryHr : zEasy >= 70)) {
     return { category: 'recovery', source: 'auto', reason: 'Short and easy vs your history' };
   }
-  if (zEasy >= 52 || (hr > 0 && hr <= easyHr) || hinted === 'easy') {
-    return { category: 'easy', source: 'auto', reason: 'Mostly Z1–Z2 / below your mid HR' };
+  if (zEasy >= 52 || (hr > 0 && hr <= easyHr) || hinted === 'easy' || slow) {
+    return { category: 'easy', source: 'auto', reason: slow
+      ? 'Slow vs your history — easy'
+      : 'Mostly Z1–Z2 / below your mid HR' };
   }
-  if (hr > 0 && hr > Number(baselines.hrP60 || 155)) {
+  if (hr > 0 && hr > Number(baselines.hrP60 || 155) && !slow) {
     return { category: 'tempo', source: 'auto', reason: 'HR above your usual mid-pack' };
   }
   return { category: 'easy', source: 'auto', reason: 'Default easy for this athlete' };
@@ -230,7 +311,7 @@ export function buildHrTrainingModel({
     minutes: Math.round(zone.seconds / 60),
   }));
 
-  const history = [...labeled].filter((run) => (run.heartrateZones || []).length).slice(0, 28).reverse();
+  const history = [...labeled].filter((run) => (run.heartrateZones || []).length).slice(0, 40).reverse();
   const zoneHistory = history.map((run) => {
     const shares = ZONE_META.map((meta) => {
       const zone = (run.heartrateZones || []).find((item) => Number(item.zone || 0) === meta.zone);
@@ -247,6 +328,8 @@ export function buildHrTrainingModel({
       name: run.name,
       stravaId: run.stravaId,
       category: run.category,
+      categoryLabel: run.label,
+      categoryColor: run.color,
       z1: shares[0].percent,
       shares,
     };
@@ -298,7 +381,7 @@ export function buildHrTrainingModel({
       count: rows.length,
       km: Math.round(rows.reduce((sum, run) => sum + Number(run.distance || 0), 0) * 10) / 10,
       avgHr: avg(rows.map((run) => Number(run.avgHeartrate || 0))) || null,
-      runs: rows.slice(0, 8),
+      runs,
     };
   }).filter((group) => group.count > 0);
 

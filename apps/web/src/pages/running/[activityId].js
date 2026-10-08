@@ -4,7 +4,7 @@ import { restoreUserSession } from '../../lib/auth-client';
 import { MobileBottomNav } from '../../lib/MobileNav';
 import { useTheme } from '../../lib/ThemePicker';
 import { RunRouteMap } from '../../lib/RunRouteMap';
-import { isWellnessApiReady, wellnessApiUrl } from '../../lib/runningShoes';
+import { buildRunningRows, isWellnessApiReady, wellnessApiUrl } from '../../lib/runningShoes';
 import { ShareRunButton } from '../../lib/PersonalRecordModal';
 import { hrEffortColor, hrZoneForBpm } from '../../lib/hrZones';
 import { CategoryPicker } from '../../lib/HrTrainingStudio';
@@ -289,6 +289,8 @@ export default function RunDetailPage() {
   const [weather, setWeather] = useState(null);
   const [trainingOverrides, setTrainingOverrides] = useState({});
   const [savingCategory, setSavingCategory] = useState(false);
+  const [historyRows, setHistoryRows] = useState([]);
+  const [historyInsights, setHistoryInsights] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -337,16 +339,21 @@ export default function RunDetailPage() {
     setTrainingOverrides(readLocalTrainingOverrides(userId));
     if (!isWellnessApiReady()) return undefined;
     let cancelled = false;
-    fetch(wellnessApiUrl(`/wellness/training/${encodeURIComponent(userId)}`))
-      .then((r) => (r.ok ? r.json() : null))
-      .then((payload) => {
-        if (cancelled) return;
-        const cats = payload?.trainingProfile?.categories;
-        if (cats && typeof cats === 'object') {
-          setTrainingOverrides((current) => ({ ...current, ...cats }));
-        }
-      })
-      .catch(() => { /* ignore */ });
+    Promise.all([
+      fetch(wellnessApiUrl(`/wellness/training/${encodeURIComponent(userId)}`)).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(wellnessApiUrl(`/wellness/data/${encodeURIComponent(userId)}`)).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(wellnessApiUrl(`/wellness/strava/insights/${encodeURIComponent(userId)}?days=180`)).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    ]).then(([training, data, insights]) => {
+      if (cancelled) return;
+      const cats = training?.trainingProfile?.categories || data?.trainingProfile?.categories;
+      if (cats && typeof cats === 'object') {
+        setTrainingOverrides((current) => ({ ...current, ...cats }));
+      }
+      if (Array.isArray(data?.entries)) {
+        setHistoryRows(buildRunningRows(data.entries));
+      }
+      if (insights) setHistoryInsights(insights);
+    });
     return () => { cancelled = true; };
   }, [userId]);
 
@@ -357,21 +364,25 @@ export default function RunDetailPage() {
   const fuelBurn = detail?.fuelBurn || summary.fuelBurn || null;
   const maxHrRef = resolveAthleteMaxHr(summary.maxHeartrate || 0);
   const classified = useMemo(() => {
+    const current = {
+      date: summary.date,
+      name: summary.name,
+      distance: Number(summary.distanceKm || 0),
+      minutes: Number(summary.minutes || 0),
+      avgHeartrate: Number(summary.avgHeartrate || 0),
+      maxHeartrate: Number(summary.maxHeartrate || 0),
+      avgSpeedKmh: Number(summary.avgSpeedKmh || 0) || null,
+      stravaId: Number(activityId || 0),
+      heartrateZones: zones,
+    };
     const model = buildHrTrainingModel({
-      runRows: [{
-        date: summary.date,
-        name: summary.name,
-        distance: Number(summary.distanceKm || 0),
-        minutes: Number(summary.minutes || 0),
-        avgHeartrate: Number(summary.avgHeartrate || 0),
-        maxHeartrate: Number(summary.maxHeartrate || 0),
-        stravaId: Number(activityId || 0),
-        heartrateZones: zones,
-      }],
+      runRows: [...historyRows, current],
+      insights: historyInsights,
       overrides: trainingOverrides,
     });
-    return model.lastRun;
-  }, [summary.date, summary.name, summary.distanceKm, summary.minutes, summary.avgHeartrate, summary.maxHeartrate, activityId, zones, trainingOverrides]);
+    const id = String(activityId || '');
+    return model.runs.find((run) => String(run.stravaId || '') === id) || model.lastRun;
+  }, [summary.date, summary.name, summary.distanceKm, summary.minutes, summary.avgHeartrate, summary.maxHeartrate, summary.avgSpeedKmh, activityId, zones, trainingOverrides, historyRows, historyInsights]);
 
   async function handleCategory(category) {
     const id = Number(activityId);
