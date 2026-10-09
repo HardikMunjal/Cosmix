@@ -173,66 +173,69 @@ export function mergeRaceGoalBooks(...books) {
   return parseGoalBook({ goals }, today);
 }
 
-const RACE_BANDS = [
-  { min: 20, max: 23.6, distanceKm: 21.2, presetId: 'half' },
-  { min: 41, max: 44, distanceKm: 42.2, presetId: 'full' },
-  { min: 9.7, max: 10.6, distanceKm: 10, presetId: '10k' },
-];
+function isInferredGoalId(id) {
+  return String(id || '').startsWith('inferred');
+}
 
-export function inferCompletedGoalsFromRuns(runs = []) {
-  const today = todayIso();
-  const found = [];
-  (runs || []).forEach((run) => {
-    const distance = Number(run.distance || run.distanceKm || 0);
-    const date = String(run.date || '').slice(0, 10);
-    if (!(distance >= 9.5) || !/^\d{4}-\d{2}-\d{2}$/.test(date) || date > today) return;
-    const band = RACE_BANDS.find((item) => distance >= item.min && distance <= item.max);
-    if (!band) return;
-    const name = String(run.name || '').toLowerCase();
-    const named = /\b(race|marathon|half|10k|21k|42k)\b/.test(name);
-    const septHalf = date === '2026-09-27' && band.presetId === 'half';
-    const tagged = run.category === 'race';
-    if (!named && !septHalf && !tagged && Math.abs(distance - band.distanceKm) > 0.35) return;
-    found.push(normalizeRaceGoal({
-      id: `inferred-${date}-${band.presetId}`,
-      presetId: band.presetId,
-      distanceKm: band.presetId === 'half' ? Number(distance.toFixed(1)) : band.distanceKm,
-      raceDate: date,
-      status: 'completed',
-      completedAt: date,
-      startedAt: addDays(date, -112),
-    }, today));
+function dedupeGoals(goals = []) {
+  const ranked = [...(goals || [])].sort((a, b) => {
+    const ai = isInferredGoalId(a.id) ? 1 : 0;
+    const bi = isInferredGoalId(b.id) ? 1 : 0;
+    return ai - bi;
   });
-  if (!found.some((goal) => goal.raceDate === '2026-09-27' && goal.presetId === 'half')) {
-    const seeded = normalizeRaceGoal({
-      id: 'inferred-2026-09-27-half',
-      presetId: 'half',
-      distanceKm: 21.2,
-      raceDate: '2026-09-27',
-      status: 'completed',
-      completedAt: '2026-09-27',
-      startedAt: '2026-06-07',
-    }, today);
-    if (seeded) found.push(seeded);
-  }
-  return parseGoalBook({ goals: found }, today).goals;
+  const out = [];
+  ranked.forEach((goal) => {
+    const clash = out.find((item) => (
+      item.raceDate === goal.raceDate
+      && Math.abs(Number(item.distanceKm) - Number(goal.distanceKm)) < 1.6
+    ));
+    if (!clash) out.push(goal);
+  });
+  return out.sort((a, b) => String(b.raceDate).localeCompare(String(a.raceDate)));
+}
+
+export function inferCompletedGoalsFromRuns() {
+  return [];
 }
 
 export function ensureRaceGoalBook(userId, runs = [], serverGoals = []) {
   const today = todayIso();
-  const inferred = inferCompletedGoalsFromRuns(runs);
+  const previous = loadRaceGoalBook(userId);
   const merged = mergeRaceGoalBooks(
     { goals: serverGoals },
-    loadRaceGoalBook(userId),
-    { goals: inferred },
+    previous,
   );
-  const goals = merged.goals.map((goal) => {
+  const completed = merged.goals.map((goal) => {
     if (goal.status === 'active' && goal.raceDate < today) {
       return { ...goal, status: 'completed', completedAt: goal.completedAt || goal.raceDate };
     }
     return goal;
   });
-  return saveRaceGoalBook(userId, { goals });
+  const real = completed.filter((goal) => !isInferredGoalId(goal.id));
+  const goals = dedupeGoals(real.length ? real : completed);
+  const next = saveRaceGoalBook(userId, { goals });
+  const changed = JSON.stringify(previous.goals || []) !== JSON.stringify(next.goals || []);
+  if (changed) void persistRaceGoals(userId, next);
+  return next;
+}
+
+export function pickSelectedGoal(book, selectedId) {
+  const goals = book?.goals || [];
+  return goals.find((goal) => goal.id === selectedId)
+    || getActiveGoal(book)
+    || getLatestCompletedGoal(book)
+    || goals[0]
+    || null;
+}
+
+export function runsForSelectedGoal(runs = [], goal, allGoals = []) {
+  if (!goal) return runs || [];
+  const blocks = buildGoalTrainingBlocks({
+    goals: (allGoals || []).length ? allGoals : [goal],
+    runs,
+  });
+  const block = blocks.find((item) => item.id === goal.id);
+  return block?.runs || [];
 }
 
 function avg(values) {
@@ -258,10 +261,14 @@ export function summarizeGoalTraining(runs = []) {
     .map((run) => Number(run.minutes) / Number(run.distance));
   const hrs = rows.map((run) => Number(run.avgHeartrate || run.avgHeartRate || 0)).filter((n) => n > 80);
   const minutes = rows.reduce((sum, run) => sum + Number(run.minutes || 0), 0);
+  const speeds = rows
+    .filter((run) => Number(run.minutes || 0) > 0 && Number(run.distance || 0) > 0)
+    .map((run) => Number(run.distance) / (Number(run.minutes) / 60));
   return {
     runCount: rows.length,
     km: Math.round(km * 10) / 10,
     avgPace: avg(paces),
+    avgSpeed: avg(speeds),
     avgHeartrate: avg(hrs) ? Math.round(avg(hrs)) : null,
     minutes: Math.round(minutes),
   };
@@ -285,26 +292,6 @@ export function buildGoalTrainingBlocks({ goals = [], runs = [], today = todayIs
       runs: windowRuns,
     };
   });
-  const latestCompleted = getLatestCompletedGoal({ goals: ordered });
-  const active = getActiveGoal({ goals: ordered }, today);
-  if (!active && latestCompleted) {
-    const start = addDays(latestCompleted.raceDate, 1);
-    const windowRuns = runsInWindow(runs, start, today);
-    if (windowRuns.length) {
-      blocks.push({
-        id: 'unassigned-since-last-race',
-        status: 'unassigned',
-        distanceKm: 0,
-        raceDate: today,
-        start,
-        end: today,
-        label: 'Since last race',
-        emoji: '⏳',
-        stats: summarizeGoalTraining(windowRuns),
-        runs: windowRuns,
-      });
-    }
-  }
   return blocks.sort((a, b) => String(b.raceDate).localeCompare(String(a.raceDate)));
 }
 

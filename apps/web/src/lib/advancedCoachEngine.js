@@ -72,13 +72,17 @@ function summarizeRuns(runRows = []) {
     ? Math.round(hrRuns.reduce((s, r) => s + r.avgHr, 0) / hrRuns.length)
     : null;
   const maxHrSeen = runs.reduce((m, r) => Math.max(m, r.maxHr || r.avgHr || 0), 0) || null;
-  const estMaxHr = Math.max(maxHrSeen || 0, 185);
-  const z2Min = Math.round(estMaxHr * 0.6);
-  const z2Max = Math.round(estMaxHr * 0.7);
-  const z3Min = Math.round(estMaxHr * 0.7);
-  const z3Max = Math.round(estMaxHr * 0.8);
-  const inZ2Count = hrRuns.filter((r) => r.avgHr >= z2Min && r.avgHr < z2Max).length;
-  const aboveZ2Count = hrRuns.filter((r) => r.avgHr >= z2Max).length;
+  const estMaxHr = maxHrSeen && maxHrSeen >= 140 ? maxHrSeen : null;
+  const z2Min = estMaxHr ? Math.round(estMaxHr * 0.6) : null;
+  const z2Max = estMaxHr ? Math.round(estMaxHr * 0.7) : null;
+  const z3Min = estMaxHr ? Math.round(estMaxHr * 0.7) : null;
+  const z3Max = estMaxHr ? Math.round(estMaxHr * 0.8) : null;
+  const inZ2Count = (z2Min != null && z2Max != null)
+    ? hrRuns.filter((r) => r.avgHr >= z2Min && r.avgHr < z2Max).length
+    : 0;
+  const aboveZ2Count = z2Max != null
+    ? hrRuns.filter((r) => r.avgHr >= z2Max).length
+    : 0;
   const spikeRuns = hrRuns.filter((r) => r.maxHr && r.avgHr && r.maxHr - r.avgHr >= 25);
   const highAvgRuns = hrRuns.filter((r) => r.avgHr >= 160);
 
@@ -100,6 +104,7 @@ function summarizeRuns(runRows = []) {
   const fortnightKm = last14.reduce((s, r) => s + r.distance, 0);
   const lastRun = runs[0] || null;
   const gapDays = lastRun ? daysSince(lastRun.date) : null;
+  const lastWasRace = lastRun && lastRun.distance >= 18;
 
   return {
     runs,
@@ -129,6 +134,7 @@ function summarizeRuns(runRows = []) {
     fortnightKm,
     lastRun,
     gapDays,
+    lastWasRace,
     runCount30: last30.length,
     runCount7: last7.length,
     hrSampleCount: hrRuns.length,
@@ -204,15 +210,15 @@ function buildLastRunDeepReview(s) {
     : `${last.distance.toFixed(1)} km in ${Math.round(last.minutes)} min (${fmtPace(last.pace)}/km).`;
 
   const hrNote = last.avgHr
-    ? (last.avgHr >= s.z3Max
+    ? (s.z3Max != null && last.avgHr >= s.z3Max
       ? `Avg HR ${last.avgHr} bpm — mostly aerobic/threshold (above fat-burn Z2 ${s.z2Min}–${s.z2Max}). For base work, slow until HR sits in Z2 for the first 70% of the run.`
-      : last.avgHr >= s.z2Max
+      : s.z2Max != null && last.avgHr >= s.z2Max
         ? `Avg HR ${last.avgHr} bpm — upper easy/aerobic. OK for moderate days; for fat-burn focus, cap effort so HR stays ${s.z2Min}–${s.z2Max}.`
         : `Avg HR ${last.avgHr} bpm — solid easy-zone work${s.avgHr ? ` (30d avg ${s.avgHr} bpm)` : ''}.`)
     : 'No HR on this run — enable watch/Strava sync for pace-vs-HR advice.';
 
   const whenSlow = [];
-  if (last.avgHr && last.avgHr > s.z2Max) {
+  if (s.z2Max != null && last.avgHr && last.avgHr > s.z2Max) {
     whenSlow.push(`From km 1: you averaged ${last.avgHr} bpm — aim ${s.z2Min}–${s.z2Max} bpm for the first 2–3 km next time.`);
   }
   if (priorPace && last.pace < priorPace - 0.2) {
@@ -245,11 +251,15 @@ function buildLastRunDeepReview(s) {
         : ' Consistent with your last few runs.';
   }
 
-  const nextNote = s.gapDays === 0
-    ? 'You ran today — tomorrow should be rest or very easy 20–30 min Z2.'
-    : s.gapDays != null && s.gapDays <= 2
-      ? 'Next run: easy Z2 unless legs feel fresh.'
-      : 'Next run: resume your normal plan if recovery felt good.';
+  const nextNote = s.lastWasRace && s.gapDays >= 7
+    ? `Your ${last.distance.toFixed(1)} km race was ${s.gapDays} days ago — recovery is done. Easy 6–8 km this week, then pick the next goal.`
+    : s.lastWasRace && s.gapDays >= 3
+      ? 'Post-race rest is over. Easy conversational jog, not another rest day.'
+      : s.gapDays === 0
+        ? 'You ran today — tomorrow should be rest or very easy 20–30 min Z2.'
+        : s.gapDays != null && s.gapDays <= 2
+          ? 'Next run: easy Z2 unless legs feel fresh.'
+          : 'Next run: resume your normal plan if recovery felt good.';
 
   return {
     id: 'lastrun',
@@ -344,8 +354,8 @@ export function buildAdvancedCoachPayload({ runRows = [], wellnessEntries = [], 
   sections.push({
     id: 'fat',
     title: 'Stay in fat-burning (Z2)',
-    body: s.hrSampleCount
-      ? `Using max HR reference ~${s.estMaxHr} bpm: fat-burning Z2 is roughly ${s.z2Min}–${s.z2Max} bpm; aerobic Z3 is ${s.z3Min}–${s.z3Max} bpm. Your recent avg HR is ~${s.avgHr} bpm`
+    body: s.hrSampleCount && s.estMaxHr
+      ? `Using your peak HR ~${s.estMaxHr} bpm (from your runs, not a generic 190): fat-burning Z2 is roughly ${s.z2Min}–${s.z2Max} bpm; aerobic Z3 is ${s.z3Min}–${s.z3Max} bpm. Your recent avg HR is ~${s.avgHr} bpm`
         + (s.aboveZ2Count > s.inZ2Count
           ? ` — ${s.aboveZ2Count}/${s.hrSampleCount} recent HR runs sit at/above Z2. Slow until you can talk in full sentences; watch the band ${s.z2Min}–${s.z2Max}.`
           : ` — many easy runs already sit near Z2. Keep long runs there; save surges for one quality day.`)
@@ -535,12 +545,13 @@ export function buildQuickGuideFromEngine({ runRows = [], wellnessEntries = [], 
     ? `Keep easy runs in Z2 ${s.z2Min}–${s.z2Max} bpm`
     : 'Keep easy runs conversational (talk-test)';
   const hrLine = s.avgHr != null ? ` (your 30d avg ~${s.avgHr} bpm)` : '';
-  const volLine = `Last 7d: ${s.weekKm} km across ${s.runs7} run${s.runs7 === 1 ? '' : 's'}`;
+  const volLine = `Last 7d: ${s.weekKm} km across ${s.runCount7} run${s.runCount7 === 1 ? '' : 's'}`;
   const startLine = s.typicalHour != null
     ? `Typical start ~${String(s.typicalHour).padStart(2, '0')}:00`
     : null;
 
   const tipBody = [
+    tip?.tip ? firstSentence(tip.tip, 200) : null,
     z2Line + hrLine + '.',
     volLine + (startLine ? ` · ${startLine}` : '') + '.',
     tip?.action ? `Next: ${tip.action}.` : null,
@@ -572,10 +583,10 @@ export function buildQuickGuideFromEngine({ runRows = [], wellnessEntries = [], 
         ? { k: 'Ready', v: `${tip.bodyReadiness.percent}% · ${tip.bodyReadiness.label || ''}` }
         : null,
       tip?.bodyReadiness?.daysSinceLast != null
-        ? { k: 'Rest', v: tip.bodyReadiness.daysSinceLast === 0 ? 'Ran today' : `${tip.bodyReadiness.daysSinceLast}d` }
+        ? { k: 'Last', v: tip.bodyReadiness.daysSinceLast === 0 ? 'Ran today' : `${tip.bodyReadiness.daysSinceLast}d` }
         : null,
       s.weekKm != null ? { k: '7d', v: `${s.weekKm} km` } : null,
-      s.runs7 != null ? { k: 'Runs', v: String(s.runs7) } : null,
+      s.runCount7 != null ? { k: 'Runs', v: String(s.runCount7) } : null,
       s.avgHr != null ? { k: 'HR', v: String(s.avgHr) } : null,
       s.typicalHour != null ? { k: 'Start', v: `${String(s.typicalHour).padStart(2, '0')}:00` } : null,
       s.z2Min != null ? { k: 'Z2', v: `${s.z2Min}-${s.z2Max}` } : null,

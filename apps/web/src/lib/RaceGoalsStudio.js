@@ -7,6 +7,69 @@ import {
   getLatestCompletedGoal,
 } from './marathonReadiness';
 
+export function GoalScopeBar({
+  book,
+  selectedId,
+  onChange,
+  theme,
+}) {
+  const goals = book?.goals || [];
+  if (!goals.length) {
+    return (
+      <div style={{
+        padding: '10px 12px',
+        borderRadius: 14,
+        border: `1px dashed ${theme.cardBorder}`,
+        color: theme.textMuted,
+        fontSize: 12,
+      }}
+      >
+        Add a race goal to scope Pulse, volume, and speed to that block.
+      </div>
+    );
+  }
+  return (
+    <label style={{
+      display: 'grid',
+      gap: 6,
+      padding: '10px 12px',
+      borderRadius: 14,
+      border: `1px solid ${theme.cardBorder}`,
+      background: theme.cardBg,
+      minWidth: 0,
+    }}
+    >
+      <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.14em', textTransform: 'uppercase', color: theme.textMuted }}>
+        Goal
+      </span>
+      <select
+        value={selectedId || goals[0].id}
+        onChange={(e) => onChange?.(e.target.value)}
+        aria-label="Selected race goal"
+        style={{
+          width: '100%',
+          padding: '10px 12px',
+          borderRadius: 12,
+          border: `1px solid ${theme.orange || '#fb923c'}55`,
+          background: theme.inputBg || 'rgba(2,6,23,0.72)',
+          color: theme.textHeading,
+          fontSize: 14,
+          fontWeight: 800,
+          cursor: 'pointer',
+          colorScheme: 'dark',
+        }}
+      >
+        {goals.map((goal) => (
+          <option key={goal.id} value={goal.id}>
+            {distanceLabel(goal.distanceKm)} · {fmtDate(goal.raceDate)}
+            {goal.status === 'completed' ? ' · done' : ''}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 function fmtDate(dateStr) {
   if (!dateStr) return '--';
   const d = new Date(`${String(dateStr).slice(0, 10)}T12:00:00`);
@@ -123,6 +186,11 @@ export function RaceGoalsStudio({
             <Stat label="Distance" value={`${block.stats.km} km`} theme={theme} />
             <Stat label="Avg pace" value={formatGoalPace(block.stats.avgPace)} theme={theme} />
             <Stat label="Avg HR" value={block.stats.avgHeartrate ? `${block.stats.avgHeartrate} bpm` : '--'} theme={theme} />
+            <Stat
+              label="Avg speed"
+              value={block.stats.avgSpeed ? `${Number(block.stats.avgSpeed).toFixed(1)} km/h` : '--'}
+              theme={theme}
+            />
           </div>
         </section>
       ))}

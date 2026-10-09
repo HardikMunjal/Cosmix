@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import { restoreUserSession } from '../lib/auth-client';
 import { MarathonGoalModal, MarathonRaceHub } from '../lib/MarathonRaceHub';
-import { RaceGoalsStudio } from '../lib/RaceGoalsStudio';
+import { GoalScopeBar, RaceGoalsStudio } from '../lib/RaceGoalsStudio';
 import { MobileBottomNav } from '../lib/MobileNav';
 import { useTheme } from '../lib/ThemePicker';
 import { computeRunningStats, computeWellnessStats, buildWellnessSummary } from '../lib/userInsights';
@@ -49,10 +49,13 @@ import { hrZoneForBpm } from '../lib/hrZones';
 import { loadRunningSurfaceId, saveRunningSurfaceId, mergeRunningSurface } from '../lib/runningThemes';
 import {
   buildMarathonReadiness,
+  distanceLabel,
   ensureRaceGoalBook,
   getActiveGoal,
   getLatestCompletedGoal,
-  persistRaceGoals,
+  pickSelectedGoal,
+  runsForSelectedGoal,
+  summarizeGoalTraining,
 } from '../lib/marathonReadiness';
 import { buildTrainingTip } from '../lib/trainingTip';
 import { CoachBotCard } from '../lib/CoachBotCard';
@@ -1429,10 +1432,7 @@ function RunningTab({
   onTrainingOverridesChange,
 }) {
   const noData = !(runRows || []).some((r) => Number(r.distance || 0) > 0);
-  const insights = useMemo(() => buildRunningInsights(runRows), [runRows]);
-  const paceDelta = insights.avgPace7 && insights.avgPace30
-    ? insights.avgPace7 - insights.avgPace30
-    : null;
+  const [selectedGoalId, setSelectedGoalId] = useState('');
   const importedRuns = useMemo(() => buildRunningRows(entries).filter((row) => row.stravaId), [entries]);
   const [savingShoeId, setSavingShoeId] = useState(null);
   const [deletingRunId, setDeletingRunId] = useState(null);
@@ -1462,21 +1462,59 @@ function RunningTab({
   const activeRaceGoal = getActiveGoal(raceGoalBook);
   const lastRaceGoal = getLatestCompletedGoal(raceGoalBook);
 
+  useEffect(() => {
+    const goals = raceGoalBook.goals || [];
+    setSelectedGoalId((current) => {
+      if (current && goals.some((goal) => goal.id === current)) return current;
+      return pickSelectedGoal(raceGoalBook, current)?.id || '';
+    });
+  }, [raceGoalBook]);
+
+  const selectedGoal = pickSelectedGoal(raceGoalBook, selectedGoalId);
+  const goalRuns = useMemo(
+    () => runsForSelectedGoal(runRows, selectedGoal, raceGoalBook.goals),
+    [runRows, selectedGoal, raceGoalBook.goals],
+  );
+  const insights = useMemo(() => buildRunningInsights(goalRuns), [goalRuns]);
+  const paceDelta = insights.avgPace7 && insights.avgPace30
+    ? insights.avgPace7 - insights.avgPace30
+    : null;
+  const goalStats = useMemo(() => summarizeGoalTraining(goalRuns), [goalRuns]);
+  const goalInsights = useMemo(() => {
+    if (!stravaInsights) return null;
+    if (!selectedGoal) return stravaInsights;
+    const start = String(selectedGoal.startedAt || selectedGoal.raceDate || '0000-01-01').slice(0, 10);
+    const end = String(
+      selectedGoal.status === 'completed'
+        ? (selectedGoal.completedAt || selectedGoal.raceDate)
+        : new Date().toISOString().slice(0, 10),
+    ).slice(0, 10);
+    const inWindow = (run) => {
+      const date = String(run.date || '').slice(0, 10);
+      return date >= start && date <= end;
+    };
+    return {
+      ...stravaInsights,
+      recentRuns: (stravaInsights.recentRuns || []).filter(inWindow),
+      fastestRuns: (stravaInsights.fastestRuns || []).filter(inWindow),
+    };
+  }, [stravaInsights, selectedGoal]);
+
   const trainingTip = useMemo(() => {
-    const goalDistanceKm = Number(activeRaceGoal?.distanceKm) || null;
+    const goalDistanceKm = Number(selectedGoal?.distanceKm || activeRaceGoal?.distanceKm) || null;
     const readiness = buildMarathonReadiness({
-      runs: runRows,
+      runs: goalRuns,
       goalDistanceKm,
-      raceDate: activeRaceGoal?.raceDate || null,
-      sinceDate: activeRaceGoal?.startedAt || lastRaceGoal?.raceDate || null,
+      raceDate: selectedGoal?.raceDate || activeRaceGoal?.raceDate || null,
+      sinceDate: selectedGoal?.startedAt || lastRaceGoal?.raceDate || null,
     });
     return buildTrainingTip({
-      runRows,
+      runRows: goalRuns,
       goalDistanceKm,
       longRunTargetKm: readiness?.longRunTargetKm,
       readiness,
     });
-  }, [runRows, activeRaceGoal, lastRaceGoal]);
+  }, [goalRuns, selectedGoal, activeRaceGoal, lastRaceGoal]);
 
   const openShoeAssigner = () => {
     setShoesOpen(true);
@@ -1556,13 +1594,13 @@ function RunningTab({
     }
   };
 
-  const paceTrend = useMemo(() => buildRunTrendBuckets(runRows, (r) => (
+  const paceTrend = useMemo(() => buildRunTrendBuckets(goalRuns, (r) => (
     r.distance > 0 && r.minutes > 0 ? r.minutes / r.distance : 0
-  )), [runRows]);
+  )), [goalRuns]);
 
-  const hrTrend = useMemo(() => buildRunTrendBuckets(runRows, (r) => (
+  const hrTrend = useMemo(() => buildRunTrendBuckets(goalRuns, (r) => (
     Number(r.avgHeartrate || r.avgHeartRate || 0)
-  )), [runRows]);
+  )), [goalRuns]);
 
   const paceTrendSubtitle = paceTrend.spanDays > 31
     ? 'Weekly average · scales when over 1 month'
@@ -1590,8 +1628,8 @@ function RunningTab({
     return fromInsights;
   }, [stravaInsights]);
 
-  const weeklyRunKm = useMemo(() => buildWeeklySumBuckets(runRows, (r) => r.distance, 12), [runRows]);
-  const weeklyRunMins = useMemo(() => buildWeeklySumBuckets(runRows, (r) => r.minutes, 12), [runRows]);
+  const weeklyRunKm = useMemo(() => buildWeeklySumBuckets(goalRuns, (r) => r.distance, 12), [goalRuns]);
+  const weeklyRunMins = useMemo(() => buildWeeklySumBuckets(goalRuns, (r) => r.minutes, 12), [goalRuns]);
   const weeklyRunKmTrend = useMemo(() => ({
     points: weeklyRunKm.map((w) => ({ date: w.date, label: w.label, y: w.value, isCurrent: w.isCurrent })),
     overallAvg: weeklyRunKm.length ? weeklyRunKm.reduce((s, w) => s + w.value, 0) / weeklyRunKm.length : null,
@@ -1605,7 +1643,14 @@ function RunningTab({
 
   return (
     <div style={{ display: 'grid', gap: '14px' }}>
-      {trainingTip ? <CoachBotCard tip={trainingTip} theme={theme} runRows={runRows} wellnessEntries={entries} /> : null}
+      {trainingTip ? <CoachBotCard tip={trainingTip} theme={theme} runRows={goalRuns} wellnessEntries={entries} /> : null}
+
+      <GoalScopeBar
+        book={raceGoalBook}
+        selectedId={selectedGoalId}
+        onChange={setSelectedGoalId}
+        theme={theme}
+      />
 
       {userId && !noData ? (
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
@@ -1624,14 +1669,16 @@ function RunningTab({
 
       {dashView === 'pulse' && !noData ? (
         <HrTrainingStudio
-          runRows={runRows}
-          insights={stravaInsights}
+          runRows={goalRuns}
+          insights={goalInsights}
           overrides={trainingOverrides}
           userId={userId}
           theme={theme}
           onOpenRun={onOpenRun}
           onOverridesChange={onTrainingOverridesChange}
-          goalKicker={activeRaceGoal ? `${Number(activeRaceGoal.distanceKm).toFixed(1)} km prep` : 'set next race goal'}
+          goalKicker={selectedGoal
+            ? `${distanceLabel(selectedGoal.distanceKm)} · ${selectedGoal.status === 'completed' ? 'done' : 'prep'}`
+            : 'set next race goal'}
         />
       ) : null}
 
@@ -1648,14 +1695,14 @@ function RunningTab({
 
       {dashView === 'volume' && !noData ? (
         <div className="run-dash-mini-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 10 }}>
-          <DepthMetric label="7-day km" value={`${insights.km7.toFixed(1)}`} sub={`${insights.runs7} runs`} accent={theme.orange} theme={theme} />
-          <DepthMetric label="30-day km" value={`${insights.km30.toFixed(1)}`} sub={`${insights.runs30} runs`} accent={theme.blue} theme={theme} />
-          <DepthMetric label="Pace 7d" value={insights.avgPace7 ? fmtPace(insights.avgPace7) : '--'} sub={paceDelta != null ? `${paceDelta < 0 ? 'Faster' : 'Slower'} vs 30d` : 'rolling'} accent={theme.cyan} theme={theme} />
+          <DepthMetric label="Goal km" value={`${goalStats.km}`} sub={`${goalStats.runCount} runs`} accent={theme.orange} theme={theme} />
+          <DepthMetric label="Avg speed" value={goalStats.avgSpeed ? `${Number(goalStats.avgSpeed).toFixed(1)}` : '--'} sub="km/h this goal" accent={theme.green} theme={theme} />
+          <DepthMetric label="Avg pace" value={goalStats.avgPace ? fmtPace(goalStats.avgPace) : '--'} sub={paceDelta != null ? `${paceDelta < 0 ? 'Faster' : 'Slower'} 7d vs 30d` : 'this block'} accent={theme.cyan} theme={theme} />
           <DepthMetric
-            label="Peak speed"
-            value={runStats?.fastestSpeed != null ? `${runStats.fastestSpeed}` : '--'}
-            sub={runStats?.speedSource === 'best_1km_split' ? 'best 1 km split' : 'km/h best'}
-            accent={theme.green}
+            label="Avg HR"
+            value={goalStats.avgHeartrate ? `${goalStats.avgHeartrate}` : '--'}
+            sub="bpm this goal"
+            accent={theme.blue}
             theme={theme}
           />
         </div>
@@ -2770,8 +2817,8 @@ export default function RunningAnalytics() {
         if (cats && typeof cats === 'object') {
           setTrainingOverrides((current) => ({ ...current, ...cats }));
         }
-        if (Array.isArray(payload?.trainingProfile?.goals) && payload.trainingProfile.goals.length) {
-          persistRaceGoals(user.id, { goals: payload.trainingProfile.goals });
+        if (Array.isArray(payload?.trainingProfile?.goals)) {
+          ensureRaceGoalBook(user.id, [], payload.trainingProfile.goals);
           setGoalRefreshKey((k) => k + 1);
         }
       })

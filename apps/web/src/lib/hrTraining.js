@@ -42,6 +42,85 @@ export function fmtFiveKmClock(paceMinPerKm) {
   return `${mins}:${String(secs).padStart(2, '0')}`;
 }
 
+export function runSpeedKmh(run) {
+  const direct = Number(run?.avgSpeedKmh || 0);
+  if (direct > 1.5) return direct;
+  const minutes = Number(run?.minutes || 0);
+  const distance = Number(run?.distance || run?.distanceKm || 0);
+  if (distance > 0 && minutes > 0) return distance / (minutes / 60);
+  const pace = runPaceMinPerKm(run);
+  if (pace > 2.4) return 60 / pace;
+  return null;
+}
+
+export function fmtTrainingSpeed(kmh) {
+  const n = Number(kmh);
+  if (!Number.isFinite(n) || n <= 0) return '--';
+  return `${n.toFixed(1)} km/h`;
+}
+
+export function buildPersonalZoneBands(runs = []) {
+  const buckets = {};
+  (runs || []).forEach((run) => {
+    (run.heartrateZones || []).forEach((zone) => {
+      const id = Number(zone.zone || 0);
+      if (!(id >= 1 && id <= 5)) return;
+      const min = Number(zone.min || zone.minHr || 0);
+      const max = Number(zone.max || zone.maxHr || 0);
+      if (!(min > 40 || max > 40)) return;
+      const row = buckets[id] || { mins: [], maxs: [] };
+      if (min > 40) row.mins.push(min);
+      if (max > 40) row.maxs.push(max);
+      buckets[id] = row;
+    });
+  });
+  const observedMax = (runs || []).reduce(
+    (best, run) => Math.max(best, Number(run.maxHeartrate || run.avgHeartrate || 0)),
+    0,
+  );
+  const fromActivity = Object.keys(buckets).length >= 3;
+  const ceiling = fromActivity
+    ? Math.max(
+      observedMax,
+      ...Object.values(buckets).flatMap((row) => row.maxs),
+    )
+    : observedMax;
+  const source = fromActivity
+    ? 'from your Strava zone bounds'
+    : (ceiling >= 140 ? `from your peak HR ${Math.round(ceiling)} bpm` : null);
+
+  return {
+    ceiling: ceiling >= 140 ? Math.round(ceiling) : null,
+    source,
+    bands: ZONE_META.map((meta) => {
+      const row = buckets[meta.zone];
+      if (row && (row.mins.length || row.maxs.length)) {
+        const min = row.mins.length ? Math.round(row.mins.reduce((s, n) => s + n, 0) / row.mins.length) : null;
+        const max = row.maxs.length ? Math.round(row.maxs.reduce((s, n) => s + n, 0) / row.maxs.length) : null;
+        return {
+          ...meta,
+          min,
+          max,
+          range: min && max ? `${min}–${max}` : (min ? `${min}+` : '--'),
+        };
+      }
+      if (ceiling >= 140) {
+        const pct = [
+          { min: 0, max: 0.6 },
+          { min: 0.6, max: 0.7 },
+          { min: 0.7, max: 0.8 },
+          { min: 0.8, max: 0.9 },
+          { min: 0.9, max: 1.05 },
+        ][meta.zone - 1];
+        const min = Math.round(ceiling * pct.min);
+        const max = Math.round(ceiling * pct.max);
+        return { ...meta, min, max, range: `${min}–${max}` };
+      }
+      return { ...meta, min: null, max: null, range: '--' };
+    }),
+  };
+}
+
 function percentile(sorted, p) {
   if (!sorted.length) return null;
   const idx = Math.min(sorted.length - 1, Math.max(0, Math.round((p / 100) * (sorted.length - 1))));
@@ -154,7 +233,7 @@ export function buildPersonalBaselines(runs = []) {
     paceP85: percentile(pace, 85),
     meanPace,
     sampleCount: runs.length,
-    maxHrSeen: runs.reduce((best, run) => Math.max(best, Number(run.maxHeartrate || run.avgHeartrate || 0)), 0) || 190,
+    maxHrSeen: runs.reduce((best, run) => Math.max(best, Number(run.maxHeartrate || run.avgHeartrate || 0)), 0) || null,
   };
 }
 
@@ -348,9 +427,16 @@ export function buildHrTrainingModel({
       label: run.name,
       stravaId: run.stravaId,
       category: run.category,
+      distance: run.distance,
+      speedKmh: runSpeedKmh(run),
+      paceMinPerKm: run.paceMinPerKm,
     }));
   const easyHrNow = avg(easyHrSeries.slice(-6).map((p) => p.y));
   const easyHrThen = avg(easyHrSeries.slice(0, Math.max(1, easyHrSeries.length - 6)).slice(-6).map((p) => p.y));
+  const easyAvgSpeed = avg(easyRuns.map(runSpeedKmh));
+  const totalKm = labeled.reduce((sum, run) => sum + Number(run.distance || 0), 0);
+  const avgSpeed = avg(labeled.map(runSpeedKmh));
+  const personalZones = buildPersonalZoneBands(labeled);
 
   const zoneSpeeds = ZONE_META.map((meta) => {
     const samples = labeled
@@ -383,7 +469,8 @@ export function buildHrTrainingModel({
       count: rows.length,
       km: Math.round(rows.reduce((sum, run) => sum + Number(run.distance || 0), 0) * 10) / 10,
       avgHr: avg(rows.map((run) => Number(run.avgHeartrate || 0))) || null,
-      runs,
+      avgSpeed: avg(rows.map(runSpeedKmh)),
+      rows,
     };
   }).filter((group) => group.count > 0);
 
@@ -394,9 +481,14 @@ export function buildHrTrainingModel({
     seasonZonePercents,
     zoneHistory,
     easyHrSeries,
+    easyRuns,
     easyHrNow,
     easyHrThen,
     easyHrDelta: easyHrNow && easyHrThen ? Math.round(easyHrNow - easyHrThen) : null,
+    easyAvgSpeed,
+    totalKm: Math.round(totalKm * 10) / 10,
+    avgSpeed,
+    personalZones,
     zoneSpeeds,
     grouped,
     runCount: labeled.length,

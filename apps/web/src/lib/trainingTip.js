@@ -68,9 +68,17 @@ export function buildBodyReadiness({ runRows = [] } = {}) {
   const daysSinceLast = Math.max(0, daysBetween(last.date, today));
   const hardLoad = (avgHr7 && avgHr7 >= 155) || last.pace <= avgPace3 * 0.92 || last.distance >= 14;
   const veryHard = last.distance >= 18 || (last.avgHeartrate && last.avgHeartrate >= 165);
+  const lastWasRace = last.distance >= 18;
 
   let percent;
-  if (daysSinceLast === 0) {
+  if (lastWasRace) {
+    if (daysSinceLast <= 1) percent = 48;
+    else if (daysSinceLast === 2) percent = 64;
+    else if (daysSinceLast <= 4) percent = 78;
+    else if (daysSinceLast <= 7) percent = 84;
+    else if (daysSinceLast <= 21) percent = 88;
+    else percent = Math.max(72, 86 - (daysSinceLast - 21));
+  } else if (daysSinceLast === 0) {
     percent = veryHard ? 42 : hardLoad ? 52 : 64;
   } else if (daysSinceLast === 1) {
     percent = veryHard ? 68 : hardLoad ? 78 : 86;
@@ -84,8 +92,10 @@ export function buildBodyReadiness({ runRows = [] } = {}) {
     percent = 80;
   } else if (daysSinceLast <= 7) {
     percent = 74;
+  } else if (daysSinceLast <= 14) {
+    percent = 80;
   } else {
-    percent = Math.max(58, 72 - (daysSinceLast - 7) * 2);
+    percent = Math.max(62, 78 - (daysSinceLast - 14));
   }
 
   if (weekKm >= 55 && daysSinceLast <= 1) percent -= 6;
@@ -133,17 +143,21 @@ export function buildBodyReadiness({ runRows = [] } = {}) {
   else if (percent >= 50) label = 'Recovering';
   else label = 'Rest first';
 
-  const why = daysSinceLast === 0
-    ? (hardLoad
-      ? `You trained today (${last.distance.toFixed(1)} km) — readiness is lower until recovery lands.`
-      : `Easy session today — readiness is okay; another hard effort can wait.`)
-    : daysSinceLast === 1
-      ? `One rest day after ${last.distance.toFixed(1)} km — body power is rising.`
-      : daysSinceLast === 2
-        ? `Two days of recovery after ${last.distance.toFixed(1)} km — high readiness / more power available.`
-        : daysSinceLast <= 4
-          ? `${daysSinceLast} days since last run — you should feel strong; keep the next session quality or aerobic.`
-          : `${daysSinceLast} days without a run — still capable, but a short reboot jog will sharpen readiness.`;
+  const why = lastWasRace && daysSinceLast >= 7
+    ? `${daysSinceLast} days after your ${last.distance.toFixed(1)} km race — recovery is done. Body is ready for the next block.`
+    : lastWasRace && daysSinceLast >= 3
+      ? `${daysSinceLast} days after your ${last.distance.toFixed(1)} km race — easy return is fine, not more rest.`
+      : daysSinceLast === 0
+        ? (hardLoad
+          ? `You trained today (${last.distance.toFixed(1)} km) — readiness is lower until recovery lands.`
+          : `Easy session today — readiness is okay; another hard effort can wait.`)
+        : daysSinceLast === 1
+          ? `One rest day after ${last.distance.toFixed(1)} km — body power is rising.`
+          : daysSinceLast === 2
+            ? `Two days of recovery after ${last.distance.toFixed(1)} km — high readiness / more power available.`
+            : daysSinceLast <= 4
+              ? `${daysSinceLast} days since last run — you should feel strong; keep the next session quality or aerobic.`
+              : `${daysSinceLast} days without a run — still capable; an easy jog will reopen the week.`;
 
   return {
     percent,
@@ -195,6 +209,7 @@ export function buildTrainingTip({
   const hrRuns = last7.filter((r) => r.avgHeartrate);
   const avgHr7 = hrRuns.length ? hrRuns.reduce((s, r) => s + r.avgHeartrate, 0) / hrRuns.length : null;
   const daysSinceLast = Math.max(0, daysBetween(last.date, today));
+  const lastWasRace = last.distance >= 18 || (distanceGoal > 0 && last.distance >= distanceGoal * 0.9);
   const nextLong = Math.min(targetLong, Number((recentPeak + Math.max(1.5, recentPeak * 0.1)).toFixed(1)));
   const ratio = distanceGoal > 0 ? recentPeak / distanceGoal : 1;
   const morningBias = runs.slice(0, 8).filter((r) => hourOfRun(r) < 11).length >= Math.ceil(Math.min(8, runs.length) / 2);
@@ -203,11 +218,15 @@ export function buildTrainingTip({
     ? Math.max(36, Math.min(60, 24 + last.distance * 1.8))
     : Math.max(24, Math.min(48, 18 + last.distance * 1.2));
   const sleepHours = hardLoad || last.distance >= 15 ? 8.5 : last.distance >= 10 ? 8 : 7.5;
-  const nextWhen = daysSinceLast === 0
-    ? (hardLoad ? `Rest today · next run in ~${Math.round(recoveryHours)}h` : 'Optional easy shakeout this evening, or rest')
-    : daysSinceLast === 1
-      ? (hardLoad ? 'Tomorrow easy aerobic' : (morningBias ? 'Tomorrow morning window' : 'Later today / tomorrow'))
-      : (morningBias ? 'Tomorrow morning' : 'Within 24 hours');
+  const nextWhen = lastWasRace && daysSinceLast >= 7
+    ? 'This week · easy return'
+    : lastWasRace && daysSinceLast >= 3
+      ? (morningBias ? 'Tomorrow morning easy' : 'Easy jog in the next 24h')
+      : daysSinceLast === 0
+        ? (hardLoad ? `Rest today · next run in ~${Math.round(recoveryHours)}h` : 'Optional easy shakeout this evening, or rest')
+        : daysSinceLast === 1
+          ? (hardLoad ? 'Tomorrow easy aerobic' : (morningBias ? 'Tomorrow morning window' : 'Later today / tomorrow'))
+          : (morningBias ? 'Tomorrow morning' : 'Within 24 hours');
 
   const fuel = morningBias
     ? (last.distance >= 12
@@ -225,7 +244,19 @@ export function buildTrainingTip({
   let tip = '';
   let action = 'Maintain + quality';
 
-  if (daysSinceLast >= 3) {
+  if (lastWasRace && daysSinceLast >= 7) {
+    title = 'Race recovered';
+    tip = `Your ${last.distance.toFixed(1)} km race was ${daysSinceLast} days ago — recovery is complete, not a rest week. Easy 6–8 km aerobic to reopen training, then set the next race goal.`;
+    action = 'Easy 6–8 km';
+  } else if (lastWasRace && daysSinceLast >= 3) {
+    title = 'Post-race return';
+    tip = `${daysSinceLast} days after ${last.distance.toFixed(1)} km. Skip extra rest. Jog 5–7 km conversational, then rebuild volume toward your next goal.`;
+    action = 'Easy 5–7 km';
+  } else if (lastWasRace && daysSinceLast <= 2) {
+    title = 'Post-race rest';
+    tip = `${last.distance.toFixed(1)} km was ${daysSinceLast === 0 ? 'today' : `${daysSinceLast}d ago`}. Short rest is enough — easy jogging from day 3.`;
+    action = 'Rest / walk';
+  } else if (daysSinceLast >= 10) {
     title = 'Reboot after gap';
     tip = `Last run was ${daysSinceLast}d ago (${last.distance.toFixed(1)} km`
       + (last.avgHeartrate ? `, avg HR ${Math.round(last.avgHeartrate)}` : '')

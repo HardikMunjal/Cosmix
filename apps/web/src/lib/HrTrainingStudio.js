@@ -4,6 +4,7 @@ import {
   ZONE_META,
   buildHrTrainingModel,
   fmtTrainingPace,
+  fmtTrainingSpeed,
   persistTrainingCategory,
   trainingCategoryMeta,
 } from './hrTraining';
@@ -90,76 +91,88 @@ function ZoneDonut({ zones = [] }) {
         />
       ))}
       <text x="50" y="48" textAnchor="middle" fill="#f8fafc" fontSize="13" fontWeight="800">Zones</text>
-      <text x="50" y="62" textAnchor="middle" fill="#94a3b8" fontSize="8" fontWeight="700">all HR runs</text>
+      <text x="50" y="62" textAnchor="middle" fill="#94a3b8" fontSize="8" fontWeight="700">this goal</text>
     </svg>
   );
 }
 
 function ZoneStackChart({ history = [], theme, onOpenRun }) {
-  if (!history.length) {
+  const rows = (history || []).slice(-18);
+  if (!rows.length) {
     return <div style={{ color: theme.textMuted, fontSize: 12 }}>Need a few HR-zone runs to draw this.</div>;
   }
-  const W = Math.max(280, history.length * 18);
-  const H = 136;
-  const pad = { t: 8, r: 6, b: 24, l: 6 };
-  const slot = (W - pad.l - pad.r) / history.length;
   return (
-    <div style={{ overflowX: 'auto', maxWidth: '100%', WebkitOverflowScrolling: 'touch' }}>
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: W, height: 148, display: 'block' }}>
-        {history.map((run, i) => {
-          const x = pad.l + i * slot + slot * 0.18;
-          const barW = slot * 0.64;
-          let y = pad.t;
-          const hAvail = H - pad.t - pad.b;
-          return (
-            <g
-              key={`${run.date}-${i}`}
-              style={{ cursor: run.stravaId ? 'pointer' : 'default' }}
-              onClick={() => run.stravaId && onOpenRun?.(run.stravaId)}
-            >
-              {run.shares.map((share) => {
-                const h = (Number(share.percent || 0) / 100) * hAvail;
-                const rect = (
-                  <rect
-                    key={share.zone}
-                    x={x}
-                    y={y}
-                    width={barW}
-                    height={Math.max(0, h)}
-                    rx="2"
-                    fill={share.color}
-                    opacity="0.92"
-                  />
-                );
-                y += h;
-                return rect;
-              })}
-              <rect
-                x={x}
-                y={H - 22}
-                width={barW}
-                height="4"
-                rx="2"
-                fill={run.categoryColor || theme.textMuted}
+    <div style={{ display: 'flex', alignItems: 'stretch', gap: 3, minWidth: 0, width: '100%' }}>
+      {rows.map((run, i) => (
+        <button
+          key={`${run.date}-${run.stravaId || i}`}
+          type="button"
+          onClick={() => run.stravaId && onOpenRun?.(run.stravaId)}
+          title={`${fmtDate(run.date)} · ${run.categoryLabel || ''}`}
+          style={{
+            appearance: 'none',
+            border: 'none',
+            background: 'transparent',
+            padding: 0,
+            flex: '1 1 0',
+            minWidth: 0,
+            height: 156,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            cursor: run.stravaId ? 'pointer' : 'default',
+            gap: 4,
+          }}
+        >
+          <div style={{
+            flex: 1,
+            width: '100%',
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column-reverse',
+            borderRadius: 4,
+            overflow: 'hidden',
+            background: 'rgba(148,163,184,0.12)',
+          }}
+          >
+            {run.shares.map((share) => (
+              <div
+                key={share.zone}
+                style={{
+                  height: `${Math.max(0, Number(share.percent || 0))}%`,
+                  background: share.color,
+                  minHeight: share.percent > 2 ? 2 : 0,
+                }}
               />
-              <text
-                x={x + barW / 2}
-                y={H - 8}
-                textAnchor="middle"
-                fill={theme.textMuted}
-                fontSize="8"
-              >
-                {fmtDate(run.date).slice(0, 6)}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
+            ))}
+          </div>
+          <div style={{
+            width: '100%',
+            height: 3,
+            borderRadius: 99,
+            background: run.categoryColor || theme.textMuted,
+          }}
+          />
+          <div style={{
+            fontSize: 8,
+            fontWeight: 700,
+            color: theme.textMuted,
+            writingMode: 'vertical-rl',
+            transform: 'rotate(180deg)',
+            height: 42,
+            overflow: 'hidden',
+            lineHeight: 1.1,
+          }}
+          >
+            {fmtDate(run.date)}
+          </div>
+        </button>
+      ))}
     </div>
   );
 }
 
-function Spark({ points = [], color = '#fb7185', invert = false, valueFmt }) {
+function Spark({ points = [], color = '#fb7185', invert = false, valueFmt, onSelect }) {
   if (points.length < 2) return null;
   const values = points.map((p) => Number(p.y || 0)).filter((n) => n > 0);
   if (values.length < 2) return null;
@@ -172,11 +185,24 @@ function Spark({ points = [], color = '#fb7185', invert = false, valueFmt }) {
     const x = (i / Math.max(1, points.length - 1)) * W;
     const t = (Number(p.y) - min) / span;
     const y = invert ? 8 + t * (H - 16) : H - 8 - t * (H - 16);
-    return `${x},${y}`;
-  }).join(' ');
+    return { ...p, x, y, i };
+  });
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 90 }}>
-      <polyline fill="none" stroke={color} strokeWidth="2.6" strokeLinejoin="round" points={coords} />
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      style={{ width: '100%', height: 90, cursor: onSelect ? 'pointer' : 'default' }}
+      onClick={() => onSelect?.(points)}
+    >
+      <polyline
+        fill="none"
+        stroke={color}
+        strokeWidth="2.6"
+        strokeLinejoin="round"
+        points={coords.map((p) => `${p.x},${p.y}`).join(' ')}
+      />
+      {onSelect ? coords.map((p) => (
+        <circle key={`${p.date}-${p.i}`} cx={p.x} cy={p.y} r="3.4" fill={color} />
+      )) : null}
       <text x="0" y={H - 2} fill="#64748b" fontSize="9">{fmtDate(points[0].date)}</text>
       <text x={W} y={H - 2} textAnchor="end" fill="#64748b" fontSize="9">
         {valueFmt ? valueFmt(points[points.length - 1].y) : fmtDate(points[points.length - 1].date)}
@@ -196,11 +222,19 @@ export function HrTrainingStudio({
   goalKicker = 'set next race goal',
 }) {
   const [savingId, setSavingId] = useState(null);
+  const [easyOpen, setEasyOpen] = useState(false);
+  const [catsOpen, setCatsOpen] = useState(false);
+  const [catFilter, setCatFilter] = useState('easy');
   const model = useMemo(
     () => buildHrTrainingModel({ runRows, insights, overrides }),
     [runRows, insights, overrides],
   );
   const last = model.lastRun;
+  const listed = useMemo(() => {
+    const rows = model.grouped.find((group) => group.id === catFilter)?.rows
+      || model.runs.filter((run) => run.category === catFilter);
+    return rows;
+  }, [model, catFilter]);
 
   async function setCategory(activityId, category) {
     if (!activityId || !category) return;
@@ -221,7 +255,7 @@ export function HrTrainingStudio({
         fontSize: 13,
       }}
       >
-        Sync Strava runs with heart rate to unlock zone training.
+        No runs in this goal window yet. Pick another goal or sync Strava.
       </div>
     );
   }
@@ -244,7 +278,34 @@ export function HrTrainingStudio({
           </div>
           <div style={{ fontSize: 22, fontWeight: 900, color: '#fff7ed', marginTop: 4 }}>Heart training</div>
           <div style={{ fontSize: 12, color: '#fecdd3', marginTop: 4, lineHeight: 1.4 }}>
-            Slow for you = easy. Change category with the dropdown, same as shoes.
+            Graphs follow the goal dropdown. Edit a run category from the section at the bottom.
+          </div>
+        </div>
+
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.14em', textTransform: 'uppercase', color: '#fda4af' }}>
+            My zones{model.personalZones?.ceiling ? ` · peak ${model.personalZones.ceiling} bpm` : ''}
+          </div>
+          <div style={{ fontSize: 11, color: '#fecdd3', marginTop: 3 }}>
+            {model.personalZones?.source || 'Need more HR runs to pin your bands — not a generic 190 max.'}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+            {(model.personalZones?.bands || ZONE_META).map((zone) => (
+              <span
+                key={zone.zone}
+                style={{
+                  fontSize: 11,
+                  fontWeight: 800,
+                  color: zone.color,
+                  background: `${zone.color}18`,
+                  border: `1px solid ${zone.color}44`,
+                  borderRadius: 999,
+                  padding: '4px 8px',
+                }}
+              >
+                {zone.short} {zone.range || '--'}
+              </span>
+            ))}
           </div>
         </div>
 
@@ -259,25 +320,15 @@ export function HrTrainingStudio({
             minWidth: 0,
           }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 11, color: '#fda4af', fontWeight: 800 }}>Last run · {fmtDate(last.date)}</div>
-                <div style={{ fontSize: 15, fontWeight: 900, color: '#f8fafc', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{last.name}</div>
-                <div style={{ fontSize: 12, color: '#cbd5e1', marginTop: 2 }}>
-                  {last.distance?.toFixed?.(1) || last.distance} km
-                  {last.avgHeartrate ? ` · ${last.avgHeartrate} bpm` : ''}
-                  {last.paceMinPerKm ? ` · ${fmtTrainingPace(last.paceMinPerKm)} /km` : ''}
-                </div>
+            <div>
+              <div style={{ fontSize: 11, color: '#fda4af', fontWeight: 800 }}>Last run · {fmtDate(last.date)}</div>
+              <div style={{ fontSize: 15, fontWeight: 900, color: '#f8fafc', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{last.name}</div>
+              <div style={{ fontSize: 12, color: '#cbd5e1', marginTop: 2 }}>
+                {last.distance?.toFixed?.(1) || last.distance} km
+                {last.avgHeartrate ? ` · ${last.avgHeartrate} bpm` : ''}
+                {last.paceMinPerKm ? ` · ${fmtTrainingPace(last.paceMinPerKm)} /km` : ''}
+                {` · ${last.label}`}
               </div>
-              {last.stravaId ? (
-                <CategoryPicker
-                  compact
-                  theme={theme}
-                  value={last.category}
-                  disabled={savingId === last.stravaId}
-                  onChange={(id) => setCategory(last.stravaId, id)}
-                />
-              ) : null}
             </div>
             <div style={{ fontSize: 11, color: '#94a3b8' }}>
               {last.source === 'user' ? 'You set this.' : last.reason}
@@ -299,6 +350,20 @@ export function HrTrainingStudio({
             ))}
           </div>
         </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0,1fr))', gap: 8 }}>
+          <div style={{ padding: '10px 8px', borderRadius: 14, background: 'rgba(2,6,23,0.4)' }}>
+            <div style={{ fontSize: 10, fontWeight: 800, color: '#fda4af', textTransform: 'uppercase' }}>Total km</div>
+            <div style={{ fontSize: 18, fontWeight: 900, color: '#fff7ed' }}>{model.totalKm}</div>
+          </div>
+          <div style={{ padding: '10px 8px', borderRadius: 14, background: 'rgba(2,6,23,0.4)' }}>
+            <div style={{ fontSize: 10, fontWeight: 800, color: '#fda4af', textTransform: 'uppercase' }}>Runs</div>
+            <div style={{ fontSize: 18, fontWeight: 900, color: '#fff7ed' }}>{model.runCount}</div>
+          </div>
+          <div style={{ padding: '10px 8px', borderRadius: 14, background: 'rgba(2,6,23,0.4)' }}>
+            <div style={{ fontSize: 10, fontWeight: 800, color: '#fda4af', textTransform: 'uppercase' }}>Avg speed</div>
+            <div style={{ fontSize: 18, fontWeight: 900, color: '#fff7ed' }}>{fmtTrainingSpeed(model.avgSpeed)}</div>
+          </div>
+        </div>
       </section>
 
       <section style={{
@@ -306,13 +371,14 @@ export function HrTrainingStudio({
         padding: 16,
         background: 'linear-gradient(180deg, rgba(15,23,42,0.96), rgba(2,6,23,0.96))',
         border: '1px solid rgba(56,189,248,0.22)',
+        minWidth: 0,
       }}
       >
         <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.14em', textTransform: 'uppercase', color: '#7dd3fc' }}>
           Time in each zone · past runs
         </div>
         <div style={{ fontSize: 13, color: '#94a3b8', margin: '6px 0 10px' }}>
-          Each bar is one run. The tick under the bar is its category. Tap a bar to open it.
+          Last {Math.min(18, model.zoneHistory.length)} HR runs in this goal. Tap a bar to open it.
         </div>
         <ZoneStackChart history={model.zoneHistory} theme={theme} onOpenRun={onOpenRun} />
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 8 }}>
@@ -343,19 +409,81 @@ export function HrTrainingStudio({
               </span>
             ) : null}
           </div>
+          <div style={{ fontSize: 13, fontWeight: 800, color: '#bbf7d0', marginTop: 4 }}>
+            Easy avg speed {fmtTrainingSpeed(model.easyAvgSpeed)}
+          </div>
           <div style={{ fontSize: 12, color: '#bbf7d0', marginTop: 4 }}>
-            Only runs Cosmix tagged easy / recovery / long. Falling HR at the same easy effort is fitness.
+            Tap the graph to open those easy / recovery / long runs.
           </div>
         </div>
-        <Spark points={model.easyHrSeries} color="#4ade80" valueFmt={(v) => `${Math.round(v)} bpm`} />
+        <Spark
+          points={model.easyHrSeries}
+          color="#4ade80"
+          valueFmt={(v) => `${Math.round(v)} bpm`}
+          onSelect={() => setEasyOpen(true)}
+        />
+        {easyOpen ? (
+          <div style={{
+            display: 'grid',
+            gap: 6,
+            maxHeight: 280,
+            overflowY: 'auto',
+            padding: 10,
+            borderRadius: 14,
+            background: 'rgba(2,6,23,0.45)',
+            border: '1px solid rgba(74,222,128,0.28)',
+          }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: '#86efac' }}>
+                Easy runs · {model.easyHrSeries.length}
+              </div>
+              <button
+                type="button"
+                onClick={() => setEasyOpen(false)}
+                style={{ border: 'none', background: 'transparent', color: '#94a3b8', fontWeight: 800, cursor: 'pointer' }}
+              >
+                Close
+              </button>
+            </div>
+            {[...model.easyHrSeries].reverse().map((run) => (
+              <button
+                key={`${run.stravaId || run.date}-${run.label}`}
+                type="button"
+                onClick={() => run.stravaId && onOpenRun?.(run.stravaId)}
+                style={{
+                  appearance: 'none',
+                  border: 'none',
+                  textAlign: 'left',
+                  padding: '8px 10px',
+                  borderRadius: 10,
+                  background: 'rgba(15,23,42,0.7)',
+                  color: '#f0fdf4',
+                  cursor: run.stravaId ? 'pointer' : 'default',
+                }}
+              >
+                <div style={{ fontSize: 12, fontWeight: 800 }}>
+                  {fmtDate(run.date)} · {Number(run.distance || 0).toFixed(1)} km
+                </div>
+                <div style={{ fontSize: 11, color: '#bbf7d0' }}>
+                  {Math.round(run.y)} bpm
+                  {run.speedKmh ? ` · ${fmtTrainingSpeed(run.speedKmh)}` : ''}
+                  {run.paceMinPerKm ? ` · ${fmtTrainingPace(run.paceMinPerKm)} /km` : ''}
+                </div>
+              </button>
+            ))}
+          </div>
+        ) : null}
       </section>
 
       <section style={{ display: 'grid', gap: 10 }}>
-        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.14em', textTransform: 'uppercase', color: '#fdba74' }}>
-          Your zone speeds
-        </div>
-        <div style={{ fontSize: 13, color: theme.textMuted, lineHeight: 1.45 }}>
-          Pace while your heart stays in that zone. If 5 km in Z1 used to take 60 min and now takes 50, Z1 speed has moved.
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.14em', textTransform: 'uppercase', color: '#fdba74' }}>
+            Average speed in each zone
+          </div>
+          <div style={{ fontSize: 13, color: theme.textMuted, lineHeight: 1.45 }}>
+            How fast you move while the heart stays in that band. This is the number to watch.
+          </div>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 148px), 1fr))', gap: 8, minWidth: 0 }}>
           {model.zoneSpeeds.map((zone) => (
@@ -372,18 +500,39 @@ export function HrTrainingStudio({
             >
               <div style={{ fontSize: 11, fontWeight: 800, color: zone.color }}>{zone.short} · {zone.label}</div>
               <div style={{ fontSize: 22, fontWeight: 900, color: theme.textHeading }}>
-                {fmtTrainingPace(zone.currentPace)} <span style={{ fontSize: 12, color: theme.textMuted }}>/km</span>
+                {fmtTrainingSpeed(zone.currentSpeed)}
               </div>
               <div style={{ fontSize: 12, fontWeight: 700, color: theme.textSecondary }}>
-                5 km ≈ {zone.fiveKmNow}
+                {fmtTrainingPace(zone.currentPace)} /km · 5 km ≈ {zone.fiveKmNow}
               </div>
               <div style={{ fontSize: 11, color: theme.textMuted }}>
-                {zone.previousPace
-                  ? `Was ${fmtTrainingPace(zone.previousPace)} · ${zone.fiveKmThen}`
-                  : `${zone.sampleCount} samples`}
+                {zone.previousPace ? `Was ${fmtTrainingPace(zone.previousPace)} /km` : `${zone.sampleCount} samples`}
                 {zone.deltaSecPerKm != null ? ` · ${zone.deltaSecPerKm < 0 ? `${Math.abs(zone.deltaSecPerKm)}s faster` : `${zone.deltaSecPerKm}s slower`}` : ''}
               </div>
               <Spark points={zone.series} color={zone.color} invert />
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section style={{ display: 'grid', gap: 8 }}>
+        <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.14em', textTransform: 'uppercase', color: '#7dd3fc' }}>
+          Average speed by category
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 140px), 1fr))', gap: 8 }}>
+          {model.grouped.map((group) => (
+            <div
+              key={group.id}
+              style={{
+                padding: 12,
+                borderRadius: 16,
+                background: `${group.color}14`,
+                border: `1px solid ${group.color}44`,
+              }}
+            >
+              <div style={{ fontSize: 11, fontWeight: 800, color: group.color }}>{group.label}</div>
+              <div style={{ fontSize: 18, fontWeight: 900, color: theme.textHeading }}>{fmtTrainingSpeed(group.avgSpeed)}</div>
+              <div style={{ fontSize: 11, color: theme.textMuted }}>{group.count} runs · {group.km} km</div>
             </div>
           ))}
         </div>
@@ -399,74 +548,93 @@ export function HrTrainingStudio({
         minWidth: 0,
       }}
       >
-        <div>
-          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.14em', textTransform: 'uppercase', color: '#d8b4fe' }}>
-            All past runs · {model.runCount}
+        <button
+          type="button"
+          onClick={() => setCatsOpen((open) => {
+            const next = !open;
+            if (next && model.grouped[0]) setCatFilter(model.grouped[0].id);
+            return next;
+          })}
+          style={{
+            appearance: 'none',
+            border: 'none',
+            background: 'transparent',
+            color: '#d8b4fe',
+            textAlign: 'left',
+            cursor: 'pointer',
+            padding: 0,
+          }}
+        >
+          <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.14em', textTransform: 'uppercase' }}>
+            Edit categories {catsOpen ? '▾' : '▸'}
           </div>
           <div style={{ fontSize: 12, color: '#c4b5fd', marginTop: 3 }}>
-            Pick a category from the list — same control as shoes.
+            Closed by default. Pick one category, then change those runs.
           </div>
-        </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {model.grouped.map((group) => (
-            <span key={group.id} style={{ fontSize: 11, fontWeight: 800, color: group.color }}>
-              {group.label} {group.count}
-            </span>
-          ))}
-        </div>
-        <div style={{ display: 'grid', gap: 6, maxHeight: 360, overflowY: 'auto' }}>
-          {model.runs.map((run) => (
-            <div
-              key={`${run.stravaId || run.date}-${run.name}`}
-              style={{
-                display: 'flex',
-                gap: 8,
-                alignItems: 'center',
-                padding: '8px 10px',
-                borderRadius: 12,
-                background: 'rgba(2,6,23,0.45)',
-                border: `1px solid ${run.color}33`,
-                minWidth: 0,
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => run.stravaId && onOpenRun?.(run.stravaId)}
-                style={{
-                  appearance: 'none',
-                  border: 'none',
-                  background: 'transparent',
-                  textAlign: 'left',
-                  color: theme.textHeading,
-                  fontWeight: 800,
-                  fontSize: 12,
-                  cursor: run.stravaId ? 'pointer' : 'default',
-                  padding: 0,
-                  flex: 1,
-                  minWidth: 0,
-                }}
-              >
-                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {fmtDate(run.date)} · {Number(run.distance || 0).toFixed(1)} km
+        </button>
+        {catsOpen ? (
+          <>
+            <CategoryPicker
+              theme={theme}
+              value={catFilter}
+              ariaLabel="Filter category"
+              onChange={setCatFilter}
+            />
+            <div style={{ display: 'grid', gap: 6, maxHeight: 280, overflowY: 'auto' }}>
+              {listed.map((run) => (
+                <div
+                  key={`${run.stravaId || run.date}-${run.name}`}
+                  style={{
+                    display: 'flex',
+                    gap: 8,
+                    alignItems: 'center',
+                    padding: '8px 10px',
+                    borderRadius: 12,
+                    background: 'rgba(2,6,23,0.45)',
+                    border: `1px solid ${run.color}33`,
+                    minWidth: 0,
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => run.stravaId && onOpenRun?.(run.stravaId)}
+                    style={{
+                      appearance: 'none',
+                      border: 'none',
+                      background: 'transparent',
+                      textAlign: 'left',
+                      color: theme.textHeading,
+                      fontWeight: 800,
+                      fontSize: 12,
+                      cursor: run.stravaId ? 'pointer' : 'default',
+                      padding: 0,
+                      flex: 1,
+                      minWidth: 0,
+                    }}
+                  >
+                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {fmtDate(run.date)} · {Number(run.distance || 0).toFixed(1)} km
+                    </div>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: theme.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {fmtTrainingSpeed(run.avgSpeedKmh || (run.paceMinPerKm ? 60 / run.paceMinPerKm : null))}
+                      {run.avgHeartrate ? ` · ${run.avgHeartrate} bpm` : ''}
+                    </div>
+                  </button>
+                  {run.stravaId ? (
+                    <CategoryPicker
+                      compact
+                      theme={theme}
+                      value={run.category}
+                      disabled={savingId === run.stravaId}
+                      ariaLabel={`Category for ${fmtDate(run.date)}`}
+                      onChange={(id) => setCategory(run.stravaId, id)}
+                    />
+                  ) : null}
                 </div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: theme.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {run.paceMinPerKm ? `${fmtTrainingPace(run.paceMinPerKm)} /km` : ''}
-                  {run.avgHeartrate ? ` · ${run.avgHeartrate} bpm` : ''}
-                </div>
-              </button>
-              {run.stravaId ? (
-                <CategoryPicker
-                  compact
-                  theme={theme}
-                  value={run.category}
-                  disabled={savingId === run.stravaId}
-                  ariaLabel={`Category for ${fmtDate(run.date)}`}
-                  onChange={(id) => setCategory(run.stravaId, id)}
-                />
-              ) : null}
+              ))}
             </div>
-          ))}
-        </div>
+          </>
+        ) : null}
       </section>
     </div>
   );
